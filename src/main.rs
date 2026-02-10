@@ -654,6 +654,8 @@ fn main() -> Result<()> {
         if let Some(issue) = terminal::pty::read_issue(&tty_name) {
             // Process issue text through terminal to display it
             term.process_output(issue.as_bytes());
+            // Ensure cursor is at column 0 for login prompt
+            term.process_output(b"\r\n");
             info!("Displayed /etc/issue for {}", tty_name);
         }
     }
