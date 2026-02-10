@@ -773,6 +773,9 @@ impl<'a> Performer<'a> {
     /// OSC 52 (clipboard operation) handler
     /// Format: ESC ] 52 ; <selection> ; <base64-data> ST
     fn handle_osc_52(&mut self, params: &[&[u8]]) {
+        // Max payload size (10MB base64 = ~7.5MB decoded)
+        const MAX_OSC52_PAYLOAD: usize = 10 * 1024 * 1024;
+
         // params[0] = "52", params[1] = selection type (e.g. "c"), params[2] = data
         trace!("OSC 52: params.len()={}, params={:?}",
             params.len(),
@@ -784,6 +787,13 @@ impl<'a> Performer<'a> {
         }
 
         let data = params[2];
+
+        // Security: reject oversized payloads
+        if data.len() > MAX_OSC52_PAYLOAD {
+            warn!("OSC 52: payload too large ({} bytes), ignoring", data.len());
+            return;
+        }
+
         if data == b"?" {
             // Query: respond with current clipboard contents in base64
             use std::fmt::Write;

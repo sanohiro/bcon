@@ -569,9 +569,13 @@ pub fn keysym_to_bytes_with_mods(
     let has_mods = ctrl || alt || shift;
     let mod_code = modifier_code(ctrl, alt, shift);
 
-    // Kitty keyboard protocol (flags & 1 = disambiguate)
-    if config.kitty_keyboard_flags & 1 != 0 {
-        if let Some(bytes) = encode_kitty_keyboard(raw, ctrl, alt, shift) {
+    // Kitty keyboard protocol
+    // flags & 1 = disambiguate escape codes
+    // flags & 8 = report all keys as escape codes (CSI u for everything)
+    let kitty_all_keys = config.kitty_keyboard_flags & 8 != 0;
+    let kitty_disambiguate = config.kitty_keyboard_flags & 1 != 0;
+    if kitty_disambiguate || kitty_all_keys {
+        if let Some(bytes) = encode_kitty_keyboard(raw, ctrl, alt, shift, kitty_all_keys, utf8) {
             return bytes;
         }
     }
@@ -638,11 +642,23 @@ pub fn keysym_to_bytes_with_mods(
         }
     }
 
-    // modifyOtherKeys level 2: send modified characters as CSI 27;{mod};{code}~ format
-    if config.modify_other_keys >= 2 && has_mods {
+    // modifyOtherKeys: send modified characters as CSI 27;{mod};{code}~ format
+    // Level 1: only for keys that would otherwise be ambiguous
+    // Level 2: for all modified keys
+    if config.modify_other_keys >= 1 && has_mods {
         let ch = utf8.chars().next().unwrap_or('\0');
         if ch.is_ascii_graphic() {
-            return format!("\x1b[27;{};{}~", mod_code, ch as u32).into_bytes();
+            // Level 1: only Ctrl+letter and a few special cases
+            // Level 2: all modified printable characters
+            let should_encode = if config.modify_other_keys >= 2 {
+                true
+            } else {
+                // Level 1: Ctrl+letter (excluding Ctrl+C, Ctrl+Z, etc. that have standard meanings)
+                ctrl && !alt && ch.is_ascii_alphabetic()
+            };
+            if should_encode {
+                return format!("\x1b[27;{};{}~", mod_code, ch as u32).into_bytes();
+            }
         }
     }
 
@@ -692,7 +708,8 @@ fn encode_function_key(raw: u32, has_mods: bool, mod_code: u8) -> Option<Vec<u8>
 }
 
 /// Kitty keyboard protocol encoding (CSI u format)
-fn encode_kitty_keyboard(raw: u32, ctrl: bool, alt: bool, shift: bool) -> Option<Vec<u8>> {
+/// all_keys: if true (flags & 8), report all keys including plain letters
+fn encode_kitty_keyboard(raw: u32, ctrl: bool, alt: bool, shift: bool, all_keys: bool, utf8_input: &str) -> Option<Vec<u8>> {
     // Basic keycode mapping
     let unicode = match raw {
         _ if raw == keysyms::KEY_Escape => Some(27),
@@ -723,17 +740,20 @@ fn encode_kitty_keyboard(raw: u32, ctrl: bool, alt: bool, shift: bool) -> Option
         _ if raw == keysyms::KEY_F12 => Some(57375),
         _ => {
             // Normal Unicode characters
-            let sym = xkb::Keysym::new(raw);
-            let utf8 = xkb::keysym_to_utf8(sym);
-            utf8.chars().next().map(|c| c as u32)
+            utf8_input.chars().next().map(|c| c as u32)
         }
     };
 
     let code = unicode?;
     let mod_code = modifier_code(ctrl, alt, shift);
 
-    // Use normal sequence if no modifiers
+    // For normal printable characters without modifiers:
+    // - If all_keys mode: encode as CSI u
+    // - Otherwise: return None to use normal character output
     if mod_code == 1 && code < 57345 {
+        if all_keys {
+            return Some(format!("\x1b[{}u", code).into_bytes());
+        }
         return None;
     }
 
