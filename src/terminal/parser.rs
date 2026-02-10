@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use log::{info, trace};
+use log::{info, trace, warn};
 use vte::{Params, Perform};
 
 use super::grid::{CellAttrs, Color, CursorStyle, Grid, Hyperlink, UnderlineStyle};
