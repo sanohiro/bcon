@@ -299,8 +299,23 @@ impl VtFocusTracker {
         }
     }
 
-    /// Activate (switch to) specific VT
+    /// Activate (switch to) specific VT and wait for completion
     fn activate_vt(&self, vt: u16) -> Result<()> {
+        self.activate_vt_no_wait(vt)?;
+
+        // VT_WAITACTIVE: Wait until VT switch is complete
+        let fd = self.console_fd.unwrap();
+        let ret = unsafe { libc::ioctl(fd, VT_WAITACTIVE, vt as libc::c_int) };
+        if ret < 0 {
+            return Err(anyhow!("VT_WAITACTIVE failed: {}", std::io::Error::last_os_error()));
+        }
+
+        Ok(())
+    }
+
+    /// Activate (switch to) specific VT without waiting
+    /// Use this when switching away from our VT
+    fn activate_vt_no_wait(&self, vt: u16) -> Result<()> {
         let Some(fd) = self.console_fd else {
             return Err(anyhow!("No console fd"));
         };
@@ -311,12 +326,6 @@ impl VtFocusTracker {
         let ret = unsafe { libc::ioctl(fd, VT_ACTIVATE, vt as libc::c_int) };
         if ret < 0 {
             return Err(anyhow!("VT_ACTIVATE failed: {}", std::io::Error::last_os_error()));
-        }
-
-        // VT_WAITACTIVE: Wait until VT switch is complete
-        let ret = unsafe { libc::ioctl(fd, VT_WAITACTIVE, vt as libc::c_int) };
-        if ret < 0 {
-            return Err(anyhow!("VT_WAITACTIVE failed: {}", std::io::Error::last_os_error()));
         }
 
         Ok(())
@@ -360,9 +369,10 @@ impl VtFocusTracker {
         self.target_vt
     }
 
-    /// Switch to a specific VT (public interface)
+    /// Switch to a specific VT (public interface, no wait)
+    /// Used for switching away from our VT
     pub fn switch_to(&self, vt: u16) -> Result<()> {
-        self.activate_vt(vt)
+        self.activate_vt_no_wait(vt)
     }
 
     /// Check if focus state changed, return new state if changed
