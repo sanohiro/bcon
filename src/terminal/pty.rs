@@ -491,17 +491,22 @@ fn get_uname() -> UnameInfo {
     let mut utsname: libc::utsname = unsafe { std::mem::zeroed() };
     unsafe { libc::uname(&mut utsname) };
 
-    fn cstr_to_string(arr: &[i8]) -> String {
-        let bytes: Vec<u8> = arr.iter().map(|&c| c as u8).take_while(|&c| c != 0).collect();
-        String::from_utf8_lossy(&bytes).to_string()
+    // Use CStr::from_ptr for portable handling of utsname fields
+    // (i8 on x86_64, u8 on aarch64)
+    unsafe fn field_to_string(ptr: *const libc::c_char) -> String {
+        std::ffi::CStr::from_ptr(ptr)
+            .to_string_lossy()
+            .into_owned()
     }
 
-    UnameInfo {
-        sysname: cstr_to_string(&utsname.sysname),
-        nodename: cstr_to_string(&utsname.nodename),
-        release: cstr_to_string(&utsname.release),
-        version: cstr_to_string(&utsname.version),
-        machine: cstr_to_string(&utsname.machine),
+    unsafe {
+        UnameInfo {
+            sysname: field_to_string(utsname.sysname.as_ptr() as *const libc::c_char),
+            nodename: field_to_string(utsname.nodename.as_ptr() as *const libc::c_char),
+            release: field_to_string(utsname.release.as_ptr() as *const libc::c_char),
+            version: field_to_string(utsname.version.as_ptr() as *const libc::c_char),
+            machine: field_to_string(utsname.machine.as_ptr() as *const libc::c_char),
+        }
     }
 }
 
