@@ -2487,9 +2487,9 @@ fn main() -> Result<()> {
             }
         }
 
-        // Buffer swap (skip during Synchronized Update mode)
+        // Buffer swap (skip during Synchronized Update mode or when VT switched away)
         // CSI ? 2026 h starts buffering, CSI ? 2026 l displays all at once
-        if !term.is_synchronized_update() {
+        if !term.is_synchronized_update() && drm_master_held {
             egl_context.swap_buffers()?;
 
             // Get front buffer and display to DRM
