@@ -1,0 +1,81 @@
+[package]
+name = "bcon"
+version = "0.1.0"
+edition = "2021"
+authors = ["Hironobu Sano"]
+description = "GPU-accelerated terminal emulator for Linux console"
+license = "MIT"
+repository = "https://github.com/sanohiro/bcon"
+keywords = ["terminal", "console", "gpu", "drm", "kms"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# Display & GPU
+drm = "0.11"
+gbm = { version = "0.15", default-features = false, features = ["drm-support"] }
+khronos-egl = { version = "6.0", features = ["dynamic"] }
+glow = "0.13"
+
+# Text & Fonts
+fontdue = "0.8"
+rustybuzz = "0.12"
+freetype-rs = "0.36"  # LCD subpixel rendering
+fontconfig = "0.6"    # System font discovery
+
+# Input
+xkbcommon = "0.7"
+input = "0.8"
+
+# IME (Japanese input)
+zbus = { version = "4.0", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+futures-util = "0.3"
+
+# Terminal
+unicode-width = "0.1"
+unicode-segmentation = "1.10"
+unicode-normalization = "0.1"
+vte = "0.13"  # VT parser reference/fallback
+
+# Image handling
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+png = "0.17"
+chrono = "0.4"
+
+# Compression (for Kitty graphics)
+flate2 = "1.0"
+
+# EGL dynamic loading
+libloading = "0.8"
+
+# Configuration
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+dirs = "5.0"
+
+# File watching for hot reload (optional, Linux only)
+[target.'cfg(target_os = "linux")'.dependencies]
+notify = "6.1"
+
+# Utilities
+anyhow = "1.0"
+thiserror = "1.0"
+log = "0.4"
+env_logger = "0.10"
+libc = "0.2"
+nix = { version = "0.27", features = ["term", "ioctl", "fs", "process", "signal"] }
+memmap2 = "0.9"
+bitflags = "2.4"
+
+# [dev-dependencies]
+# criterion = "0.5"
+
+# [[bench]]
+# name = "render"
+# harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

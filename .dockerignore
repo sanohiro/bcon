@@ -1,0 +1,23 @@
+# ビルド成果物
+target/
+
+# IDEファイル
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# macOS
+.DS_Store
+
+# ドキュメント（ビルド不要）
+docs/
+*.md
+!README.md
+
+# その他
+*.log

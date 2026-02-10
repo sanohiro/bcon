@@ -1,0 +1,52 @@
+# bcon systemd service file
+#
+# Installation:
+#   sudo cp bcon@.service /etc/systemd/system/
+#   sudo cp target/release/bcon /usr/local/bin/
+#
+# Enable on tty2:
+#   sudo systemctl disable getty@tty2
+#   sudo systemctl enable bcon@tty2
+#   sudo systemctl start bcon@tty2
+#
+# Configuration:
+#   System config: /etc/bcon/config.toml
+#   Generate with: sudo bcon --init-config=system,vim,jp
+#
+# Usage:
+#   Switch to tty2 with Ctrl+Alt+F2
+
+[Unit]
+Description=bcon terminal emulator on %I
+Documentation=https://github.com/sanohiro/bcon
+After=systemd-user-sessions.service plymouth-quit-wait.service
+After=rc-local.service
+Before=getty@%i.service
+Conflicts=getty@%i.service
+ConditionPathExists=/dev/%I
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bcon
+WorkingDirectory=/root
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+
+# Restart on failure
+Restart=always
+RestartSec=1
+
+# Resource limits
+LimitNOFILE=65535
+
+# Security (allow DRM/input access)
+CapabilityBoundingSet=CAP_SYS_TTY_CONFIG CAP_SYS_ADMIN
+AmbientCapabilities=CAP_SYS_TTY_CONFIG
+
+[Install]
+WantedBy=multi-user.target

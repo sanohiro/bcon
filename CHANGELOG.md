@@ -1,0 +1,63 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-02-09
+
+### Added
+
+#### Rendering
+- GPU-accelerated rendering via OpenGL ES (DRM/KMS + EGL + GBM)
+- LCD subpixel rendering for crisp text
+- Font ligature support (FiraCode, JetBrains Mono, etc.)
+- Color emoji rendering (Noto Color Emoji)
+- True Color (24-bit) support
+
+#### Graphics Protocols
+- Sixel graphics display
+- Kitty graphics protocol (direct, file, shared memory, temp file transmission)
+
+#### Terminal Emulation
+- VT220/xterm compatible escape sequence handling
+- Scrollback buffer (configurable, default 10,000 lines)
+- Mouse support (X10, SGR, URXVT protocols)
+- OSC 52 clipboard integration
+- OSC 7 current directory tracking
+- OSC 8 hyperlinks
+- OSC 10/11 color queries
+- Bracketed paste mode
+- Synchronized output (CSI ? 2026)
+- Focus events (CSI ? 1004)
+- Cursor styles (Block, Underline, Bar)
+- Kitty keyboard protocol
+
+#### Input
+- Full keyboard support via evdev + xkbcommon
+- Japanese input via fcitx5 D-Bus integration
+- Automatic IME disable for vim/emacs/etc.
+- Configurable key repeat delay/rate
+
+#### User Experience
+- Vim-like copy mode for text selection
+- Incremental search in scrollback
+- Screenshot to PNG
+- Runtime font size adjustment
+- Visual bell (border flash)
+- URL detection with Ctrl+Click
+- TOML-based configuration
+- Multiple keybind presets (default, vim, emacs, japanese)
+
+#### Terminal Detection
+- XTGETTCAP (DCS + q) support for capability queries
+- Enhanced DA1/DA2 responses
+- TIOCGWINSZ with pixel dimensions
+- CSI 14/16/18 t window size queries
+
+### Notes
+
+- First public release
+- Designed for Linux console (TTY) without X11/Wayland
+- Requires root or logind session for DRM access

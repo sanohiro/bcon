@@ -1,0 +1,30 @@
+# Rust
+/target/
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.o
+*.so
+*.a
+
+# Debug
+*.log
+
+# Local config (user-specific)
+config.toml
+
+# Work directory (test files)
+/work/
+
+# Claude Code
+/.claude/

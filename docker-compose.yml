@@ -1,0 +1,28 @@
+services:
+  bcon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bcon-dev
+    # DRMデバイスへのアクセス（Linuxホストで実行時のみ有効）
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # privileged: true
+    volumes:
+      # ソースコードのマウント（開発時）
+      - .:/app
+      # cargoキャッシュの永続化
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/app/target
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    working_dir: /app
+    stdin_open: true
+    tty: true
+
+volumes:
+  cargo-cache:
+  cargo-git:
+  target-cache:
