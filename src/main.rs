@@ -794,6 +794,22 @@ fn main() -> Result<()> {
                         log::debug!("Failed to send FocusIn event: {}", e);
                     }
                 }
+                drm::VtEvent::Terminate => {
+                    // SIGTERM received - graceful shutdown
+                    info!("Received SIGTERM, shutting down gracefully...");
+                    break;
+                }
+                drm::VtEvent::Hangup => {
+                    // SIGHUP received - could be used for config reload
+                    info!("Received SIGHUP");
+                    #[cfg(target_os = "linux")]
+                    if let Some(ref watcher) = config_watcher {
+                        // Trigger manual config reload
+                        if watcher.check_reload() {
+                            info!("Config reloaded via SIGHUP");
+                        }
+                    }
+                }
             }
         }
 

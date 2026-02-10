@@ -214,6 +214,11 @@ const VT_AUTO: libc::c_char = 0;
 const VT_PROCESS: libc::c_char = 1;
 const VT_ACKACQ: libc::c_int = 2;
 
+// KDSETMODE constants (from linux/kd.h)
+const KDSETMODE: libc::c_ulong = 0x4B3A;
+const KD_TEXT: libc::c_long = 0x00;
+const KD_GRAPHICS: libc::c_long = 0x01;
+
 /// vt_mode structure for VT_SETMODE ioctl
 #[repr(C)]
 struct VtMode {
@@ -231,6 +236,10 @@ pub enum VtEvent {
     Release,
     /// Kernel grants us the VT (SIGUSR1)
     Acquire,
+    /// Termination signal (SIGTERM) - should exit gracefully
+    Terminate,
+    /// Hangup signal (SIGHUP) - typically used for config reload
+    Hangup,
 }
 
 /// VT switching manager using VT_SETMODE with VT_PROCESS mode
@@ -238,6 +247,11 @@ pub enum VtEvent {
 /// This is the correct way to handle VT switching for DRM applications.
 /// The kernel sends SIGUSR1 (acquire) and SIGUSR2 (release) signals
 /// when VT switch is requested (e.g., Ctrl+Alt+Fn).
+///
+/// Also handles:
+/// - KDSETMODE (KD_GRAPHICS/KD_TEXT) to prevent kernel console rendering
+/// - TTY settings save/restore
+/// - Input buffer flushing on VT switch
 ///
 /// Reference: kmscon's src/uterm_vt.c
 pub struct VtSwitcher {
@@ -251,6 +265,8 @@ pub struct VtSwitcher {
     active: bool,
     /// Original signal mask to restore on drop
     old_sigmask: SigSet,
+    /// Original keyboard mode (KD_TEXT/KD_GRAPHICS)
+    original_kd_mode: libc::c_long,
 }
 
 impl VtSwitcher {
@@ -283,10 +299,15 @@ impl VtSwitcher {
             ));
         }
 
-        // Block SIGUSR1 and SIGUSR2 so we can receive them via signalfd
+        // Block signals so we can receive them via signalfd
+        // SIGUSR1/SIGUSR2: VT switching
+        // SIGTERM: graceful shutdown (systemd stop)
+        // SIGHUP: hangup (optional config reload)
         let mut mask = SigSet::empty();
         mask.add(Signal::SIGUSR1);
         mask.add(Signal::SIGUSR2);
+        mask.add(Signal::SIGTERM);
+        mask.add(Signal::SIGHUP);
 
         // Save old mask and block signals
         let old_sigmask = mask.thread_swap_mask(nix::sys::signal::SigmaskHow::SIG_BLOCK)
@@ -336,6 +357,27 @@ impl VtSwitcher {
             ));
         }
 
+        // Save original keyboard mode and set KD_GRAPHICS
+        // This prevents the kernel from rendering to the framebuffer
+        let mut original_kd_mode: libc::c_long = KD_TEXT;
+        unsafe {
+            // KDGETMODE = 0x4B3B
+            libc::ioctl(tty_fd, 0x4B3B as libc::c_ulong, &mut original_kd_mode);
+        }
+
+        let ret = unsafe { libc::ioctl(tty_fd, KDSETMODE, KD_GRAPHICS) };
+        if ret < 0 {
+            warn!(
+                "KDSETMODE(KD_GRAPHICS) failed: {} (continuing anyway)",
+                std::io::Error::last_os_error()
+            );
+        } else {
+            info!("Set KD_GRAPHICS mode");
+        }
+
+        // Flush input buffer to clear any stale events
+        unsafe { libc::tcflush(tty_fd, libc::TCIFLUSH) };
+
         info!("VT{} process-controlled mode enabled (SIGUSR1=acquire, SIGUSR2=release)", target_vt);
 
         Ok(Self {
@@ -344,6 +386,7 @@ impl VtSwitcher {
             signal_fd,
             active: true,
             old_sigmask,
+            original_kd_mode,
         })
     }
 
@@ -420,6 +463,14 @@ impl VtSwitcher {
                     // Acquire - we're getting the VT back
                     debug!("SIGUSR1 received: VT acquire");
                     Some(VtEvent::Acquire)
+                } else if signo == Signal::SIGTERM as i32 {
+                    // Termination request (systemd stop, etc.)
+                    info!("SIGTERM received: graceful shutdown requested");
+                    Some(VtEvent::Terminate)
+                } else if signo == Signal::SIGHUP as i32 {
+                    // Hangup signal
+                    info!("SIGHUP received");
+                    Some(VtEvent::Hangup)
                 } else {
                     None
                 }
@@ -437,6 +488,13 @@ impl VtSwitcher {
     /// This tells the kernel we're done cleaning up and the VT switch can proceed.
     pub fn ack_release(&mut self) -> Result<()> {
         info!("Acknowledging VT release");
+
+        // Flush input buffer before releasing
+        unsafe { libc::tcflush(self.tty_fd, libc::TCIFLUSH) };
+
+        // Restore text mode while VT is inactive (allows kernel console to work)
+        unsafe { libc::ioctl(self.tty_fd, KDSETMODE, KD_TEXT) };
+
         let ret = unsafe { libc::ioctl(self.tty_fd, VT_RELDISP, 1 as libc::c_int) };
         if ret < 0 {
             return Err(anyhow!(
@@ -454,6 +512,13 @@ impl VtSwitcher {
     /// This tells the kernel we've finished acquiring resources.
     pub fn ack_acquire(&mut self) -> Result<()> {
         info!("Acknowledging VT acquire");
+
+        // Restore graphics mode
+        unsafe { libc::ioctl(self.tty_fd, KDSETMODE, KD_GRAPHICS) };
+
+        // Flush any stale input events
+        unsafe { libc::tcflush(self.tty_fd, libc::TCIFLUSH) };
+
         let ret = unsafe { libc::ioctl(self.tty_fd, VT_RELDISP, VT_ACKACQ) };
         if ret < 0 {
             return Err(anyhow!(
@@ -492,6 +557,17 @@ impl VtSwitcher {
 
 impl Drop for VtSwitcher {
     fn drop(&mut self) {
+        // Restore original keyboard mode (KD_TEXT)
+        let ret = unsafe { libc::ioctl(self.tty_fd, KDSETMODE, self.original_kd_mode) };
+        if ret < 0 {
+            warn!(
+                "Failed to restore KD mode: {}",
+                std::io::Error::last_os_error()
+            );
+        } else {
+            info!("Restored KD_TEXT mode");
+        }
+
         // Reset to VT_AUTO mode
         let mode = VtMode {
             mode: VT_AUTO,
