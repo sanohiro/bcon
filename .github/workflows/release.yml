@@ -30,6 +30,7 @@ jobs:
             libegl1-mesa-dev libgles2-mesa-dev \
             libxkbcommon-dev libinput-dev libudev-dev \
             libdbus-1-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev \
             pkg-config cmake clang
 
       - name: Install Rust
@@ -63,7 +64,7 @@ jobs:
         uses: uraimo/run-on-arch-action@v2
         with:
           arch: aarch64
-          distro: ubuntu24.04
+          distro: ubuntu22.04
           githubToken: ${{ github.token }}
           install: |
             apt-get update
@@ -73,6 +74,7 @@ jobs:
               libegl1-mesa-dev libgles2-mesa-dev \
               libxkbcommon-dev libinput-dev libudev-dev \
               libdbus-1-dev libwayland-dev \
+              libfontconfig1-dev libfreetype-dev \
               pkg-config cmake clang
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           run: |
