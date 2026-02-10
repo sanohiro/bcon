@@ -459,6 +459,9 @@ fn main() -> Result<()> {
         return test_shaper_mode();
     }
 
+    // Phase 0: VT switching (must happen BEFORE DRM takes over display)
+    let mut vt_focus_tracker = drm::VtFocusTracker::new();
+
     // Phase 1: DRM/KMS initialization
     let drm_path = find_drm_device()?;
     info!("DRM device: {}", drm_path);
@@ -500,9 +503,6 @@ fn main() -> Result<()> {
 
     // Save original CRTC settings (restore on exit)
     let saved_crtc = drm::SavedCrtc::save(&drm_device, &display_config)?;
-
-    // VT focus tracking (for sending focus events)
-    let mut vt_focus_tracker = drm::VtFocusTracker::new();
 
     // Render first frame and set mode
     renderer.clear(0.0, 0.0, 0.0, 1.0); // Initialize with black
