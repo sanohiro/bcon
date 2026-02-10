@@ -730,7 +730,26 @@ fn main() -> Result<()> {
     let mut last_fg_check = std::time::Instant::now();
     const FG_CHECK_INTERVAL_MS: u64 = 200; // Check every 200ms
 
+    // DRM master state (for VT switching)
+    let mut drm_master_held = true;
+
     loop {
+        // Check if we need to reacquire DRM master (returning from VT switch)
+        if !drm_master_held && vt_focus_tracker.is_focused() {
+            info!("VT focus regained, reacquiring DRM master");
+            if let Err(e) = drm_device.set_master() {
+                log::warn!("Failed to reacquire DRM master: {}", e);
+            } else {
+                drm_master_held = true;
+                needs_redraw = true;
+            }
+        }
+
+        // Skip most processing if we don't have DRM master
+        if !drm_master_held {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         // Cursor blink update
         let now = std::time::Instant::now();
         if now.duration_since(last_blink_toggle).as_millis() >= CURSOR_BLINK_INTERVAL_MS as u128 {
@@ -798,9 +817,24 @@ fn main() -> Result<()> {
             for raw in &key_events {
                 // Check for VT switch (Ctrl+Alt+Fn)
                 if let Some(target_vt) = input::evdev::check_vt_switch(raw) {
-                    info!("VT switch requested: VT{}", target_vt);
-                    if let Err(e) = vt_focus_tracker.switch_to(target_vt) {
-                        log::warn!("VT switch failed: {}", e);
+                    // Only switch if going to a different VT
+                    if Some(target_vt) != vt_focus_tracker.target_vt() {
+                        info!("VT switch requested: VT{}", target_vt);
+                        // Drop DRM master before switching
+                        if let Err(e) = drm_device.drop_master() {
+                            log::warn!("Failed to drop DRM master: {}", e);
+                        } else {
+                            drm_master_held = false;
+                        }
+                        if let Err(e) = vt_focus_tracker.switch_to(target_vt) {
+                            log::warn!("VT switch failed: {}", e);
+                            // Try to reacquire DRM master if switch failed
+                            if !drm_master_held {
+                                if drm_device.set_master().is_ok() {
+                                    drm_master_held = true;
+                                }
+                            }
+                        }
                     }
                     continue;
                 }

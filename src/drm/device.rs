@@ -160,6 +160,30 @@ impl Device {
 
         Err(anyhow!("No CRTC found for connector"))
     }
+
+    /// Drop DRM master privileges (allows VT switch)
+    pub fn drop_master(&self) -> Result<()> {
+        let ret = unsafe {
+            libc::ioctl(self.file.as_raw_fd(), drm_ioctl::DRM_IOCTL_DROP_MASTER)
+        };
+        if ret < 0 {
+            return Err(anyhow!("DROP_MASTER failed: {}", std::io::Error::last_os_error()));
+        }
+        info!("DRM master dropped");
+        Ok(())
+    }
+
+    /// Acquire DRM master privileges (after VT switch back)
+    pub fn set_master(&self) -> Result<()> {
+        let ret = unsafe {
+            libc::ioctl(self.file.as_raw_fd(), drm_ioctl::DRM_IOCTL_SET_MASTER)
+        };
+        if ret < 0 {
+            return Err(anyhow!("SET_MASTER failed: {}", std::io::Error::last_os_error()));
+        }
+        info!("DRM master acquired");
+        Ok(())
+    }
 }
 
 // DRM ioctl constants
