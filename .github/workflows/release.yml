@@ -55,31 +55,27 @@ jobs:
           path: bcon-linux-x86_64.tar.gz
 
   build-aarch64:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build on aarch64
-        uses: uraimo/run-on-arch-action@v2
-        with:
-          arch: aarch64
-          distro: ubuntu22.04
-          githubToken: ${{ github.token }}
-          install: |
-            apt-get update
-            apt-get install -y \
-              curl build-essential \
-              libdrm-dev libgbm-dev \
-              libegl1-mesa-dev libgles2-mesa-dev \
-              libxkbcommon-dev libinput-dev libudev-dev \
-              libdbus-1-dev libwayland-dev \
-              libfontconfig1-dev libfreetype-dev \
-              pkg-config cmake clang
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          run: |
-            source ~/.cargo/env
-            cargo build --release
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdrm-dev libgbm-dev \
+            libegl1-mesa-dev libgles2-mesa-dev \
+            libxkbcommon-dev libinput-dev libudev-dev \
+            libdbus-1-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev \
+            pkg-config cmake clang
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
 
       - name: Create archive
         run: |
