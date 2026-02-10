@@ -449,6 +449,46 @@ impl EvdevKeyboard {
     }
 }
 
+// evdev keycodes for F1-F12
+const KEY_F1: u32 = 59;
+const KEY_F2: u32 = 60;
+const KEY_F3: u32 = 61;
+const KEY_F4: u32 = 62;
+const KEY_F5: u32 = 63;
+const KEY_F6: u32 = 64;
+const KEY_F7: u32 = 65;
+const KEY_F8: u32 = 66;
+const KEY_F9: u32 = 67;
+const KEY_F10: u32 = 68;
+const KEY_F11: u32 = 87;
+const KEY_F12: u32 = 88;
+
+/// Check if key event is a VT switch request (Ctrl+Alt+Fn)
+/// Returns the target VT number (1-12) if it is a VT switch
+pub fn check_vt_switch(event: &RawKeyEvent) -> Option<u16> {
+    // Only on key press with Ctrl+Alt held
+    if !event.is_press || !event.mods_ctrl || !event.mods_alt {
+        return None;
+    }
+
+    // Map F1-F12 to VT 1-12
+    match event.keycode {
+        KEY_F1 => Some(1),
+        KEY_F2 => Some(2),
+        KEY_F3 => Some(3),
+        KEY_F4 => Some(4),
+        KEY_F5 => Some(5),
+        KEY_F6 => Some(6),
+        KEY_F7 => Some(7),
+        KEY_F8 => Some(8),
+        KEY_F9 => Some(9),
+        KEY_F10 => Some(10),
+        KEY_F11 => Some(11),
+        KEY_F12 => Some(12),
+        _ => None,
+    }
+}
+
 /// Convert keysym to terminal escape sequence
 pub fn keysym_to_bytes(sym: xkb::Keysym, utf8: &str) -> Vec<u8> {
     let raw = sym.raw();

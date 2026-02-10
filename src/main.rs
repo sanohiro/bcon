@@ -796,6 +796,15 @@ fn main() -> Result<()> {
 
             // Keyboard event processing
             for raw in &key_events {
+                // Check for VT switch (Ctrl+Alt+Fn)
+                if let Some(target_vt) = input::evdev::check_vt_switch(raw) {
+                    info!("VT switch requested: VT{}", target_vt);
+                    if let Err(e) = vt_focus_tracker.switch_to(target_vt) {
+                        log::warn!("VT switch failed: {}", e);
+                    }
+                    continue;
+                }
+
                 // Update Ctrl state (for URL click detection)
                 ctrl_pressed = raw.mods_ctrl;
 

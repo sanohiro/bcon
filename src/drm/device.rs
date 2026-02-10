@@ -173,14 +173,20 @@ mod drm_ioctl {
         nix::request_code_none!(DRM_IOCTL_BASE, 0x1f) as libc::c_ulong;
 }
 
-/// VT focus state tracking helper
+// VT ioctl constants
+const VT_GETSTATE: libc::c_ulong = 0x5603;
+const VT_ACTIVATE: libc::c_ulong = 0x5606;
+const VT_WAITACTIVE: libc::c_ulong = 0x5607;
+
+/// VT focus state tracking and switching helper
 pub struct VtFocusTracker {
     tty_fd: Option<RawFd>,
+    target_vt: Option<u16>,
     was_focused: bool,
 }
 
 impl VtFocusTracker {
-    /// Create VT focus tracker
+    /// Create VT focus tracker and switch to target VT
     pub fn new() -> Self {
         // Open /dev/tty to check VT state
         let tty_fd = unsafe {
@@ -188,10 +194,65 @@ impl VtFocusTracker {
             if fd >= 0 { Some(fd) } else { None }
         };
 
-        Self {
+        // Determine target VT from controlling terminal
+        let target_vt = tty_fd.and_then(|fd| Self::get_vt_number(fd));
+
+        let mut tracker = Self {
             tty_fd,
+            target_vt,
             was_focused: true,
+        };
+
+        // Switch to target VT if we have one
+        if let Some(vt) = target_vt {
+            if let Err(e) = tracker.activate_vt(vt) {
+                warn!("Failed to activate VT{}: {}", vt, e);
+            } else {
+                info!("Activated VT{}", vt);
+            }
         }
+
+        tracker
+    }
+
+    /// Get VT number from fd
+    fn get_vt_number(fd: RawFd) -> Option<u16> {
+        let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::fstat(fd, &mut stat_buf) };
+        if ret < 0 {
+            return None;
+        }
+
+        // Extract VT number from major/minor (tty1-tty63 is major=4, minor=1-63)
+        let major = libc::major(stat_buf.st_rdev);
+        let minor = libc::minor(stat_buf.st_rdev);
+
+        if major == 4 && minor > 0 && minor <= 63 {
+            Some(minor as u16)
+        } else {
+            None
+        }
+    }
+
+    /// Activate (switch to) specific VT
+    fn activate_vt(&self, vt: u16) -> Result<()> {
+        let Some(fd) = self.tty_fd else {
+            return Err(anyhow!("No TTY fd"));
+        };
+
+        // VT_ACTIVATE: Switch to VT
+        let ret = unsafe { libc::ioctl(fd, VT_ACTIVATE, vt as libc::c_int) };
+        if ret < 0 {
+            return Err(anyhow!("VT_ACTIVATE failed: {}", std::io::Error::last_os_error()));
+        }
+
+        // VT_WAITACTIVE: Wait until VT switch is complete
+        let ret = unsafe { libc::ioctl(fd, VT_WAITACTIVE, vt as libc::c_int) };
+        if ret < 0 {
+            return Err(anyhow!("VT_WAITACTIVE failed: {}", std::io::Error::last_os_error()));
+        }
+
+        Ok(())
     }
 
     /// Check if VT is currently active
@@ -201,6 +262,10 @@ impl VtFocusTracker {
             return true; // Assume focused if no TTY
         };
 
+        let Some(target) = self.target_vt else {
+            return true; // Not a VT, always focused
+        };
+
         // VT_GETSTATE: Get currently active VT
         #[repr(C)]
         struct VtStat {
@@ -208,9 +273,6 @@ impl VtFocusTracker {
             v_signal: libc::c_ushort,
             v_state: libc::c_ushort,
         }
-
-        // VT_GETSTATE = 0x5603
-        const VT_GETSTATE: libc::c_ulong = 0x5603;
 
         let mut stat = VtStat {
             v_active: 0,
@@ -223,24 +285,17 @@ impl VtFocusTracker {
             return true; // Assume focused on error
         }
 
-        // Get tty number with fstat
-        let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
-        let ret = unsafe { libc::fstat(fd, &mut stat_buf) };
-        if ret < 0 {
-            return true;
-        }
+        stat.v_active == target
+    }
 
-        // Extract VT number from major/minor (tty1-tty63 is major=4, minor=1-63)
-        let major = libc::major(stat_buf.st_rdev);
-        let minor = libc::minor(stat_buf.st_rdev);
+    /// Get target VT number
+    pub fn target_vt(&self) -> Option<u16> {
+        self.target_vt
+    }
 
-        if major == 4 && minor > 0 && minor <= 63 {
-            // VT device
-            stat.v_active == minor as u16
-        } else {
-            // Non-VT (pts, etc.) is always focused
-            true
-        }
+    /// Switch to a specific VT (public interface)
+    pub fn switch_to(&self, vt: u16) -> Result<()> {
+        self.activate_vt(vt)
     }
 
     /// Check if focus state changed, return new state if changed
