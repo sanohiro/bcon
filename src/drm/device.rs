@@ -289,7 +289,8 @@ impl VtSwitcher {
         mask.add(Signal::SIGUSR2);
 
         // Save old mask and block signals
-        let old_sigmask = mask.thread_block().context("Failed to block signals")?;
+        let old_sigmask = mask.thread_swap_mask(nix::sys::signal::SigmaskHow::SIG_BLOCK)
+            .context("Failed to block signals")?;
 
         // Create signalfd
         let signal_fd =
@@ -515,38 +516,6 @@ impl Drop for VtSwitcher {
 
         unsafe { libc::close(self.tty_fd) };
         info!("VT switcher cleaned up");
-    }
-}
-
-// Keep the old VtFocusTracker for backward compatibility but mark it deprecated
-#[deprecated(note = "Use VtSwitcher instead")]
-pub struct VtFocusTracker {
-    console_fd: Option<RawFd>,
-    target_vt: Option<u16>,
-    was_focused: bool,
-}
-
-#[allow(deprecated)]
-impl VtFocusTracker {
-    pub fn new() -> Self {
-        warn!("VtFocusTracker is deprecated, use VtSwitcher instead");
-        Self {
-            console_fd: None,
-            target_vt: None,
-            was_focused: true,
-        }
-    }
-
-    pub fn target_vt(&self) -> Option<u16> {
-        self.target_vt
-    }
-
-    pub fn is_focused(&self) -> bool {
-        true
-    }
-
-    pub fn check_focus_change(&mut self) -> Option<bool> {
-        None
     }
 }
 
