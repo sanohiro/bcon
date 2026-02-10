@@ -44,8 +44,9 @@ RestartSec=1
 # Resource limits
 LimitNOFILE=65535
 
-# Security (allow DRM/input access)
-CapabilityBoundingSet=CAP_SYS_TTY_CONFIG CAP_SYS_ADMIN
+# Security (allow DRM/input access and login to work)
+# login requires SETUID/SETGID to switch to user
+CapabilityBoundingSet=CAP_SYS_TTY_CONFIG CAP_SYS_ADMIN CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_DAC_OVERRIDE CAP_AUDIT_WRITE CAP_CHOWN CAP_FOWNER
 AmbientCapabilities=CAP_SYS_TTY_CONFIG
 
 [Install]
