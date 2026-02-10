@@ -2,11 +2,16 @@
 //!
 //! Opens DRM device (/dev/dri/card*) and
 //! enumerates available connectors, CRTCs, and encoders
+//!
+//! VT switching is handled via VT_SETMODE with VT_PROCESS mode.
+//! The kernel sends SIGUSR1/SIGUSR2 signals for VT switch requests.
 
 use anyhow::{anyhow, Context, Result};
 use drm::control::{connector, crtc, encoder, Device as ControlDevice, ResourceHandles};
 use drm::Device as BasicDevice;
 use log::{debug, info, warn};
+use nix::sys::signal::{SigSet, Signal};
+use nix::sys::signalfd::{SfdFlags, SignalFd};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::Path;
@@ -197,69 +202,155 @@ mod drm_ioctl {
         nix::request_code_none!(DRM_IOCTL_BASE, 0x1f) as libc::c_ulong;
 }
 
-// VT ioctl constants
+// VT ioctl constants (from linux/vt.h)
 const VT_GETSTATE: libc::c_ulong = 0x5603;
+const VT_SETMODE: libc::c_ulong = 0x5602;
+const VT_RELDISP: libc::c_ulong = 0x5605;
 const VT_ACTIVATE: libc::c_ulong = 0x5606;
 const VT_WAITACTIVE: libc::c_ulong = 0x5607;
 
-/// VT focus state tracking and switching helper
-pub struct VtFocusTracker {
-    /// fd for VT operations (usually /dev/tty0 or /dev/console)
-    console_fd: Option<RawFd>,
-    /// Target VT number (from stdin TTY)
-    target_vt: Option<u16>,
-    was_focused: bool,
+// VT_SETMODE constants
+const VT_AUTO: libc::c_char = 0;
+const VT_PROCESS: libc::c_char = 1;
+const VT_ACKACQ: libc::c_int = 2;
+
+/// vt_mode structure for VT_SETMODE ioctl
+#[repr(C)]
+struct VtMode {
+    mode: libc::c_char,   // VT_AUTO or VT_PROCESS
+    waitv: libc::c_char,  // unused
+    relsig: libc::c_short, // signal to send on release
+    acqsig: libc::c_short, // signal to send on acquire
+    frsig: libc::c_short,  // unused
 }
 
-impl VtFocusTracker {
-    /// Create VT focus tracker and switch to target VT
-    pub fn new() -> Self {
-        // Get VT number from stdin (systemd sets TTYPath which connects stdin to the TTY)
-        let target_vt = Self::get_vt_from_stdin();
+/// VT switch event from signalfd
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtEvent {
+    /// Kernel requests us to release the VT (SIGUSR2)
+    Release,
+    /// Kernel grants us the VT (SIGUSR1)
+    Acquire,
+}
 
-        // Open /dev/tty0 (console master) for VT switching operations
-        // This works regardless of which TTY we're attached to
-        let console_fd = unsafe {
-            let fd = libc::open(b"/dev/tty0\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
-            if fd >= 0 {
-                Some(fd)
-            } else {
-                // Fallback to /dev/console
-                let fd = libc::open(b"/dev/console\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
-                if fd >= 0 { Some(fd) } else { None }
-            }
+/// VT switching manager using VT_SETMODE with VT_PROCESS mode
+///
+/// This is the correct way to handle VT switching for DRM applications.
+/// The kernel sends SIGUSR1 (acquire) and SIGUSR2 (release) signals
+/// when VT switch is requested (e.g., Ctrl+Alt+Fn).
+///
+/// Reference: kmscon's src/uterm_vt.c
+pub struct VtSwitcher {
+    /// fd for the TTY we're running on
+    tty_fd: RawFd,
+    /// Target VT number
+    target_vt: u16,
+    /// signalfd for receiving SIGUSR1/SIGUSR2
+    signal_fd: SignalFd,
+    /// Whether we currently have focus (are the active VT)
+    active: bool,
+    /// Original signal mask to restore on drop
+    old_sigmask: SigSet,
+}
+
+impl VtSwitcher {
+    /// Create a VT switcher and set up process-controlled VT mode
+    ///
+    /// This blocks SIGUSR1/SIGUSR2 and sets up signalfd to receive them.
+    /// VT_SETMODE is called to enable process-controlled switching.
+    pub fn new() -> Result<Self> {
+        // Get VT number from stdin (systemd sets TTYPath)
+        let target_vt = Self::get_vt_from_stdin()
+            .ok_or_else(|| anyhow!("Cannot determine VT from stdin - not running on a VT?"))?;
+
+        info!("Target VT: {}", target_vt);
+
+        // Open the TTY for ioctls
+        let tty_path = format!("/dev/tty{}", target_vt);
+        let tty_path_cstr = std::ffi::CString::new(tty_path.clone())
+            .context("Invalid TTY path")?;
+        let tty_fd = unsafe {
+            libc::open(
+                tty_path_cstr.as_ptr(),
+                libc::O_RDWR | libc::O_CLOEXEC,
+            )
         };
-
-        if console_fd.is_none() {
-            warn!("Cannot open /dev/tty0 or /dev/console for VT switching");
+        if tty_fd < 0 {
+            return Err(anyhow!(
+                "Cannot open {}: {}",
+                tty_path,
+                std::io::Error::last_os_error()
+            ));
         }
 
-        let mut tracker = Self {
-            console_fd,
+        // Block SIGUSR1 and SIGUSR2 so we can receive them via signalfd
+        let mut mask = SigSet::empty();
+        mask.add(Signal::SIGUSR1);
+        mask.add(Signal::SIGUSR2);
+
+        // Save old mask and block signals
+        let old_sigmask = mask.thread_block().context("Failed to block signals")?;
+
+        // Create signalfd
+        let signal_fd =
+            SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
+                .context("Failed to create signalfd")?;
+
+        // Activate our VT first
+        let ret = unsafe { libc::ioctl(tty_fd, VT_ACTIVATE, target_vt as libc::c_int) };
+        if ret < 0 {
+            warn!(
+                "VT_ACTIVATE failed: {} (continuing anyway)",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        // Wait for VT to become active
+        let ret = unsafe { libc::ioctl(tty_fd, VT_WAITACTIVE, target_vt as libc::c_int) };
+        if ret < 0 {
+            warn!(
+                "VT_WAITACTIVE failed: {} (continuing anyway)",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        // Set up process-controlled VT switching
+        // Same as kmscon: acqsig = SIGUSR1, relsig = SIGUSR2
+        let mode = VtMode {
+            mode: VT_PROCESS,
+            waitv: 0,
+            relsig: Signal::SIGUSR2 as libc::c_short, // release signal (switching away)
+            acqsig: Signal::SIGUSR1 as libc::c_short, // acquire signal (switching to us)
+            frsig: 0,
+        };
+
+        let ret = unsafe { libc::ioctl(tty_fd, VT_SETMODE, &mode) };
+        if ret < 0 {
+            // Cleanup
+            unsafe { libc::close(tty_fd) };
+            old_sigmask.thread_set_mask().ok();
+            return Err(anyhow!(
+                "VT_SETMODE failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        info!("VT{} process-controlled mode enabled (SIGUSR1=acquire, SIGUSR2=release)", target_vt);
+
+        Ok(Self {
+            tty_fd,
             target_vt,
-            was_focused: true,
-        };
-
-        // Switch to target VT if we have one
-        if let Some(vt) = target_vt {
-            info!("Target VT: {}", vt);
-            if let Err(e) = tracker.activate_vt(vt) {
-                warn!("Failed to activate VT{}: {}", vt, e);
-            } else {
-                info!("Activated VT{}", vt);
-            }
-        } else {
-            warn!("Could not determine target VT from stdin");
-        }
-
-        tracker
+            signal_fd,
+            active: true,
+            old_sigmask,
+        })
     }
 
-    /// Get VT number from stdin (fd 0)
+    /// Get VT number from stdin
     fn get_vt_from_stdin() -> Option<u16> {
-        // First try ttyname to get the TTY path
+        // Try ttyname first
         let tty_path = unsafe {
-            let ptr = libc::ttyname(0); // stdin
+            let ptr = libc::ttyname(0);
             if ptr.is_null() {
                 None
             } else {
@@ -268,8 +359,7 @@ impl VtFocusTracker {
         };
 
         if let Some(path) = &tty_path {
-            info!("stdin TTY: {}", path);
-            // Parse /dev/ttyN -> N
+            debug!("stdin TTY: {}", path);
             if let Some(num_str) = path.strip_prefix("/dev/tty") {
                 if let Ok(vt) = num_str.parse::<u16>() {
                     if vt >= 1 && vt <= 63 {
@@ -279,17 +369,16 @@ impl VtFocusTracker {
             }
         }
 
-        // Fallback: use fstat on stdin
+        // Fallback: fstat on stdin
         let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
-        let ret = unsafe { libc::fstat(0, &mut stat_buf) };
-        if ret < 0 {
+        if unsafe { libc::fstat(0, &mut stat_buf) } < 0 {
             return None;
         }
 
         let major = libc::major(stat_buf.st_rdev);
         let minor = libc::minor(stat_buf.st_rdev);
 
-        info!("stdin device: major={}, minor={}", major, minor);
+        debug!("stdin device: major={}, minor={}", major, minor);
 
         // tty1-tty63 is major=4, minor=1-63
         if major == 4 && minor >= 1 && minor <= 63 {
@@ -299,50 +388,85 @@ impl VtFocusTracker {
         }
     }
 
-    /// Activate (switch to) specific VT and wait for completion
-    fn activate_vt(&self, vt: u16) -> Result<()> {
-        self.activate_vt_no_wait(vt)?;
+    /// Get signalfd's raw fd for polling
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.signal_fd.as_raw_fd()
+    }
 
-        // VT_WAITACTIVE: Wait until VT switch is complete
-        let fd = self.console_fd.unwrap();
-        let ret = unsafe { libc::ioctl(fd, VT_WAITACTIVE, vt as libc::c_int) };
-        if ret < 0 {
-            return Err(anyhow!("VT_WAITACTIVE failed: {}", std::io::Error::last_os_error()));
+    /// Get target VT number
+    pub fn target_vt(&self) -> u16 {
+        self.target_vt
+    }
+
+    /// Check if we're currently the active VT
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Poll for VT switch events (non-blocking)
+    ///
+    /// Call this in the event loop to check for VT switch requests.
+    /// Returns Some(VtEvent) if a switch event occurred.
+    pub fn poll(&mut self) -> Option<VtEvent> {
+        match self.signal_fd.read_signal() {
+            Ok(Some(siginfo)) => {
+                let signo = siginfo.ssi_signo as i32;
+                if signo == Signal::SIGUSR2 as i32 {
+                    // Release request - we should give up the VT
+                    debug!("SIGUSR2 received: VT release requested");
+                    Some(VtEvent::Release)
+                } else if signo == Signal::SIGUSR1 as i32 {
+                    // Acquire - we're getting the VT back
+                    debug!("SIGUSR1 received: VT acquire");
+                    Some(VtEvent::Acquire)
+                } else {
+                    None
+                }
+            }
+            Ok(None) => None, // No signal pending
+            Err(e) => {
+                warn!("signalfd read error: {}", e);
+                None
+            }
         }
+    }
 
+    /// Acknowledge VT release - call this after dropping DRM master
+    ///
+    /// This tells the kernel we're done cleaning up and the VT switch can proceed.
+    pub fn ack_release(&mut self) -> Result<()> {
+        info!("Acknowledging VT release");
+        let ret = unsafe { libc::ioctl(self.tty_fd, VT_RELDISP, 1 as libc::c_int) };
+        if ret < 0 {
+            return Err(anyhow!(
+                "VT_RELDISP(1) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        self.active = false;
+        info!("VT released");
         Ok(())
     }
 
-    /// Activate (switch to) specific VT without waiting
-    /// Use this when switching away from our VT
-    fn activate_vt_no_wait(&self, vt: u16) -> Result<()> {
-        let Some(fd) = self.console_fd else {
-            return Err(anyhow!("No console fd"));
-        };
-
-        info!("VT_ACTIVATE({}) on fd {}", vt, fd);
-
-        // VT_ACTIVATE: Switch to VT
-        let ret = unsafe { libc::ioctl(fd, VT_ACTIVATE, vt as libc::c_int) };
+    /// Acknowledge VT acquire - call this after acquiring DRM master
+    ///
+    /// This tells the kernel we've finished acquiring resources.
+    pub fn ack_acquire(&mut self) -> Result<()> {
+        info!("Acknowledging VT acquire");
+        let ret = unsafe { libc::ioctl(self.tty_fd, VT_RELDISP, VT_ACKACQ) };
         if ret < 0 {
-            return Err(anyhow!("VT_ACTIVATE failed: {}", std::io::Error::last_os_error()));
+            return Err(anyhow!(
+                "VT_RELDISP(VT_ACKACQ) failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
-
+        self.active = true;
+        info!("VT acquired");
         Ok(())
     }
 
-    /// Check if VT is currently active
-    /// Uses VT_GETSTATE ioctl
+    /// Check if VT is currently active using VT_GETSTATE
     pub fn is_focused(&self) -> bool {
-        let Some(fd) = self.console_fd else {
-            return true; // Assume focused if no console
-        };
-
-        let Some(target) = self.target_vt else {
-            return true; // Not a VT, always focused
-        };
-
-        // VT_GETSTATE: Get currently active VT
         #[repr(C)]
         struct VtStat {
             v_active: libc::c_ushort,
@@ -356,42 +480,73 @@ impl VtFocusTracker {
             v_state: 0,
         };
 
-        let ret = unsafe { libc::ioctl(fd, VT_GETSTATE, &mut stat) };
+        let ret = unsafe { libc::ioctl(self.tty_fd, VT_GETSTATE, &mut stat) };
         if ret < 0 {
-            return true; // Assume focused on error
+            return self.active; // Fall back to tracked state
         }
 
-        stat.v_active == target
+        stat.v_active == self.target_vt
+    }
+}
+
+impl Drop for VtSwitcher {
+    fn drop(&mut self) {
+        // Reset to VT_AUTO mode
+        let mode = VtMode {
+            mode: VT_AUTO,
+            waitv: 0,
+            relsig: 0,
+            acqsig: 0,
+            frsig: 0,
+        };
+
+        let ret = unsafe { libc::ioctl(self.tty_fd, VT_SETMODE, &mode) };
+        if ret < 0 {
+            warn!(
+                "Failed to reset VT to VT_AUTO: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+
+        // Restore original signal mask
+        if let Err(e) = self.old_sigmask.thread_set_mask() {
+            warn!("Failed to restore signal mask: {}", e);
+        }
+
+        unsafe { libc::close(self.tty_fd) };
+        info!("VT switcher cleaned up");
+    }
+}
+
+// Keep the old VtFocusTracker for backward compatibility but mark it deprecated
+#[deprecated(note = "Use VtSwitcher instead")]
+pub struct VtFocusTracker {
+    console_fd: Option<RawFd>,
+    target_vt: Option<u16>,
+    was_focused: bool,
+}
+
+#[allow(deprecated)]
+impl VtFocusTracker {
+    pub fn new() -> Self {
+        warn!("VtFocusTracker is deprecated, use VtSwitcher instead");
+        Self {
+            console_fd: None,
+            target_vt: None,
+            was_focused: true,
+        }
     }
 
-    /// Get target VT number
     pub fn target_vt(&self) -> Option<u16> {
         self.target_vt
     }
 
-    /// Switch to a specific VT (public interface, no wait)
-    /// Used for switching away from our VT
-    pub fn switch_to(&self, vt: u16) -> Result<()> {
-        self.activate_vt_no_wait(vt)
+    pub fn is_focused(&self) -> bool {
+        true
     }
 
-    /// Check if focus state changed, return new state if changed
     pub fn check_focus_change(&mut self) -> Option<bool> {
-        let focused = self.is_focused();
-        if focused != self.was_focused {
-            self.was_focused = focused;
-            Some(focused)
-        } else {
-            None
-        }
-    }
-}
-
-impl Drop for VtFocusTracker {
-    fn drop(&mut self) {
-        if let Some(fd) = self.console_fd {
-            unsafe { libc::close(fd); }
-        }
+        None
     }
 }
 

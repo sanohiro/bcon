@@ -380,3 +380,134 @@ impl Drop for Pty {
         let _ = waitpid(self.child_pid, None);
     }
 }
+
+/// Read and expand /etc/issue file (like getty does)
+///
+/// Expands the following escape sequences:
+/// - \d  Current date
+/// - \l  TTY name (e.g., tty2)
+/// - \m  Machine architecture
+/// - \n  Hostname (nodename)
+/// - \o  Domain name
+/// - \r  Kernel release
+/// - \s  Kernel name (e.g., Linux)
+/// - \t  Current time
+/// - \v  Kernel version
+/// - \\  Literal backslash
+///
+/// Returns None if /etc/issue doesn't exist or can't be read.
+pub fn read_issue(tty_name: &str) -> Option<String> {
+    let content = std::fs::read_to_string("/etc/issue").ok()?;
+    Some(expand_issue(&content, tty_name))
+}
+
+/// Expand /etc/issue escape sequences
+fn expand_issue(content: &str, tty_name: &str) -> String {
+    let mut result = String::with_capacity(content.len() * 2);
+    let mut chars = content.chars().peekable();
+
+    // Get system info (cached)
+    let uname = get_uname();
+    let hostname = uname.nodename.clone();
+    let machine = uname.machine.clone();
+    let release = uname.release.clone();
+    let sysname = uname.sysname.clone();
+    let version = uname.version.clone();
+
+    // Get domain name
+    let domainname = get_domainname().unwrap_or_default();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('d') => {
+                    // Current date
+                    let now = chrono::Local::now();
+                    result.push_str(&now.format("%a %b %d %Y").to_string());
+                }
+                Some('l') => {
+                    // TTY name
+                    result.push_str(tty_name);
+                }
+                Some('m') => {
+                    // Machine architecture
+                    result.push_str(&machine);
+                }
+                Some('n') => {
+                    // Hostname
+                    result.push_str(&hostname);
+                }
+                Some('o') => {
+                    // Domain name
+                    result.push_str(&domainname);
+                }
+                Some('r') => {
+                    // Kernel release
+                    result.push_str(&release);
+                }
+                Some('s') => {
+                    // Kernel name
+                    result.push_str(&sysname);
+                }
+                Some('t') => {
+                    // Current time
+                    let now = chrono::Local::now();
+                    result.push_str(&now.format("%H:%M:%S").to_string());
+                }
+                Some('v') => {
+                    // Kernel version
+                    result.push_str(&version);
+                }
+                Some('\\') => {
+                    result.push('\\');
+                }
+                Some(other) => {
+                    // Unknown escape, keep as-is
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => {
+                    result.push('\\');
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+/// System info from uname()
+struct UnameInfo {
+    sysname: String,
+    nodename: String,
+    release: String,
+    version: String,
+    machine: String,
+}
+
+fn get_uname() -> UnameInfo {
+    let mut utsname: libc::utsname = unsafe { std::mem::zeroed() };
+    unsafe { libc::uname(&mut utsname) };
+
+    fn cstr_to_string(arr: &[i8]) -> String {
+        let bytes: Vec<u8> = arr.iter().map(|&c| c as u8).take_while(|&c| c != 0).collect();
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    UnameInfo {
+        sysname: cstr_to_string(&utsname.sysname),
+        nodename: cstr_to_string(&utsname.nodename),
+        release: cstr_to_string(&utsname.release),
+        version: cstr_to_string(&utsname.version),
+        machine: cstr_to_string(&utsname.machine),
+    }
+}
+
+fn get_domainname() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/domainname")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "(none)")
+}

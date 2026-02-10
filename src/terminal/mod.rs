@@ -1407,4 +1407,13 @@ impl Terminal {
     pub fn is_synchronized_update(&self) -> bool {
         self.grid.synchronized_update
     }
+
+    /// Process arbitrary output data (e.g., /etc/issue before login)
+    ///
+    /// This is similar to process_pty_output but takes external data.
+    pub fn process_output(&mut self, data: &[u8]) {
+        for &byte in data {
+            self.process_byte_with_vte(byte);
+        }
+    }
 }

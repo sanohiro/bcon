@@ -460,7 +460,10 @@ fn main() -> Result<()> {
     }
 
     // Phase 0: VT switching (must happen BEFORE DRM takes over display)
-    let mut vt_focus_tracker = drm::VtFocusTracker::new();
+    // VtSwitcher sets up process-controlled VT switching via VT_SETMODE
+    // The kernel sends SIGUSR1/SIGUSR2 signals for VT switch requests
+    let mut vt_switcher = drm::VtSwitcher::new()
+        .context("Failed to initialize VT switcher")?;
 
     // Phase 1: DRM/KMS initialization
     let drm_path = find_drm_device()?;
@@ -645,6 +648,16 @@ fn main() -> Result<()> {
     // Set clipboard path
     term.set_clipboard_path(&cfg.paths.clipboard_file);
 
+    // Display /etc/issue (like getty does) if running as root
+    if unsafe { libc::getuid() } == 0 {
+        let tty_name = format!("tty{}", vt_switcher.target_vt());
+        if let Some(issue) = terminal::pty::read_issue(&tty_name) {
+            // Process issue text through terminal to display it
+            term.process_output(issue.as_bytes());
+            info!("Displayed /etc/issue for {}", tty_name);
+        }
+    }
+
     // Phase 4: Keyboard input initialization
     let keyboard = input::Keyboard::new().context("Failed to initialize keyboard")?;
 
@@ -734,18 +747,55 @@ fn main() -> Result<()> {
     let mut drm_master_held = true;
 
     loop {
-        // Check if we need to reacquire DRM master (returning from VT switch)
-        if !drm_master_held && vt_focus_tracker.is_focused() {
-            info!("VT focus regained, reacquiring DRM master");
-            if let Err(e) = drm_device.set_master() {
-                log::warn!("Failed to reacquire DRM master: {}", e);
-            } else {
-                drm_master_held = true;
-                needs_redraw = true;
+        // Poll for VT switch signals (SIGUSR1/SIGUSR2 via signalfd)
+        while let Some(event) = vt_switcher.poll() {
+            match event {
+                drm::VtEvent::Release => {
+                    // Kernel requests us to release the VT
+                    info!("VT release requested");
+
+                    // Send focus out event to terminal applications
+                    if let Err(e) = term.send_focus_event(false) {
+                        log::debug!("Failed to send FocusOut event: {}", e);
+                    }
+
+                    if drm_master_held {
+                        if let Err(e) = drm_device.drop_master() {
+                            log::warn!("Failed to drop DRM master: {}", e);
+                        } else {
+                            drm_master_held = false;
+                        }
+                    }
+                    // Acknowledge release - this allows the VT switch to proceed
+                    if let Err(e) = vt_switcher.ack_release() {
+                        log::warn!("Failed to acknowledge VT release: {}", e);
+                    }
+                }
+                drm::VtEvent::Acquire => {
+                    // Kernel grants us the VT
+                    info!("VT acquire");
+                    if !drm_master_held {
+                        if let Err(e) = drm_device.set_master() {
+                            log::warn!("Failed to acquire DRM master: {}", e);
+                        } else {
+                            drm_master_held = true;
+                            needs_redraw = true;
+                        }
+                    }
+                    // Acknowledge acquire
+                    if let Err(e) = vt_switcher.ack_acquire() {
+                        log::warn!("Failed to acknowledge VT acquire: {}", e);
+                    }
+
+                    // Send focus in event to terminal applications
+                    if let Err(e) = term.send_focus_event(true) {
+                        log::debug!("Failed to send FocusIn event: {}", e);
+                    }
+                }
             }
         }
 
-        // Skip most processing if we don't have DRM master
+        // Skip most processing if we don't have DRM master (VT switched away)
         if !drm_master_held {
             std::thread::sleep(Duration::from_millis(100));
             continue;
@@ -815,29 +865,8 @@ fn main() -> Result<()> {
 
             // Keyboard event processing
             for raw in &key_events {
-                // Check for VT switch (Ctrl+Alt+Fn)
-                if let Some(target_vt) = input::evdev::check_vt_switch(raw) {
-                    // Only switch if going to a different VT
-                    if Some(target_vt) != vt_focus_tracker.target_vt() {
-                        info!("VT switch requested: VT{}", target_vt);
-                        // Drop DRM master before switching
-                        if let Err(e) = drm_device.drop_master() {
-                            log::warn!("Failed to drop DRM master: {}", e);
-                        } else {
-                            drm_master_held = false;
-                        }
-                        if let Err(e) = vt_focus_tracker.switch_to(target_vt) {
-                            log::warn!("VT switch failed: {}", e);
-                            // Try to reacquire DRM master if switch failed
-                            if !drm_master_held {
-                                if drm_device.set_master().is_ok() {
-                                    drm_master_held = true;
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
+                // VT switching is now handled by VtSwitcher via kernel signals
+                // (Ctrl+Alt+Fn triggers SIGUSR1/SIGUSR2 via VT_SETMODE)
 
                 // Update Ctrl state (for URL click detection)
                 ctrl_pressed = raw.mods_ctrl;
@@ -1472,14 +1501,8 @@ fn main() -> Result<()> {
             }
         }
 
-        // Detect VT focus change and send focus event
-        if let Some(focused) = vt_focus_tracker.check_focus_change() {
-            if let Err(e) = term.send_focus_event(focused) {
-                log::debug!("Failed to send focus event: {}", e);
-            } else {
-                log::debug!("Focus event sent: {}", if focused { "FocusIn" } else { "FocusOut" });
-            }
-        }
+        // Focus events are sent when VT switch signals are processed above
+        // (VtSwitcher handles SIGUSR1/SIGUSR2 for acquire/release)
 
         // IME auto-switch based on foreground process
         // Rate limited (considering command execution cost like tmux display-message)
