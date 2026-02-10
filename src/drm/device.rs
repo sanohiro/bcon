@@ -180,7 +180,9 @@ const VT_WAITACTIVE: libc::c_ulong = 0x5607;
 
 /// VT focus state tracking and switching helper
 pub struct VtFocusTracker {
-    tty_fd: Option<RawFd>,
+    /// fd for VT operations (usually /dev/tty0 or /dev/console)
+    console_fd: Option<RawFd>,
+    /// Target VT number (from stdin TTY)
     target_vt: Option<u16>,
     was_focused: bool,
 }
@@ -188,46 +190,85 @@ pub struct VtFocusTracker {
 impl VtFocusTracker {
     /// Create VT focus tracker and switch to target VT
     pub fn new() -> Self {
-        // Open /dev/tty to check VT state
-        let tty_fd = unsafe {
-            let fd = libc::open(b"/dev/tty\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
-            if fd >= 0 { Some(fd) } else { None }
+        // Get VT number from stdin (systemd sets TTYPath which connects stdin to the TTY)
+        let target_vt = Self::get_vt_from_stdin();
+
+        // Open /dev/tty0 (console master) for VT switching operations
+        // This works regardless of which TTY we're attached to
+        let console_fd = unsafe {
+            let fd = libc::open(b"/dev/tty0\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
+            if fd >= 0 {
+                Some(fd)
+            } else {
+                // Fallback to /dev/console
+                let fd = libc::open(b"/dev/console\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
+                if fd >= 0 { Some(fd) } else { None }
+            }
         };
 
-        // Determine target VT from controlling terminal
-        let target_vt = tty_fd.and_then(|fd| Self::get_vt_number(fd));
+        if console_fd.is_none() {
+            warn!("Cannot open /dev/tty0 or /dev/console for VT switching");
+        }
 
         let mut tracker = Self {
-            tty_fd,
+            console_fd,
             target_vt,
             was_focused: true,
         };
 
         // Switch to target VT if we have one
         if let Some(vt) = target_vt {
+            info!("Target VT: {}", vt);
             if let Err(e) = tracker.activate_vt(vt) {
                 warn!("Failed to activate VT{}: {}", vt, e);
             } else {
                 info!("Activated VT{}", vt);
             }
+        } else {
+            warn!("Could not determine target VT from stdin");
         }
 
         tracker
     }
 
-    /// Get VT number from fd
-    fn get_vt_number(fd: RawFd) -> Option<u16> {
+    /// Get VT number from stdin (fd 0)
+    fn get_vt_from_stdin() -> Option<u16> {
+        // First try ttyname to get the TTY path
+        let tty_path = unsafe {
+            let ptr = libc::ttyname(0); // stdin
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
+            }
+        };
+
+        if let Some(path) = &tty_path {
+            info!("stdin TTY: {}", path);
+            // Parse /dev/ttyN -> N
+            if let Some(num_str) = path.strip_prefix("/dev/tty") {
+                if let Ok(vt) = num_str.parse::<u16>() {
+                    if vt >= 1 && vt <= 63 {
+                        return Some(vt);
+                    }
+                }
+            }
+        }
+
+        // Fallback: use fstat on stdin
         let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
-        let ret = unsafe { libc::fstat(fd, &mut stat_buf) };
+        let ret = unsafe { libc::fstat(0, &mut stat_buf) };
         if ret < 0 {
             return None;
         }
 
-        // Extract VT number from major/minor (tty1-tty63 is major=4, minor=1-63)
         let major = libc::major(stat_buf.st_rdev);
         let minor = libc::minor(stat_buf.st_rdev);
 
-        if major == 4 && minor > 0 && minor <= 63 {
+        info!("stdin device: major={}, minor={}", major, minor);
+
+        // tty1-tty63 is major=4, minor=1-63
+        if major == 4 && minor >= 1 && minor <= 63 {
             Some(minor as u16)
         } else {
             None
@@ -236,9 +277,11 @@ impl VtFocusTracker {
 
     /// Activate (switch to) specific VT
     fn activate_vt(&self, vt: u16) -> Result<()> {
-        let Some(fd) = self.tty_fd else {
-            return Err(anyhow!("No TTY fd"));
+        let Some(fd) = self.console_fd else {
+            return Err(anyhow!("No console fd"));
         };
+
+        info!("VT_ACTIVATE({}) on fd {}", vt, fd);
 
         // VT_ACTIVATE: Switch to VT
         let ret = unsafe { libc::ioctl(fd, VT_ACTIVATE, vt as libc::c_int) };
@@ -258,8 +301,8 @@ impl VtFocusTracker {
     /// Check if VT is currently active
     /// Uses VT_GETSTATE ioctl
     pub fn is_focused(&self) -> bool {
-        let Some(fd) = self.tty_fd else {
-            return true; // Assume focused if no TTY
+        let Some(fd) = self.console_fd else {
+            return true; // Assume focused if no console
         };
 
         let Some(target) = self.target_vt else {
@@ -312,7 +355,7 @@ impl VtFocusTracker {
 
 impl Drop for VtFocusTracker {
     fn drop(&mut self) {
-        if let Some(fd) = self.tty_fd {
+        if let Some(fd) = self.console_fd {
             unsafe { libc::close(fd); }
         }
     }
