@@ -69,8 +69,20 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 
 - Linux with DRM/KMS support
 - GPU with OpenGL ES 2.0+
-- Root access (or logind session)
 - Rust toolchain (1.82+)
+
+### Privilege Options
+
+| Mode | Requirement | Build Command |
+|------|-------------|---------------|
+| Root mode | Run as root (`sudo`) | `cargo build --release` |
+| Rootless mode | systemd-logind or seatd | `cargo build --release --features seatd` |
+
+**Rootless mode** uses [libseat](https://sr.ht/~kennylevinsen/seatd/) for proper session management. Benefits:
+- No root required
+- Proper session tracking (`loginctl list-sessions`)
+- Integration with screen lock, power management
+- Clean VT switching with Wayland/X11 sessions
 
 ### System Packages (Debian/Ubuntu)
 
@@ -83,6 +95,9 @@ sudo apt install \
     libxkbcommon-dev libinput-dev libudev-dev \
     libdbus-1-dev \
     pkg-config cmake clang
+
+# Optional: for rootless build (--features seatd)
+sudo apt install libseat-dev
 
 # Runtime (fonts)
 sudo apt install fonts-dejavu-core
@@ -109,8 +124,11 @@ sudo apt install bcon
 ### From source
 
 ```bash
-# Build
+# Standard build (requires root to run)
 cargo build --release
+
+# Rootless build (requires logind/seatd)
+cargo build --release --features seatd
 
 # Generate config file
 ./target/release/bcon --init-config
@@ -129,11 +147,14 @@ Run from TTY (virtual console), not inside X11/Wayland:
 # Switch to TTY
 Ctrl+Alt+F2
 
-# Run bcon
+# Run bcon (standard build)
 sudo ./target/release/bcon
 
+# Run bcon (rootless build with --features seatd)
+./target/release/bcon
+
 # Return to graphical session
-sudo chvt 1  # or 7
+Ctrl+Alt+F1  # or F7
 ```
 
 ### systemd Service (Recommended for Daily Use)
@@ -153,6 +174,34 @@ sudo systemctl start bcon@tty2
 
 # Switch to bcon
 Ctrl+Alt+F2
+```
+
+### Rootless systemd Service
+
+For rootless builds (`--features seatd`), create a user-specific service:
+
+```ini
+# /etc/systemd/system/bcon@.service
+[Unit]
+Description=bcon terminal on %I
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bcon
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+
+# Rootless: run as regular user
+User=youruser
+Group=youruser
+SupplementaryGroups=video input
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 ### With Japanese Input (IME)

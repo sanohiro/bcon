@@ -67,8 +67,20 @@ Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく�
 
 - DRM/KMS サポートのある Linux
 - OpenGL ES 2.0+ 対応 GPU
-- root 権限 (または logind セッション)
 - Rust ツールチェイン (1.82+)
+
+### 実行権限オプション
+
+| モード | 必要条件 | ビルドコマンド |
+|--------|----------|----------------|
+| root モード | root で実行 (`sudo`) | `cargo build --release` |
+| rootless モード | systemd-logind または seatd | `cargo build --release --features seatd` |
+
+**rootless モード**は [libseat](https://sr.ht/~kennylevinsen/seatd/) を使用してセッション管理を行います:
+- root 権限不要
+- セッション追跡 (`loginctl list-sessions`)
+- スクリーンロック、電源管理との連携
+- Wayland/X11 セッションとのクリーンな VT 切り替え
 
 ### システムパッケージ (Debian/Ubuntu)
 
@@ -81,6 +93,9 @@ sudo apt install \
     libxkbcommon-dev libinput-dev libudev-dev \
     libdbus-1-dev \
     pkg-config cmake clang
+
+# オプション: rootless ビルド (--features seatd)
+sudo apt install libseat-dev
 
 # ランタイム (フォント)
 sudo apt install fonts-dejavu-core
@@ -107,8 +122,11 @@ sudo apt install bcon
 ### ソースからビルド
 
 ```bash
-# ビルド
+# 標準ビルド (root で実行)
 cargo build --release
+
+# rootless ビルド (logind/seatd で実行)
+cargo build --release --features seatd
 
 # 設定ファイル生成
 ./target/release/bcon --init-config
@@ -127,11 +145,14 @@ TTY (仮想コンソール) から実行。X11/Wayland 内からは実行不可�
 # TTY に切り替え
 Ctrl+Alt+F2
 
-# bcon を実行
+# bcon を実行 (標準ビルド)
 sudo ./target/release/bcon
 
+# bcon を実行 (rootless ビルド: --features seatd)
+./target/release/bcon
+
 # グラフィカルセッションに戻る
-sudo chvt 1  # または 7
+Ctrl+Alt+F1  # または F7
 ```
 
 ### systemd サービス (常用におすすめ)
@@ -151,6 +172,34 @@ sudo systemctl start bcon@tty2
 
 # bcon に切り替え
 Ctrl+Alt+F2
+```
+
+### rootless systemd サービス
+
+rootless ビルド (`--features seatd`) 用のサービス設定：
+
+```ini
+# /etc/systemd/system/bcon@.service
+[Unit]
+Description=bcon terminal on %I
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bcon
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/%I
+TTYReset=yes
+TTYVHangup=yes
+
+# rootless: 一般ユーザーで実行
+User=youruser
+Group=youruser
+SupplementaryGroups=video input
+
+[Install]
+WantedBy=multi-user.target
 ```
 
 ### 日本語入力 (IME) を使う場合
