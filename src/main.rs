@@ -671,8 +671,8 @@ fn main() -> Result<()> {
     let mut curly_renderer =
         gpu::CurlyRenderer::new(gl).context("Failed to initialize curly renderer")?;
 
-    // Create FBO for cached rendering (enables partial updates)
-    let fbo = gpu::Fbo::new(gl, display_config.width, display_config.height)
+    // Create FBO for cached rendering (currently disabled - cursor trail bug)
+    let _fbo = gpu::Fbo::new(gl, display_config.width, display_config.height)
         .context("Failed to initialize FBO")?;
 
     info!("Phase 2 initialization complete");
@@ -1780,23 +1780,11 @@ fn main() -> Result<()> {
             config_bg
         };
 
-        // Bind FBO for rendering
-        fbo.bind(gl);
-
-        // Clear FBO: if all dirty or overlays active, clear everything; otherwise clear only dirty rows
-        // Selection/search overlays require full clear because they change independently of content
+        // FBO disabled - render directly to screen
+        // TODO: Fix FBO caching to exclude cursor, then re-enable
+        renderer.clear(bg_color.0, bg_color.1, bg_color.2, 1.0);
         let has_overlays = term.selection.is_some() || search_mode || term.copy_mode.is_some();
-        if term.grid.is_all_dirty() || has_overlays {
-            fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
-        } else if term.has_dirty_rows() {
-            // Clear only dirty rows using scissor test
-            for row in 0..term.grid.rows() {
-                if term.grid.is_row_dirty(row) {
-                    fbo.clear_rows(gl, row, row, cell_h, margin_y, bg_color.0, bg_color.1, bg_color.2);
-                }
-            }
-        }
-        // If no rows are dirty and no overlays, FBO content is preserved from previous frame
+        let _ = has_overlays; // suppress warning
 
         text_renderer.begin();
         text_renderer.set_bg_color(bg_color.0, bg_color.1, bg_color.2);
@@ -2807,9 +2795,9 @@ fn main() -> Result<()> {
             }
         }
 
-        // Unbind FBO and blit to screen
-        fbo.unbind(gl);
-        fbo.blit_to_screen(gl, screen_w, screen_h);
+        // FBO disabled - rendering directly to screen
+        // fbo.unbind(gl);
+        // fbo.blit_to_screen(gl, screen_w, screen_h);
 
         // Buffer swap (skip during Synchronized Update mode or when VT switched away)
         // CSI ? 2026 h starts buffering, CSI ? 2026 l displays all at once
@@ -2834,7 +2822,7 @@ fn main() -> Result<()> {
     drop(keyboard);
 
     // Resource cleanup
-    fbo.destroy(gl);
+    _fbo.destroy(gl);
     emoji_renderer.destroy(gl);
     image_renderer.destroy(gl);
     ui_renderer.destroy(gl);
