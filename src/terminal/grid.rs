@@ -225,6 +225,7 @@ bitflags! {
         const HIDDEN    = 0b0000_0100_0000;
         const STRIKE    = 0b0000_1000_0000;
         const OVERLINE  = 0b0001_0000_0000;  // Overline (CSI 53 m)
+        const IS_EMOJI  = 0b0010_0000_0000;  // Contains emoji (cached for rendering)
     }
 }
 
@@ -743,7 +744,13 @@ impl Grid {
         // Add to grapheme
         let mut combined = base_grapheme.to_string();
         combined.push(ch);
-        self.cell_mut(row, col).grapheme = SmolStr::new(&combined);
+        let cell = self.cell_mut(row, col);
+        cell.grapheme = SmolStr::new(&combined);
+
+        // Set IS_EMOJI flag if combining emoji character
+        if is_emoji_codepoint(ch as u32) {
+            cell.attrs.insert(CellAttrs::IS_EMOJI);
+        }
     }
 
     /// Merge Regional Indicator with previous RI to form flag
@@ -869,9 +876,14 @@ impl Grid {
 
         let fg = self.pen.fg;
         let bg = self.pen.bg;
-        let attrs = self.pen.attrs;
+        let mut attrs = self.pen.attrs;
         let underline_style = self.pen.underline_style;
         let underline_color = self.pen.underline_color;
+
+        // Set IS_EMOJI flag for emoji characters (cached for rendering)
+        if is_emoji_codepoint(cp) {
+            attrs.insert(CellAttrs::IS_EMOJI);
+        }
 
         // Clear paired cell when overwriting existing wide character
         self.clear_wide_char_at(self.cursor_row, self.cursor_col);

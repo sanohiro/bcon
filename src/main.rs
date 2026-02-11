@@ -2212,8 +2212,8 @@ fn main() -> Result<()> {
                     let bg = [bg_rgba[0], bg_rgba[1], bg_rgba[2]];
                     let first_char = cell.ch();
 
-                    // Emoji check (judge by entire grapheme)
-                    let is_emoji_grapheme = grapheme.chars().any(|c| font::emoji::is_emoji(c));
+                    // Emoji check (use cached IS_EMOJI flag from Cell)
+                    let is_emoji_grapheme = cell.attrs.contains(terminal::grid::CellAttrs::IS_EMOJI);
                     let mut emoji_drawn = false;
                     if is_emoji_grapheme && emoji_atlas.is_available() {
                         // Search by entire grapheme (supports flags and ZWJ sequences)
