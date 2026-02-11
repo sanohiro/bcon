@@ -311,6 +311,11 @@ screenshot_dir = "~/Pictures"
 | `/` | Search |
 | `Esc` | Exit copy mode |
 
+## Limitations
+
+- **Multi-seat (DRM lease)**: Not supported. bcon uses exclusive access to the GPU. For multi-seat setups (multiple users on one PC with separate monitors/keyboards), use traditional X11/Wayland solutions.
+- **Multiple monitors**: Currently single monitor only. Multi-monitor support may be added in the future.
+
 ## Architecture
 
 ```
