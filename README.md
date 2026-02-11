@@ -91,9 +91,9 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 sudo apt install \
     libdrm-dev libgbm-dev \
     libegl1-mesa-dev libgles2-mesa-dev \
-    libwayland-dev wayland-protocols \
     libxkbcommon-dev libinput-dev libudev-dev \
-    libdbus-1-dev \
+    libdbus-1-dev libwayland-dev \
+    libfontconfig1-dev libfreetype-dev \
     pkg-config cmake clang
 
 # Optional: for rootless build (--features seatd)
@@ -314,7 +314,7 @@ screenshot_dir = "~/Pictures"
 ## Limitations
 
 - **Multi-seat (DRM lease)**: Not supported. bcon uses exclusive access to the GPU. For multi-seat setups (multiple users on one PC with separate monitors/keyboards), use traditional X11/Wayland solutions.
-- **Multiple monitors**: Currently single monitor only. Multi-monitor support may be added in the future.
+- **Multiple monitors**: Currently outputs to one monitor only. If you have multiple monitors connected, bcon will use the first detected display.
 
 ## Architecture
 

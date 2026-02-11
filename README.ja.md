@@ -89,9 +89,9 @@ Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく�
 sudo apt install \
     libdrm-dev libgbm-dev \
     libegl1-mesa-dev libgles2-mesa-dev \
-    libwayland-dev wayland-protocols \
     libxkbcommon-dev libinput-dev libudev-dev \
-    libdbus-1-dev \
+    libdbus-1-dev libwayland-dev \
+    libfontconfig1-dev libfreetype-dev \
     pkg-config cmake clang
 
 # オプション: rootless ビルド (--features seatd)
@@ -312,7 +312,7 @@ screenshot_dir = "~/Pictures"
 ## 制限事項
 
 - **マルチシート (DRM リース)**: 非対応。bcon は GPU を排他的に使用します。1台の PC で複数ユーザーが別々のモニター/キーボードを使う構成には、従来の X11/Wayland をご利用ください。
-- **マルチモニタ**: 現在は単一モニタのみ対応。将来的に対応予定。
+- **マルチモニタ**: 現在は1つのモニタにのみ出力。複数モニタが接続されている場合、最初に検出されたディスプレイを使用します。
 
 ## ライセンス
 
