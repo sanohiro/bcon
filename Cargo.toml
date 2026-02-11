@@ -36,6 +36,7 @@ unicode-width = "0.1"
 unicode-segmentation = "1.10"
 unicode-normalization = "0.1"
 vte = "0.13"  # VT parser reference/fallback
+smol_str = "0.2"  # Inline small strings (no heap alloc for short strings)
 
 # Image handling
 image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
@@ -72,6 +73,8 @@ sd-notify = "0.4"
 notify = "6.1"
 # Session management (optional - enables running without root)
 libseat = { version = "0.2", optional = true }
+# Device hotplug detection
+udev = "0.8"
 
 [features]
 default = []

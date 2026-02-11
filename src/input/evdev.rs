@@ -3,6 +3,8 @@
 //! Use libinput + xkbcommon to read keyboard/mouse events directly from /dev/input/eventN.
 //! Handle physical input on DRM console.
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, Result};
 use input::event::keyboard::{KeyState, KeyboardEventTrait};
 use input::event::pointer::{Axis, ButtonState, PointerScrollEvent};
@@ -25,9 +27,7 @@ use std::rc::Rc;
 #[cfg(all(target_os = "linux", feature = "seatd"))]
 use crate::session::SeatSession;
 
-/// Key repeat settings
-const KEY_REPEAT_DELAY_MS: u64 = 400; // Delay before first repeat
-const KEY_REPEAT_RATE_MS: u64 = 30; // Repeat interval
+use crate::config::KeyboardInputConfig;
 
 /// LibinputInterface implementation for libinput
 struct InputInterface;
@@ -149,6 +149,10 @@ pub struct EvdevKeyboard {
     scroll_accum: f64,
     /// Held keys: keycode -> (press time, next repeat time, RawKeyEvent)
     held_keys: HashMap<u32, (Instant, Instant, RawKeyEvent)>,
+    /// Key repeat delay (ms)
+    repeat_delay_ms: u64,
+    /// Key repeat rate (ms)
+    repeat_rate_ms: u64,
 }
 
 impl EvdevKeyboard {
@@ -157,7 +161,7 @@ impl EvdevKeyboard {
     /// Scan /dev/input/event* and add devices to libinput.
     /// Set up keymap with xkbcommon.
     /// screen_width/height used for mouse coordinate clamping.
-    pub fn new(screen_width: u32, screen_height: u32) -> Result<Self> {
+    pub fn new(screen_width: u32, screen_height: u32, kb_config: &KeyboardInputConfig) -> Result<Self> {
         // Create libinput context
         let mut input = Libinput::new_from_path(InputInterface);
 
@@ -197,22 +201,34 @@ impl EvdevKeyboard {
         nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(flags))
             .map_err(|e| anyhow!("F_SETFL failed: {}", e))?;
 
-        // Initialize xkbcommon
+        // Initialize xkbcommon with config settings
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+
+        // Use config values or empty string for default
+        let rules = "";  // Always use default rules
+        let model = if kb_config.xkb_model.is_empty() { "" } else { &kb_config.xkb_model };
+        let layout = if kb_config.xkb_layout.is_empty() { "" } else { &kb_config.xkb_layout };
+        let variant = if kb_config.xkb_variant.is_empty() { "" } else { &kb_config.xkb_variant };
+        let options = if kb_config.xkb_options.is_empty() { None } else { Some(kb_config.xkb_options.clone()) };
+        let options_for_error = options.clone();
+
         let keymap = xkb::Keymap::new_from_names(
             &context,
-            "",   // rules: default
-            "",   // model: default
-            "",   // layout: default
-            "",   // variant: default
-            None, // options: default
+            rules,
+            model,
+            layout,
+            variant,
+            options,
             xkb::COMPILE_NO_FLAGS,
         )
-        .ok_or_else(|| anyhow!("Failed to create xkb keymap"))?;
+        .ok_or_else(|| anyhow!("Failed to create xkb keymap (model={}, layout={}, variant={}, options={:?})",
+            model, layout, variant, options_for_error))?;
 
         let xkb_state = xkb::State::new(&keymap);
 
-        info!("evdev keyboard initialized");
+        info!("evdev keyboard initialized (layout={}, repeat_delay={}ms, repeat_rate={}ms)",
+            if layout.is_empty() { "default" } else { layout },
+            kb_config.repeat_delay, kb_config.repeat_rate);
 
         Ok(Self {
             input,
@@ -227,6 +243,8 @@ impl EvdevKeyboard {
             screen_height: screen_height as f64,
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
+            repeat_delay_ms: kb_config.repeat_delay,
+            repeat_rate_ms: kb_config.repeat_rate,
         })
     }
 
@@ -238,6 +256,7 @@ impl EvdevKeyboard {
         screen_width: u32,
         screen_height: u32,
         session: Rc<RefCell<SeatSession>>,
+        kb_config: &KeyboardInputConfig,
     ) -> Result<Self> {
         // Create libinput context with seat-based interface
         let interface = SeatInputInterface {
@@ -281,22 +300,34 @@ impl EvdevKeyboard {
         nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(flags))
             .map_err(|e| anyhow!("F_SETFL failed: {}", e))?;
 
-        // Initialize xkbcommon
+        // Initialize xkbcommon with config settings
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+
+        // Use config values or empty string for default
+        let rules = "";  // Always use default rules
+        let model = if kb_config.xkb_model.is_empty() { "" } else { &kb_config.xkb_model };
+        let layout = if kb_config.xkb_layout.is_empty() { "" } else { &kb_config.xkb_layout };
+        let variant = if kb_config.xkb_variant.is_empty() { "" } else { &kb_config.xkb_variant };
+        let options = if kb_config.xkb_options.is_empty() { None } else { Some(kb_config.xkb_options.clone()) };
+        let options_for_error = options.clone();
+
         let keymap = xkb::Keymap::new_from_names(
             &context,
-            "",   // rules: default
-            "",   // model: default
-            "",   // layout: default
-            "",   // variant: default
-            None, // options: default
+            rules,
+            model,
+            layout,
+            variant,
+            options,
             xkb::COMPILE_NO_FLAGS,
         )
-        .ok_or_else(|| anyhow!("Failed to create xkb keymap"))?;
+        .ok_or_else(|| anyhow!("Failed to create xkb keymap (model={}, layout={}, variant={}, options={:?})",
+            model, layout, variant, options_for_error))?;
 
         let xkb_state = xkb::State::new(&keymap);
 
-        info!("evdev keyboard initialized with libseat");
+        info!("evdev keyboard initialized with libseat (layout={}, repeat_delay={}ms, repeat_rate={}ms)",
+            if layout.is_empty() { "default" } else { layout },
+            kb_config.repeat_delay, kb_config.repeat_rate);
 
         Ok(Self {
             input,
@@ -311,6 +342,8 @@ impl EvdevKeyboard {
             screen_height: screen_height as f64,
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
+            repeat_delay_ms: kb_config.repeat_delay,
+            repeat_rate_ms: kb_config.repeat_rate,
         })
     }
 
@@ -442,7 +475,7 @@ impl EvdevKeyboard {
                         if key_state == KeyState::Pressed {
                             if !is_modifier {
                                 let now = Instant::now();
-                                let first_repeat = now + Duration::from_millis(KEY_REPEAT_DELAY_MS);
+                                let first_repeat = now + Duration::from_millis(self.repeat_delay_ms);
                                 self.held_keys
                                     .insert(evdev_code, (now, first_repeat, raw_event.clone()));
                             }
@@ -540,7 +573,7 @@ impl EvdevKeyboard {
 
         // Generate key repeats
         let now = Instant::now();
-        let repeat_interval = Duration::from_millis(KEY_REPEAT_RATE_MS);
+        let repeat_interval = Duration::from_millis(self.repeat_rate_ms);
         for (_keycode, (_, next_repeat, event)) in self.held_keys.iter_mut() {
             if now >= *next_repeat {
                 // Generate repeat event
@@ -690,7 +723,7 @@ pub struct KeyboardConfig {
     /// modifyOtherKeys level (0=off, 1=most, 2=all)
     pub modify_other_keys: u8,
     /// Kitty keyboard protocol flags
-    pub kitty_keyboard_flags: u32,
+    pub kitty_flags: u32,
 }
 
 /// Modifier key bitmask (xterm compatible)
@@ -728,8 +761,8 @@ pub fn keysym_to_bytes_with_mods(
     // Kitty keyboard protocol
     // flags & 1 = disambiguate escape codes
     // flags & 8 = report all keys as escape codes (CSI u for everything)
-    let kitty_all_keys = config.kitty_keyboard_flags & 8 != 0;
-    let kitty_disambiguate = config.kitty_keyboard_flags & 1 != 0;
+    let kitty_all_keys = config.kitty_flags & 8 != 0;
+    let kitty_disambiguate = config.kitty_flags & 1 != 0;
     if kitty_disambiguate || kitty_all_keys {
         if let Some(bytes) = encode_kitty_keyboard(raw, ctrl, alt, shift, kitty_all_keys, utf8) {
             return bytes;

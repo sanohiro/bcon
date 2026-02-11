@@ -2,6 +2,8 @@
 //!
 //! High-quality text rendering with LCD subpixel rendering
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, Result};
 use freetype::face::LoadFlag;
 use freetype::ffi::FT_Library;

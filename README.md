@@ -40,6 +40,8 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 - **True Color**: Full 24-bit color support
 - **Ligatures**: Font ligature support (FiraCode, JetBrains Mono, etc.)
 - **Emoji**: Color emoji rendering (Noto Color Emoji)
+- **HiDPI Scaling**: Configurable display scale (1.0x - 2.0x)
+- **HDR Detection**: Automatic HDR capability detection from EDID
 
 ### Graphics
 - **Sixel Graphics**: Display images in terminal
@@ -62,6 +64,8 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 - **Text Search**: Incremental search in scrollback (Ctrl+Shift+F)
 - **Screenshot**: Save terminal as PNG (PrintScreen or Ctrl+Shift+S)
 - **Font Scaling**: Runtime font size adjustment (Ctrl+Plus/Minus)
+- **Monitor Hotplug**: Automatic detection and switching of monitors
+- **External Monitor Priority**: Auto-switch to HDMI/DP when connected (laptops)
 - **Visual Bell**: Screen flash on bell character
 - **URL Detection**: Ctrl+Click to copy URLs
 
@@ -277,6 +281,16 @@ ime_toggle = "ctrl+shift+j"
 [terminal]
 scrollback_lines = 10000
 ime_disabled_apps = ["vim", "nvim", "emacs", "less", "man"]
+
+[keyboard]
+repeat_delay = 400           # Key repeat delay (ms)
+repeat_rate = 30             # Key repeat rate (ms)
+xkb_layout = "us"            # XKB keyboard layout
+xkb_options = "ctrl:nocaps"  # XKB options (Caps Lock as Ctrl)
+
+[display]
+prefer_external = true       # Prefer external monitors (HDMI/DP) over internal
+auto_switch = true           # Auto-switch on hotplug connect/disconnect
 
 [paths]
 screenshot_dir = "~/Pictures"

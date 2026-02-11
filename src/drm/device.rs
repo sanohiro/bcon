@@ -3,6 +3,8 @@
 //! Opens DRM device (/dev/dri/card*) and
 //! enumerates available connectors, CRTCs, and encoders
 //!
+
+#![allow(dead_code)]
 //! VT switching is handled via VT_SETMODE with VT_PROCESS mode.
 //! The kernel sends SIGUSR1/SIGUSR2 signals for VT switch requests.
 
@@ -13,7 +15,7 @@ use log::{debug, info, warn};
 use nix::sys::signal::{SigSet, Signal};
 use nix::sys::signalfd::{SfdFlags, SignalFd};
 use std::fs::{File, OpenOptions};
-use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -28,7 +30,10 @@ pub fn sigterm_received() -> bool {
 /// Set up SIGTERM handler (call once at startup)
 pub fn setup_sigterm_handler() {
     unsafe {
-        libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+        libc::signal(
+            libc::SIGTERM,
+            sigterm_handler as *const () as libc::sighandler_t,
+        );
     }
 }
 
@@ -91,7 +96,9 @@ impl Device {
         }
 
         // Get resources
-        let resources = temp.resource_handles().context("Failed to get DRM resources")?;
+        let resources = temp
+            .resource_handles()
+            .context("Failed to get DRM resources")?;
 
         info!(
             "DRM resources: connectors={}, crtcs={}, encoders={}, framebuffers={}",
@@ -132,7 +139,9 @@ impl Device {
         // libseat handles DRM master privileges automatically
 
         // Get resources
-        let resources = temp.resource_handles().context("Failed to get DRM resources")?;
+        let resources = temp
+            .resource_handles()
+            .context("Failed to get DRM resources")?;
 
         info!(
             "DRM resources: connectors={}, crtcs={}, encoders={}, framebuffers={}",
@@ -179,7 +188,10 @@ impl Device {
         use std::os::unix::io::FromRawFd;
         let fd = unsafe { libc::dup(self.file.as_raw_fd()) };
         if fd < 0 {
-            return Err(anyhow!("fd dup failed: {}", std::io::Error::last_os_error()));
+            return Err(anyhow!(
+                "fd dup failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         Ok(unsafe { std::fs::File::from_raw_fd(fd) })
     }
@@ -194,6 +206,51 @@ impl Device {
             }
         }
         Err(anyhow!("No connected connector found"))
+    }
+
+    /// Find preferred connected connector based on priority
+    ///
+    /// When prefer_external is true, external connectors (HDMI, DP, DVI, VGA)
+    /// are prioritized over internal (eDP, LVDS).
+    ///
+    /// Priority order: HDMI > DisplayPort > DVI > VGA > eDP > LVDS > others
+    pub fn find_preferred_connector(
+        &self,
+        prefer_external: bool,
+    ) -> Result<(connector::Handle, connector::Info)> {
+        let mut connectors: Vec<(connector::Handle, connector::Info, i32)> = Vec::new();
+
+        for &handle in self.resources.connectors() {
+            let info = self.get_connector(handle)?;
+            if info.state() == connector::State::Connected {
+                let priority = connector_priority(info.interface(), prefer_external);
+                connectors.push((handle, info, priority));
+            }
+        }
+
+        if connectors.is_empty() {
+            return Err(anyhow!("No connected connector found"));
+        }
+
+        // Sort by priority (lower is better)
+        connectors.sort_by_key(|(_, _, p)| *p);
+
+        let (handle, info, _) = connectors.into_iter().next().unwrap();
+        info!("Selected connector: {:?} ({:?})", handle, info.interface());
+        Ok((handle, info))
+    }
+
+    /// Get all connected connectors with their info
+    pub fn get_connected_connectors(&self) -> Vec<(connector::Handle, connector::Info)> {
+        let mut result = Vec::new();
+        for &handle in self.resources.connectors() {
+            if let Ok(info) = self.get_connector(handle) {
+                if info.state() == connector::State::Connected {
+                    result.push((handle, info));
+                }
+            }
+        }
+        result
     }
 
     /// Find CRTC for connector
@@ -229,11 +286,12 @@ impl Device {
 
     /// Drop DRM master privileges (allows VT switch)
     pub fn drop_master(&self) -> Result<()> {
-        let ret = unsafe {
-            libc::ioctl(self.file.as_raw_fd(), drm_ioctl::DRM_IOCTL_DROP_MASTER)
-        };
+        let ret = unsafe { libc::ioctl(self.file.as_raw_fd(), drm_ioctl::DRM_IOCTL_DROP_MASTER) };
         if ret < 0 {
-            return Err(anyhow!("DROP_MASTER failed: {}", std::io::Error::last_os_error()));
+            return Err(anyhow!(
+                "DROP_MASTER failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         info!("DRM master dropped");
         Ok(())
@@ -241,11 +299,12 @@ impl Device {
 
     /// Acquire DRM master privileges (after VT switch back)
     pub fn set_master(&self) -> Result<()> {
-        let ret = unsafe {
-            libc::ioctl(self.file.as_raw_fd(), drm_ioctl::DRM_IOCTL_SET_MASTER)
-        };
+        let ret = unsafe { libc::ioctl(self.file.as_raw_fd(), drm_ioctl::DRM_IOCTL_SET_MASTER) };
         if ret < 0 {
-            return Err(anyhow!("SET_MASTER failed: {}", std::io::Error::last_os_error()));
+            return Err(anyhow!(
+                "SET_MASTER failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         info!("DRM master acquired");
         Ok(())
@@ -283,8 +342,8 @@ const KD_GRAPHICS: libc::c_long = 0x01;
 /// vt_mode structure for VT_SETMODE ioctl
 #[repr(C)]
 struct VtMode {
-    mode: libc::c_char,   // VT_AUTO or VT_PROCESS
-    waitv: libc::c_char,  // unused
+    mode: libc::c_char,    // VT_AUTO or VT_PROCESS
+    waitv: libc::c_char,   // unused
     relsig: libc::c_short, // signal to send on release
     acqsig: libc::c_short, // signal to send on acquire
     frsig: libc::c_short,  // unused
@@ -340,14 +399,8 @@ impl VtSwitcher {
 
         // Open the TTY for ioctls
         let tty_path = format!("/dev/tty{}", target_vt);
-        let tty_path_cstr = std::ffi::CString::new(tty_path.clone())
-            .context("Invalid TTY path")?;
-        let tty_fd = unsafe {
-            libc::open(
-                tty_path_cstr.as_ptr(),
-                libc::O_RDWR | libc::O_CLOEXEC,
-            )
-        };
+        let tty_path_cstr = std::ffi::CString::new(tty_path.clone()).context("Invalid TTY path")?;
+        let tty_fd = unsafe { libc::open(tty_path_cstr.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
         if tty_fd < 0 {
             return Err(anyhow!(
                 "Cannot open {}: {}",
@@ -365,13 +418,13 @@ impl VtSwitcher {
         mask.add(Signal::SIGUSR2);
 
         // Save old mask and block signals
-        let old_sigmask = mask.thread_swap_mask(nix::sys::signal::SigmaskHow::SIG_BLOCK)
+        let old_sigmask = mask
+            .thread_swap_mask(nix::sys::signal::SigmaskHow::SIG_BLOCK)
             .context("Failed to block signals")?;
 
         // Create signalfd
-        let signal_fd =
-            SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
-                .context("Failed to create signalfd")?;
+        let signal_fd = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
+            .context("Failed to create signalfd")?;
 
         // Activate our VT first
         let ret = unsafe { libc::ioctl(tty_fd, VT_ACTIVATE, target_vt as libc::c_int) };
@@ -433,7 +486,10 @@ impl VtSwitcher {
         // Flush input buffer to clear any stale events
         unsafe { libc::tcflush(tty_fd, libc::TCIFLUSH) };
 
-        info!("VT{} process-controlled mode enabled (SIGUSR1=acquire, SIGUSR2=release)", target_vt);
+        info!(
+            "VT{} process-controlled mode enabled (SIGUSR1=acquire, SIGUSR2=release)",
+            target_vt
+        );
 
         Ok(Self {
             tty_fd,
@@ -649,4 +705,55 @@ impl Drop for Device {
             libc::ioctl(self.file.as_raw_fd(), drm_ioctl::DRM_IOCTL_DROP_MASTER);
         }
     }
+}
+
+/// Get connector priority for display selection
+///
+/// When prefer_external is true, external connectors are prioritized.
+/// Lower number = higher priority.
+fn connector_priority(interface: connector::Interface, prefer_external: bool) -> i32 {
+    use connector::Interface;
+
+    if prefer_external {
+        // External monitors first
+        match interface {
+            Interface::HDMIA | Interface::HDMIB => 10,
+            Interface::DisplayPort => 20,
+            Interface::DVID | Interface::DVII | Interface::DVIA => 30,
+            Interface::VGA => 40,
+            // Internal displays last
+            Interface::EmbeddedDisplayPort => 100, // eDP (laptop internal)
+            Interface::LVDS => 110,
+            Interface::DSI => 120,
+            // Other/unknown
+            _ => 50,
+        }
+    } else {
+        // First connected wins (no preference)
+        0
+    }
+}
+
+/// Check if connector is external (not internal laptop display)
+pub fn is_external_connector(interface: connector::Interface) -> bool {
+    use connector::Interface;
+    matches!(
+        interface,
+        Interface::HDMIA
+            | Interface::HDMIB
+            | Interface::DisplayPort
+            | Interface::DVID
+            | Interface::DVII
+            | Interface::DVIA
+            | Interface::VGA
+    )
+}
+
+/// Check if connector is internal (laptop built-in display)
+pub fn is_internal_connector(interface: connector::Interface) -> bool {
+    use connector::Interface;
+    matches!(
+        interface,
+        Interface::EmbeddedDisplayPort | Interface::LVDS | Interface::DSI
+    )
 }

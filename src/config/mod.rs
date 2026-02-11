@@ -3,6 +3,8 @@
 //! Loads TOML configuration files and provides application settings.
 //! Default config path: ~/.config/bcon/config.toml
 
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -29,6 +31,10 @@ pub struct Config {
     pub appearance: AppearanceConfig,
     /// Terminal settings
     pub terminal: TerminalConfig,
+    /// Keyboard settings
+    pub keyboard: KeyboardInputConfig,
+    /// Display settings
+    pub display: DisplayOutputConfig,
 }
 
 /// Font settings
@@ -104,6 +110,9 @@ pub struct AppearanceConfig {
     pub selection: String,
     /// Cursor opacity (0.0-1.0)
     pub cursor_opacity: f32,
+    /// Display scale factor (1.0, 1.25, 1.5, 1.75, 2.0)
+    /// Used for HiDPI displays. Font size is multiplied by this value.
+    pub scale: f32,
 }
 
 /// Terminal settings
@@ -119,6 +128,59 @@ pub struct TerminalConfig {
     /// List of apps that auto-disable IME
     /// When foreground process name is in this list, IME is automatically disabled
     pub ime_disabled_apps: Vec<String>,
+}
+
+/// Keyboard input settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeyboardInputConfig {
+    /// Key repeat delay in milliseconds (default: 400)
+    pub repeat_delay: u64,
+    /// Key repeat rate in milliseconds (default: 30)
+    pub repeat_rate: u64,
+    /// XKB keyboard model (empty = default)
+    pub xkb_model: String,
+    /// XKB keyboard layout (e.g., "us", "jp", empty = default)
+    pub xkb_layout: String,
+    /// XKB keyboard variant (empty = default)
+    pub xkb_variant: String,
+    /// XKB keyboard options (e.g., "ctrl:nocaps", empty = default)
+    pub xkb_options: String,
+}
+
+impl Default for KeyboardInputConfig {
+    fn default() -> Self {
+        Self {
+            repeat_delay: 400,
+            repeat_rate: 30,
+            xkb_model: String::new(),
+            xkb_layout: String::new(),
+            xkb_variant: String::new(),
+            xkb_options: String::new(),
+        }
+    }
+}
+
+/// Display output settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplayOutputConfig {
+    /// Prefer external monitors over internal (eDP) display
+    /// When true, external monitors (HDMI, DisplayPort, DVI, VGA) take priority
+    /// When false, use first connected display (default behavior)
+    pub prefer_external: bool,
+    /// Auto-switch to external monitor when connected
+    /// When true, automatically switch display on hotplug connect
+    pub auto_switch: bool,
+}
+
+impl Default for DisplayOutputConfig {
+    fn default() -> Self {
+        Self {
+            prefer_external: true,
+            auto_switch: true,
+        }
+    }
 }
 
 /// Keybind settings
@@ -207,6 +269,8 @@ impl Default for Config {
             keybinds: KeybindConfig::default(),
             appearance: AppearanceConfig::default(),
             terminal: TerminalConfig::default(),
+            keyboard: KeyboardInputConfig::default(),
+            display: DisplayOutputConfig::default(),
         }
     }
 }
@@ -217,17 +281,17 @@ impl Default for FontConfig {
             main: String::new(),
             cjk: String::new(),
             emoji: String::new(),
-            size: 18.0, // Recommended for console readability
-            render_mode: "lcd".to_string(), // LCD subpixel rendering (high quality)
+            size: 18.0,                        // Recommended for console readability
+            render_mode: "lcd".to_string(),    // LCD subpixel rendering (high quality)
             lcd_filter: "default".to_string(), // Sharp (less blur than light)
             lcd_weights: None,
-            lcd_subpixel: "rgb".to_string(), // For common panels
-            lcd_gamma: 1.15,          // Thinner/tighter look (iTerm2-like)
-            lcd_stem_darkening: 0.0,  // Disabled (sharpness priority)
-            lcd_subpixel_positioning: true, // 1/3px phase rendering (highest quality)
+            lcd_subpixel: "rgb".to_string(),  // For common panels
+            lcd_gamma: 1.15,                  // Thinner/tighter look (iTerm2-like)
+            lcd_stem_darkening: 0.0,          // Disabled (sharpness priority)
+            lcd_subpixel_positioning: true,   // 1/3px phase rendering (highest quality)
             lcd_hinting: "light".to_string(), // Natural curves, thin (recommended)
-            lcd_contrast: 1.15,       // Contrast enhancement
-            lcd_fringe_reduction: 0.1, // Light fringe reduction
+            lcd_contrast: 1.15,               // Contrast enhancement
+            lcd_fringe_reduction: 0.1,        // Light fringe reduction
         }
     }
 }
@@ -258,6 +322,7 @@ impl Default for AppearanceConfig {
             cursor: "ffffff".to_string(),
             selection: "4d7aa8".to_string(),
             cursor_opacity: 0.5,
+            scale: 1.0,
         }
     }
 }
@@ -534,12 +599,37 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # foreground = "ffffff"
 # cursor = "ffffff"
 # selection = "44475a"
+# scale = 1.0               # Display scale (1.0, 1.25, 1.5, 1.75, 2.0 for HiDPI)
 
 # =============================================================================
 # Terminal Settings (Optional)
 # =============================================================================
 # [terminal]
 # scrollback_lines = 10000
+
+# =============================================================================
+# Keyboard Settings (Optional)
+# =============================================================================
+# [keyboard]
+# repeat_delay = 400        # Key repeat delay in milliseconds
+# repeat_rate = 30          # Key repeat rate in milliseconds
+# xkb_layout = "us"         # XKB keyboard layout (e.g., "us", "jp", "de")
+# xkb_variant = ""          # XKB layout variant (e.g., "dvorak", "nodeadkeys")
+# xkb_options = ""          # XKB options (e.g., "ctrl:nocaps", "compose:ralt")
+
+# =============================================================================
+# Display Settings (Optional)
+# =============================================================================
+# [display]
+# prefer_external = true    # Prefer external monitors (HDMI/DP) over internal (eDP)
+# auto_switch = true        # Auto-switch to external monitor on hotplug connect
+#
+# Connector priority (when prefer_external = true):
+#   HDMI > DisplayPort > DVI > VGA > eDP (internal)
+#
+# Use case: Laptop with external monitor
+#   - Connect external: auto-switch to external display
+#   - Disconnect: auto-fallback to internal display
 "#
         );
 

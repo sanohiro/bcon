@@ -4,6 +4,10 @@
 
 use log::{info, trace, warn};
 
+/// Maximum accumulated image data size (256MB)
+/// Allows 8K RGBA images (7680x4320x4 = 132MB raw)
+const MAX_IMAGE_DATA_SIZE: usize = 256 * 1024 * 1024;
+
 /// Kitty graphics image
 #[derive(Debug)]
 pub struct KittyImage {
@@ -161,10 +165,23 @@ impl KittyDecoder {
             }
         }
 
-        // Decode and accumulate Base64 payload
+        // Decode and accumulate Base64 payload (with size limit)
         if !payload.is_empty() {
             if let Some(decoded) = base64_decode(payload.as_bytes()) {
-                self.data_buffer.extend(decoded);
+                // Check size limit before extending
+                if self.data_buffer.len() + decoded.len() <= MAX_IMAGE_DATA_SIZE {
+                    self.data_buffer.extend(decoded);
+                } else {
+                    warn!(
+                        "Kitty: image data exceeds {}MB limit, truncating",
+                        MAX_IMAGE_DATA_SIZE / 1024 / 1024
+                    );
+                    // Truncate to limit
+                    let remaining = MAX_IMAGE_DATA_SIZE.saturating_sub(self.data_buffer.len());
+                    if remaining > 0 {
+                        self.data_buffer.extend(&decoded[..remaining]);
+                    }
+                }
             }
         }
 

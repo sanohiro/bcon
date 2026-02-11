@@ -8,8 +8,18 @@ use std::sync::{Arc, OnceLock};
 
 use bitflags::bitflags;
 use log::trace;
+use smol_str::SmolStr;
 use unicode_normalization::UnicodeNormalization;
 use unicode_width::UnicodeWidthChar;
+
+/// Convert char to SmolStr efficiently
+/// For ASCII (1 byte), uses inline storage directly
+#[inline]
+fn char_to_smolstr(ch: char) -> SmolStr {
+    let mut buf = [0u8; 4];
+    let s = ch.encode_utf8(&mut buf);
+    SmolStr::new(s)
+}
 
 /// Cursor style (DECSCUSR)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -194,7 +204,8 @@ bitflags! {
 #[allow(dead_code)]
 pub struct Cell {
     /// Grapheme cluster (supports multiple codepoints for emoji ligatures, flags, etc.)
-    pub grapheme: String,
+    /// Uses SmolStr for inline storage (no heap allocation for short strings up to 22 bytes)
+    pub grapheme: SmolStr,
     pub fg: Color,
     pub bg: Color,
     pub attrs: CellAttrs,
@@ -208,6 +219,9 @@ pub struct Cell {
     pub underline_color: Option<Color>,
 }
 
+/// Static space character for default cells
+static SPACE: SmolStr = SmolStr::new_inline(" ");
+
 /// Static reference for empty cell
 static EMPTY_CELL: OnceLock<Cell> = OnceLock::new();
 
@@ -215,7 +229,7 @@ impl Cell {
     /// Create empty cell
     pub fn empty() -> Cell {
         Cell {
-            grapheme: " ".to_string(),
+            grapheme: SPACE.clone(),
             fg: Color::Default,
             bg: Color::Default,
             attrs: CellAttrs::empty(),
@@ -240,7 +254,7 @@ impl Cell {
 impl Default for Cell {
     fn default() -> Self {
         Self {
-            grapheme: " ".to_string(),
+            grapheme: SPACE.clone(),
             fg: Color::Default,
             bg: Color::Default,
             attrs: CellAttrs::empty(),
@@ -274,8 +288,85 @@ impl Default for Pen {
     }
 }
 
+// ========== Sub-structures for Grid ==========
+
+/// Terminal mode flags (DECSET/DECRST)
+#[derive(Debug, Clone, Default)]
+pub struct TerminalModes {
+    /// Cursor visibility flag (DECTCEM, ?25)
+    pub cursor_visible: bool,
+    /// Auto-wrap mode (DECAWM, ?7)
+    pub auto_wrap: bool,
+    /// Application cursor keys mode (DECCKM, ?1)
+    pub application_cursor_keys: bool,
+    /// Bracketed paste mode (?2004)
+    pub bracketed_paste: bool,
+    /// Mouse mode (?1000=X10, ?1002=button, ?1003=all events)
+    pub mouse_mode: MouseMode,
+    /// SGR mouse mode (?1006) - extended coordinate format
+    pub mouse_sgr: bool,
+    /// Focus event reporting flag (?1004)
+    pub send_focus_events: bool,
+    /// Synchronized Update mode (?2026)
+    pub synchronized_update: bool,
+}
+
+impl TerminalModes {
+    pub fn new() -> Self {
+        Self {
+            cursor_visible: true,
+            auto_wrap: true,
+            ..Default::default()
+        }
+    }
+}
+
+/// Cursor appearance state
+#[derive(Debug, Clone, Default)]
+pub struct CursorAppearance {
+    /// Cursor style (DECSCUSR)
+    pub style: CursorStyle,
+    /// Cursor blink flag
+    pub blink: bool,
+}
+
+/// Shell integration state (OSC 133)
+#[derive(Debug, Clone, Default)]
+pub struct ShellState {
+    /// Prompt start row
+    pub prompt_row: Option<usize>,
+    /// Command execution start row
+    pub command_row: Option<usize>,
+    /// Last command exit code
+    pub last_exit_code: Option<i32>,
+}
+
+/// Keyboard protocol state
+#[derive(Debug, Clone, Default)]
+pub struct KeyboardState {
+    /// modifyOtherKeys level (0=disabled, 1=partial, 2=full)
+    pub modify_other_keys: u8,
+    /// Kitty keyboard protocol flags
+    /// Bit 0: Report ambiguous keys in CSI u format
+    /// Bit 1: Report event type (press/repeat/release)
+    /// Bit 2: Report alternate keys
+    /// Bit 3: Report all keys in CSI u format
+    /// Bit 4: Report associated text
+    pub kitty_flags: u32,
+}
+
+/// Dynamic colors (OSC 10/11)
+#[derive(Debug, Clone, Default)]
+pub struct DynamicColors {
+    /// OSC 10 foreground color (RGB, None = use default)
+    pub fg: Option<(u8, u8, u8)>,
+    /// OSC 11 background color (RGB, None = use default)
+    pub bg: Option<(u8, u8, u8)>,
+}
+
 /// Character grid
 pub struct Grid {
+    // ===== Core display state =====
     /// Cell array (row-major)
     cells: Vec<Cell>,
     /// Number of columns
@@ -291,9 +382,7 @@ pub struct Grid {
     /// Scrollback history (oldest at front, newest at back)
     scrollback: VecDeque<Vec<Cell>>,
     /// Maximum scrollback lines
-    max_scrollback: usize,
-    /// Image placement list
-    pub image_placements: Vec<ImagePlacement>,
+    pub max_scrollback: usize,
     /// Saved cursor position
     saved_cursor: Option<(usize, usize)>,
     /// Last printed character (for REP)
@@ -302,52 +391,28 @@ pub struct Grid {
     scroll_top: usize,
     /// Bottom of scroll region (0-indexed, inclusive)
     scroll_bottom: usize,
-    /// Cursor visibility flag (DECTCEM, ?25)
-    pub cursor_visible: bool,
-    /// Auto-wrap mode (DECAWM, ?7)
-    pub auto_wrap: bool,
-    /// Application cursor keys mode (DECCKM, ?1)
-    pub application_cursor_keys: bool,
     /// In ZWJ sequence flag
     in_zwj_sequence: bool,
-    /// Bracketed paste mode (?2004)
-    pub bracketed_paste: bool,
     /// Alternate screen buffer (?1049)
     alternate_screen: Option<AlternateScreen>,
-    /// Mouse mode (?1000=X10, ?1002=button, ?1003=all events)
-    pub mouse_mode: MouseMode,
-    /// SGR mouse mode (?1006) - extended coordinate format
-    pub mouse_sgr: bool,
     /// Bell notification flag (reset after drawing)
     pub bell_triggered: bool,
-    /// Cursor style (DECSCUSR)
-    pub cursor_style: CursorStyle,
-    /// Cursor blink flag
-    pub cursor_blink: bool,
-    /// Focus event reporting flag (?1004)
-    pub send_focus_events: bool,
-    /// Synchronized Update mode (?2026)
-    pub synchronized_update: bool,
     /// Current hyperlink (OSC 8)
     pub current_hyperlink: Option<Arc<Hyperlink>>,
-    // ========== Shell integration (OSC 133) ==========
-    /// Prompt start row
-    pub shell_prompt_row: Option<usize>,
-    /// Command execution start row
-    pub shell_command_row: Option<usize>,
-    /// Last command exit code
-    pub shell_last_exit_code: Option<i32>,
-    // ========== modifyOtherKeys (CSI > 4 m) ==========
-    /// modifyOtherKeys level (0=disabled, 1=partial, 2=full)
-    pub modify_other_keys: u8,
-    // ========== Kitty keyboard protocol ==========
-    /// Kitty keyboard protocol flags
-    /// Bit 0: Report ambiguous keys in CSI u format
-    /// Bit 1: Report event type (press/repeat/release)
-    /// Bit 2: Report alternate keys
-    /// Bit 3: Report all keys in CSI u format
-    /// Bit 4: Report associated text
-    pub kitty_keyboard_flags: u32,
+    /// Image placement list
+    pub image_placements: Vec<ImagePlacement>,
+
+    // ===== Grouped state =====
+    /// Terminal mode flags
+    pub modes: TerminalModes,
+    /// Cursor appearance
+    pub cursor: CursorAppearance,
+    /// Shell integration
+    pub shell: ShellState,
+    /// Keyboard protocol
+    pub keyboard: KeyboardState,
+    /// Dynamic colors
+    pub colors: DynamicColors,
 }
 
 /// Mouse tracking mode
@@ -374,6 +439,11 @@ struct AlternateScreen {
 impl Grid {
     /// Create grid with specified size
     pub fn new(cols: usize, rows: usize) -> Self {
+        Self::with_scrollback(cols, rows, MAX_SCROLLBACK)
+    }
+
+    /// Create grid with specified size and scrollback limit
+    pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize) -> Self {
         Self {
             cells: vec![Cell::default(); cols * rows],
             cols,
@@ -382,31 +452,21 @@ impl Grid {
             cursor_col: 0,
             pen: Pen::default(),
             scrollback: VecDeque::new(),
-            max_scrollback: MAX_SCROLLBACK,
-            image_placements: Vec::new(),
+            max_scrollback,
             saved_cursor: None,
             last_char: ' ',
             scroll_top: 0,
             scroll_bottom: rows - 1,
-            cursor_visible: true,
-            auto_wrap: true,
-            application_cursor_keys: false,
             in_zwj_sequence: false,
-            bracketed_paste: false,
             alternate_screen: None,
-            mouse_mode: MouseMode::None,
-            mouse_sgr: false,
             bell_triggered: false,
-            cursor_style: CursorStyle::default(),
-            cursor_blink: true,
-            send_focus_events: false,
-            synchronized_update: false,
             current_hyperlink: None,
-            shell_prompt_row: None,
-            shell_command_row: None,
-            shell_last_exit_code: None,
-            modify_other_keys: 0,
-            kitty_keyboard_flags: 0,
+            image_placements: Vec::new(),
+            modes: TerminalModes::new(),
+            cursor: CursorAppearance::default(),
+            shell: ShellState::default(),
+            keyboard: KeyboardState::default(),
+            colors: DynamicColors::default(),
         }
     }
 
@@ -417,6 +477,36 @@ impl Grid {
     pub fn rows(&self) -> usize {
         self.rows
     }
+
+    // ========== Compatibility accessors (delegate to sub-structs) ==========
+    // These provide backward compatibility during migration
+
+    // TerminalModes
+    #[inline] pub fn cursor_visible(&self) -> bool { self.modes.cursor_visible }
+    #[inline] pub fn auto_wrap(&self) -> bool { self.modes.auto_wrap }
+    #[inline] pub fn application_cursor_keys(&self) -> bool { self.modes.application_cursor_keys }
+    #[inline] pub fn bracketed_paste(&self) -> bool { self.modes.bracketed_paste }
+    #[inline] pub fn mouse_mode(&self) -> MouseMode { self.modes.mouse_mode }
+    #[inline] pub fn mouse_sgr(&self) -> bool { self.modes.mouse_sgr }
+    #[inline] pub fn send_focus_events(&self) -> bool { self.modes.send_focus_events }
+    #[inline] pub fn synchronized_update(&self) -> bool { self.modes.synchronized_update }
+
+    // CursorAppearance
+    #[inline] pub fn cursor_style(&self) -> CursorStyle { self.cursor.style }
+    #[inline] pub fn cursor_blink(&self) -> bool { self.cursor.blink }
+
+    // ShellState
+    #[inline] pub fn shell_prompt_row(&self) -> Option<usize> { self.shell.prompt_row }
+    #[inline] pub fn shell_command_row(&self) -> Option<usize> { self.shell.command_row }
+    #[inline] pub fn shell_last_exit_code(&self) -> Option<i32> { self.shell.last_exit_code }
+
+    // KeyboardState
+    #[inline] pub fn modify_other_keys(&self) -> u8 { self.keyboard.modify_other_keys }
+    #[inline] pub fn kitty_keyboard_flags(&self) -> u32 { self.keyboard.kitty_flags }
+
+    // DynamicColors
+    #[inline] pub fn osc_fg_color(&self) -> Option<(u8, u8, u8)> { self.colors.fg }
+    #[inline] pub fn osc_bg_color(&self) -> Option<(u8, u8, u8)> { self.colors.bg }
 
     /// Get reference to cell
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
@@ -429,6 +519,14 @@ impl Grid {
     }
 
     // ========== Wide character helpers ==========
+
+    /// Find head cell of wide character (skip continuation cells with width=0)
+    fn find_wide_char_head(&self, row: usize, mut col: usize) -> usize {
+        while col > 0 && self.cell(row, col).width == 0 {
+            col -= 1;
+        }
+        col
+    }
 
     /// Clear paired cell when overwriting partial cell of wide character
     ///
@@ -470,18 +568,18 @@ impl Grid {
             col
         };
 
-        let base_grapheme = self.cell(row, col).grapheme.clone();
-        if base_grapheme.is_empty() || base_grapheme == " " {
+        let base_grapheme = &self.cell(row, col).grapheme;
+        if base_grapheme.is_empty() || *base_grapheme == " " {
             return;
         }
 
         // Add combining character to grapheme
-        let mut combined = base_grapheme;
+        let mut combined = base_grapheme.to_string();
         combined.push(combining);
 
         // NFC normalization
         let normalized: String = combined.nfc().collect();
-        self.cell_mut(row, col).grapheme = normalized;
+        self.cell_mut(row, col).grapheme = SmolStr::new(&normalized);
     }
 
     /// Add ZWJ or Variation Selector to previous cell's grapheme
@@ -501,21 +599,21 @@ impl Grid {
             col
         };
 
-        let base_grapheme = self.cell(row, col).grapheme.clone();
+        let base_grapheme = &self.cell(row, col).grapheme;
         if base_grapheme.is_empty() || base_grapheme == " " {
             return;
         }
 
         // Add to grapheme
-        let mut combined = base_grapheme;
+        let mut combined = base_grapheme.to_string();
         combined.push(ch);
-        self.cell_mut(row, col).grapheme = combined;
+        self.cell_mut(row, col).grapheme = SmolStr::new(&combined);
     }
 
     /// Merge Regional Indicator with previous RI to form flag
     fn try_merge_regional_indicator(&mut self, ch: char) -> bool {
         // Find previous cell (skip continuation cells with width=0)
-        let (row, mut col) = if self.cursor_col > 0 {
+        let (row, col) = if self.cursor_col > 0 {
             (self.cursor_row, self.cursor_col - 1)
         } else if self.cursor_row > 0 {
             (self.cursor_row - 1, self.cols - 1)
@@ -524,18 +622,18 @@ impl Grid {
         };
 
         // Skip continuation cells (width=0) to find actual character cell
-        while col > 0 && self.cell(row, col).width == 0 {
-            col -= 1;
-        }
-
-        let prev_grapheme = self.cell(row, col).grapheme.clone();
+        let col = self.find_wide_char_head(row, col);
+        let prev_grapheme = &self.cell(row, col).grapheme;
 
         // Check if previous cell is a single RI
         if prev_grapheme.chars().count() != 1 {
             return false;
         }
 
-        let prev_char = prev_grapheme.chars().next().unwrap();
+        // Safe: we just verified chars().count() == 1 above
+        let Some(prev_char) = prev_grapheme.chars().next() else {
+            return false;
+        };
         let prev_cp = prev_char as u32;
 
         if !(0x1F1E6..=0x1F1FF).contains(&prev_cp) {
@@ -543,11 +641,11 @@ impl Grid {
         }
 
         // Combine two RIs into flag grapheme
-        let mut flag = prev_grapheme;
+        let mut flag = prev_grapheme.to_string();
         flag.push(ch);
 
         // Update previous cell (width remains 2)
-        self.cell_mut(row, col).grapheme = flag;
+        self.cell_mut(row, col).grapheme = SmolStr::new(&flag);
 
         // Don't advance cursor (merged with previous cell)
         true
@@ -607,7 +705,7 @@ impl Grid {
 
         // Wrap at right edge (only if auto_wrap is enabled)
         if self.cursor_col >= self.cols {
-            if self.auto_wrap {
+            if self.modes.auto_wrap {
                 self.cursor_col = 0;
                 self.cursor_row += 1;
                 if self.cursor_row >= self.rows {
@@ -645,7 +743,7 @@ impl Grid {
         // Write primary cell
         let idx = self.cursor_row * self.cols + self.cursor_col;
         self.cells[idx] = Cell {
-            grapheme: ch.to_string(),
+            grapheme: char_to_smolstr(ch),
             fg,
             bg,
             attrs,
@@ -661,8 +759,10 @@ impl Grid {
             if next_col < self.cols {
                 // Also clear existing wide character at continuation cell
                 self.clear_wide_char_at(self.cursor_row, next_col);
+                // Use static empty string for continuation cell
+                static EMPTY: SmolStr = SmolStr::new_inline("");
                 *self.cell_mut(self.cursor_row, next_col) = Cell {
-                    grapheme: String::new(),
+                    grapheme: EMPTY.clone(),
                     fg,
                     bg,
                     attrs,
@@ -820,12 +920,13 @@ impl Grid {
         }
 
         // Shift rows up within scroll region
+        // Use clone_from_slice for better performance (avoids per-element clone overhead)
         for row in top..(bottom + 1 - n) {
             let src_start = (row + n) * self.cols;
             let dst_start = row * self.cols;
-            for i in 0..self.cols {
-                self.cells[dst_start + i] = self.cells[src_start + i].clone();
-            }
+            // split_at_mut allows us to have mutable refs to non-overlapping slices
+            let (left, right) = self.cells.split_at_mut(src_start);
+            left[dst_start..dst_start + self.cols].clone_from_slice(&right[..self.cols]);
         }
 
         // Clear bottom
@@ -892,10 +993,8 @@ impl Grid {
     pub fn backspace(&mut self) {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
-            // If moved to continuation cell (width=0), go back one more (to head cell)
-            if self.cursor_col > 0 && self.cell(self.cursor_row, self.cursor_col).width == 0 {
-                self.cursor_col -= 1;
-            }
+            // If moved to continuation cell (width=0), go back to head cell
+            self.cursor_col = self.find_wide_char_head(self.cursor_row, self.cursor_col);
         }
     }
 
@@ -962,9 +1061,8 @@ impl Grid {
         for row in start..(bottom + 1 - n) {
             let src_start = (row + n) * self.cols;
             let dst_start = row * self.cols;
-            for i in 0..self.cols {
-                self.cells[dst_start + i] = self.cells[src_start + i].clone();
-            }
+            let (left, right) = self.cells.split_at_mut(src_start);
+            left[dst_start..dst_start + self.cols].clone_from_slice(&right[..self.cols]);
         }
 
         // Clear bottom
@@ -1037,12 +1135,13 @@ impl Grid {
         let n = n.min(region_height);
 
         // Shift rows down within scroll region (copy bottom to top)
+        // Iterate in reverse to avoid overwriting source data
         for row in ((top + n)..=bottom).rev() {
             let src_start = (row - n) * self.cols;
             let dst_start = row * self.cols;
-            for i in 0..self.cols {
-                self.cells[dst_start + i] = self.cells[src_start + i].clone();
-            }
+            // split_at_mut: left contains source, right contains destination
+            let (left, right) = self.cells.split_at_mut(dst_start);
+            right[..self.cols].clone_from_slice(&left[src_start..src_start + self.cols]);
         }
 
         // Fill top with spaces
@@ -1151,13 +1250,12 @@ impl Grid {
         }
         let n = n.min(bottom - self.cursor_row + 1);
 
-        // Shift down (copy bottom to top)
+        // Shift down (copy bottom to top, iterate in reverse)
         for row in ((self.cursor_row + n)..=bottom).rev() {
             let src_start = (row - n) * self.cols;
             let dst_start = row * self.cols;
-            for i in 0..self.cols {
-                self.cells[dst_start + i] = self.cells[src_start + i].clone();
-            }
+            let (left, right) = self.cells.split_at_mut(dst_start);
+            right[..self.cols].clone_from_slice(&left[src_start..src_start + self.cols]);
         }
 
         // Clear inserted rows
@@ -1247,11 +1345,10 @@ impl Grid {
         let copy_cols = self.cols.min(new_cols);
 
         for row in 0..copy_rows {
-            for col in 0..copy_cols {
-                let src_idx = row * self.cols + col;
-                let dst_idx = row * new_cols + col;
-                new_cells[dst_idx] = self.cells[src_idx].clone();
-            }
+            let src_start = row * self.cols;
+            let dst_start = row * new_cols;
+            new_cells[dst_start..dst_start + copy_cols]
+                .clone_from_slice(&self.cells[src_start..src_start + copy_cols]);
         }
 
         self.cells = new_cells;

@@ -4,6 +4,8 @@
 //! packing them into a single texture.
 //! ASCII is preloaded at initialization, CJK etc. added on-demand.
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, Result};
 use fontdue::{Font, FontSettings};
 use glow::HasContext;

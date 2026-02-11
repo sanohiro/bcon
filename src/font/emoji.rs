@@ -1086,7 +1086,7 @@ impl EmojiAtlas {
         cell_height: u32,
     ) -> Option<EmojiGlyphInfo> {
         // Debug: log call
-        info!(
+        trace!(
             "ensure_grapheme called: {:?} (len={})",
             grapheme,
             grapheme.chars().count()
@@ -1102,7 +1102,7 @@ impl EmojiAtlas {
 
         // Return if already in atlas
         if let Some(info) = self.glyphs.get(&grapheme_key) {
-            info!("  -> cached");
+            trace!("  -> cached");
             return Some(*info);
         }
 
@@ -1116,7 +1116,7 @@ impl EmojiAtlas {
         }
 
         // Try GSUB shaping (flag/ZWJ sequence support)
-        info!("  trying GSUB shaping...");
+        trace!("  trying GSUB shaping...");
         if let Some(glyph_id) = loader.shape_grapheme(grapheme) {
             // First try CBDT (bitmap)
             if let Some(glyph) = loader.get_glyph_by_id(glyph_id) {
@@ -1125,7 +1125,7 @@ impl EmojiAtlas {
                     height: glyph.height,
                     data: glyph.data.clone(),
                 };
-                info!(
+                trace!(
                     "GSUB shaping succeeded (CBDT): {:?} -> glyph_id={}",
                     grapheme, glyph_id
                 );
@@ -1135,7 +1135,7 @@ impl EmojiAtlas {
             if loader.has_colr_glyph(glyph_id) {
                 let size = cell_height as f32 * 2.0; // 2x supersampling
                 if let Some(glyph_data) = loader.get_colr_glyph(glyph_id, size) {
-                    info!(
+                    trace!(
                         "GSUB shaping succeeded (COLR): {:?} -> glyph_id={}",
                         grapheme, glyph_id
                     );

@@ -197,6 +197,28 @@ Reference: https://vt100.net/emu/dec_ansi_parser
 - Keep unsafe blocks minimal and well-documented
 - Module structure: one file per major component
 
+## Language Guidelines
+
+Use **English** for wider adoption:
+- README.md, CLAUDE.md
+- Release notes / CHANGELOG
+- Commit messages
+- GitHub Issues/PR titles
+- Code comments
+
+Japanese is fine for:
+- Discussions with Japanese users
+- Internal notes during development
+
+## Release Checklist
+
+When releasing a new version:
+1. Update version in `Cargo.toml`
+2. Update CHANGELOG / release notes
+3. Commit with message: `Release vX.Y.Z`
+4. Tag: `git tag vX.Y.Z`
+5. Push: `git push && git push --tags`
+
 ## Testing
 
 Run on actual TTY (Ctrl+Alt+F2), not inside X terminal.

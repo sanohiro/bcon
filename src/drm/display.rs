@@ -2,11 +2,14 @@
 //!
 //! Mode setting and page flip handling
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, bail, Context, Result};
 use drm::control::{connector, crtc, framebuffer, Device as ControlDevice, Mode};
 use log::{debug, info};
 
 use super::device::Device;
+use super::hdr::{self, HdrCapabilities};
 
 /// Display configuration
 pub struct DisplayConfig {
@@ -15,12 +18,23 @@ pub struct DisplayConfig {
     pub mode: Mode,
     pub width: u32,
     pub height: u32,
+    /// HDR capabilities detected from display EDID
+    pub hdr: HdrCapabilities,
 }
 
 impl DisplayConfig {
     /// Auto-detect connected display and get configuration
     pub fn auto_detect(device: &Device) -> Result<Self> {
-        let (connector_handle, connector_info) = device.find_connected_connector()?;
+        Self::detect_with_preference(device, false)
+    }
+
+    /// Detect display with external monitor preference
+    ///
+    /// When prefer_external is true, external connectors (HDMI, DP, etc.)
+    /// are prioritized over internal displays (eDP, LVDS).
+    pub fn detect_with_preference(device: &Device, prefer_external: bool) -> Result<Self> {
+        let (connector_handle, connector_info) =
+            device.find_preferred_connector(prefer_external)?;
 
         info!(
             "Connector: {:?}, type: {:?}",
@@ -28,7 +42,16 @@ impl DisplayConfig {
             connector_info.interface()
         );
 
-        let (crtc_handle, _crtc_info) = device.find_crtc_for_connector(&connector_info)?;
+        Self::from_connector(device, connector_handle, &connector_info)
+    }
+
+    /// Create DisplayConfig from a specific connector
+    pub fn from_connector(
+        device: &Device,
+        connector_handle: connector::Handle,
+        connector_info: &connector::Info,
+    ) -> Result<Self> {
+        let (crtc_handle, _crtc_info) = device.find_crtc_for_connector(connector_info)?;
         info!("CRTC: {:?}", crtc_handle);
 
         let modes = connector_info.modes();
@@ -47,12 +70,11 @@ impl DisplayConfig {
             .ok_or_else(|| anyhow!("Failed to select display mode"))?;
 
         let (width, height) = mode.size();
-        info!(
-            "Display mode: {}x{} @ {}Hz",
-            width,
-            height,
-            mode.vrefresh()
-        );
+        info!("Display mode: {}x{} @ {}Hz", width, height, mode.vrefresh());
+
+        // Detect HDR capabilities from EDID
+        let hdr = detect_hdr_capabilities(device, connector_handle);
+        hdr.log();
 
         Ok(Self {
             connector_handle,
@@ -60,8 +82,67 @@ impl DisplayConfig {
             mode,
             width: width as u32,
             height: height as u32,
+            hdr,
         })
     }
+
+    /// Check if this config uses an external connector
+    pub fn is_external(&self, device: &Device) -> bool {
+        if let Ok(info) = device.get_connector(self.connector_handle) {
+            super::device::is_external_connector(info.interface())
+        } else {
+            false
+        }
+    }
+}
+
+/// Detect HDR capabilities from connector EDID
+fn detect_hdr_capabilities(device: &Device, connector: connector::Handle) -> HdrCapabilities {
+    // Try to get EDID blob from connector properties
+    match get_connector_edid(device, connector) {
+        Ok(edid) => {
+            debug!("EDID data: {} bytes", edid.len());
+            hdr::parse_edid_hdr(&edid)
+        }
+        Err(e) => {
+            debug!("Could not read EDID: {}", e);
+            HdrCapabilities::default()
+        }
+    }
+}
+
+/// Get EDID blob from connector
+fn get_connector_edid(device: &Device, connector: connector::Handle) -> Result<Vec<u8>> {
+    #![allow(unused_imports)]
+    use drm::control::property;
+
+    // Get connector properties
+    let props = device
+        .get_properties(connector)
+        .context("Failed to get connector properties")?;
+
+    // Find EDID property
+    for (&prop_handle, &value) in props.iter() {
+        let prop_info = device
+            .get_property(prop_handle)
+            .context("Failed to get property info")?;
+
+        if prop_info.name().to_str() == Ok("EDID") {
+            // Value is a blob ID
+            if value == 0 {
+                bail!("EDID blob not available (value=0)");
+            }
+
+            // Get blob data
+            let blob = device
+                .get_property_blob(value)
+                .context("Failed to get EDID blob")?;
+
+            return Ok(blob);
+        }
+    }
+
+    bail!("EDID property not found")
 }
 
 /// DRM framebuffer management

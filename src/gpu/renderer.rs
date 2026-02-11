@@ -3,6 +3,8 @@
 //! Combine glyph atlas and shader
 //! to render text on GPU
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, Result};
 use glow::HasContext;
 use log::info;

@@ -3,6 +3,8 @@
 //! Creates PTY pair with forkpty and spawns shell in child process.
 //! Provides master side read/write and terminal size setting.
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, Result};
 use log::info;
 use nix::pty::{forkpty, ForkptyResult, Winsize};

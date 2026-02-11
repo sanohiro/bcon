@@ -2,6 +2,8 @@
 //!
 //! GLSL ES 3.00 shader compilation and linking
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, Result};
 use glow::HasContext;
 use log::info;

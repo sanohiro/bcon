@@ -505,14 +505,29 @@ fn main() -> Result<()> {
     let drm_device = drm::Device::open(&drm_path)
         .context("Cannot open DRM device. Root privileges may be required.")?;
 
-    // Detect display configuration
-    let display_config =
-        drm::DisplayConfig::auto_detect(&drm_device).context("Failed to detect display configuration")?;
+    // Detect display configuration (prefer external monitors if configured)
+    let mut display_config =
+        drm::DisplayConfig::detect_with_preference(&drm_device, cfg.display.prefer_external)
+            .context("Failed to detect display configuration")?;
 
     info!(
-        "Display: {}x{}",
-        display_config.width, display_config.height
+        "Display: {}x{} (external: {})",
+        display_config.width, display_config.height,
+        display_config.is_external(&drm_device)
     );
+
+    // Initialize DRM hotplug monitor (Linux only)
+    #[cfg(target_os = "linux")]
+    let mut hotplug_monitor = match drm::HotplugMonitor::new() {
+        Ok(m) => Some(m),
+        Err(e) => {
+            info!("Hotplug monitor unavailable: {}", e);
+            None
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let mut last_connector_snapshot = drm::hotplug::snapshot_connectors(&drm_device)
+        .unwrap_or_default();
 
     // Create GBM device (shares fd with DRM)
     let gbm_file = drm_device.dup_fd()?;
@@ -567,7 +582,13 @@ fn main() -> Result<()> {
                 .into_boxed_slice(),
         )
     };
-    let font_size = cfg.font.size as u32;
+
+    // Apply display scale factor to font size
+    let scale_factor = cfg.appearance.scale.max(0.5).min(4.0);
+    let font_size = (cfg.font.size * scale_factor) as u32;
+    if (scale_factor - 1.0).abs() > 0.01 {
+        info!("Display scale: {}x (font size: {}pt → {}px)", scale_factor, cfg.font.size, font_size);
+    }
 
     // Load CJK font (continue on failure)
     let cjk_font_data: Option<&[u8]> = if !cfg.font.cjk.is_empty() {
@@ -672,8 +693,12 @@ fn main() -> Result<()> {
     // Base font size (for reset)
     let base_font_size = font_size;
 
-    let mut term =
-        terminal::Terminal::new(grid_cols, grid_rows).context("Failed to initialize terminal")?;
+    let mut term = terminal::Terminal::with_scrollback(
+        grid_cols,
+        grid_rows,
+        cfg.terminal.scrollback_lines,
+    )
+    .context("Failed to initialize terminal")?;
 
     // Set cell size for Sixel image placement
     term.set_cell_size(cell_w as u32, cell_h as u32);
@@ -705,6 +730,7 @@ fn main() -> Result<()> {
             display_config.width,
             display_config.height,
             seat_session.clone(),
+            &cfg.keyboard,
         ) {
             Ok(kb) => {
                 info!("evdev input initialized via libseat (keyboard + mouse)");
@@ -718,7 +744,7 @@ fn main() -> Result<()> {
 
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let mut evdev_keyboard =
-        match input::EvdevKeyboard::new(display_config.width, display_config.height) {
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard) {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");
                 Some(kb)
@@ -837,9 +863,7 @@ fn main() -> Result<()> {
 
                         // Invalidate GPU textures (may have been lost during suspend)
                         glyph_atlas.invalidate();
-                        if let Some(ref mut ea) = emoji_atlas {
-                            ea.invalidate();
-                        }
+                        emoji_atlas.invalidate();
                         image_renderer.invalidate_all(gl);
                         info!("GPU textures invalidated for re-upload");
 
@@ -896,9 +920,7 @@ fn main() -> Result<()> {
 
                         // Invalidate GPU textures (may have been lost during suspend)
                         glyph_atlas.invalidate();
-                        if let Some(ref mut ea) = emoji_atlas {
-                            ea.invalidate();
-                        }
+                        emoji_atlas.invalidate();
                         image_renderer.invalidate_all(gl);
                         info!("GPU textures invalidated for re-upload");
 
@@ -929,7 +951,7 @@ fn main() -> Result<()> {
             cursor_blink_visible = !cursor_blink_visible;
             last_blink_toggle = now;
             // Trigger redraw in blink mode
-            if term.grid.cursor_blink {
+            if term.grid.cursor.blink {
                 needs_redraw = true;
             }
         }
@@ -966,6 +988,67 @@ fn main() -> Result<()> {
 
                 info!("Config reload complete");
                 needs_redraw = true;
+            }
+        }
+
+        // DRM hotplug detection (Linux only)
+        #[cfg(target_os = "linux")]
+        if let Some(ref mut monitor) = hotplug_monitor {
+            if monitor.poll().is_some() {
+                // Hotplug event detected - re-enumerate connectors
+                if let Ok(new_snapshot) = drm::hotplug::snapshot_connectors(&drm_device) {
+                    let changes = drm::hotplug::detect_changes(
+                        &last_connector_snapshot,
+                        &new_snapshot,
+                    );
+
+                    if changes.has_changes() {
+                        changes.log();
+
+                        // Check if we should switch displays
+                        let should_switch = cfg.display.auto_switch && (
+                            // External monitor connected
+                            (cfg.display.prefer_external && changes.external_connected()) ||
+                            // Current display disconnected
+                            changes.disconnected.iter().any(|s| s.handle == display_config.connector_handle)
+                        );
+
+                        if should_switch {
+                            // Try to switch to preferred display
+                            match drm::DisplayConfig::detect_with_preference(&drm_device, cfg.display.prefer_external) {
+                                Ok(new_config) => {
+                                    if new_config.connector_handle != display_config.connector_handle {
+                                        // Check if resolution changed
+                                        if new_config.width == display_config.width
+                                            && new_config.height == display_config.height
+                                        {
+                                            // Same resolution - update config, next frame will apply
+                                            info!(
+                                                "Switching display to {:?} (same resolution)",
+                                                new_config.connector_handle
+                                            );
+                                            display_config = new_config;
+                                            info!("Display switch scheduled (will apply on next frame)");
+                                        } else {
+                                            // Resolution changed - need restart
+                                            log::warn!(
+                                                "Display resolution changed ({}x{} -> {}x{}). Restart bcon to apply.",
+                                                display_config.width, display_config.height,
+                                                new_config.width, new_config.height
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to detect new display: {}", e);
+                                }
+                            }
+                        }
+
+                        last_connector_snapshot = new_snapshot;
+                        needs_redraw = true;
+                    }
+                }
             }
         }
 
@@ -1301,9 +1384,9 @@ fn main() -> Result<()> {
                         // Send directly to PTY when IME client is unavailable
                         let sym = xkbcommon::xkb::Keysym::new(raw.keysym);
                         let kb_config = input::KeyboardConfig {
-                            application_cursor_keys: term.grid.application_cursor_keys,
-                            modify_other_keys: term.grid.modify_other_keys,
-                            kitty_keyboard_flags: term.grid.kitty_keyboard_flags,
+                            application_cursor_keys: term.grid.modes.application_cursor_keys,
+                            modify_other_keys: term.grid.keyboard.modify_other_keys,
+                            kitty_flags: term.grid.keyboard.kitty_flags,
                         };
                         let bytes = input::keysym_to_bytes_with_mods(
                             sym,
@@ -1321,9 +1404,9 @@ fn main() -> Result<()> {
                     // Send directly to PTY when IME is disabled
                     let sym = xkbcommon::xkb::Keysym::new(raw.keysym);
                     let kb_config = input::KeyboardConfig {
-                        application_cursor_keys: term.grid.application_cursor_keys,
-                        modify_other_keys: term.grid.modify_other_keys,
-                        kitty_keyboard_flags: term.grid.kitty_keyboard_flags,
+                        application_cursor_keys: term.grid.modes.application_cursor_keys,
+                        modify_other_keys: term.grid.keyboard.modify_other_keys,
+                        kitty_flags: term.grid.keyboard.kitty_flags,
                     };
                     let bytes = input::keysym_to_bytes_with_mods(
                         sym,
@@ -1480,7 +1563,7 @@ fn main() -> Result<()> {
                         // Send to PTY if ButtonEvent/AnyEvent + SGR is enabled
                         // Don't send wheel events in X10 mode
                         let use_mouse_wheel = term.mouse_mode_enabled()
-                            && term.grid.mouse_mode != terminal::grid::MouseMode::X10;
+                            && term.grid.modes.mouse_mode != terminal::grid::MouseMode::X10;
 
                         if use_mouse_wheel {
                             let d = if *delta < 0.0 { -1i8 } else { 1i8 };
@@ -1552,9 +1635,9 @@ fn main() -> Result<()> {
                             let sym = xkbcommon::xkb::Keysym::new(keysym);
                             let utf8 = xkbcommon::xkb::keysym_to_utf8(sym);
                             let kb_config = input::KeyboardConfig {
-                                application_cursor_keys: term.grid.application_cursor_keys,
-                                modify_other_keys: term.grid.modify_other_keys,
-                                kitty_keyboard_flags: term.grid.kitty_keyboard_flags,
+                                application_cursor_keys: term.grid.modes.application_cursor_keys,
+                                modify_other_keys: term.grid.keyboard.modify_other_keys,
+                                kitty_flags: term.grid.keyboard.kitty_flags,
                             };
                             let bytes = input::keysym_to_bytes_with_mods(
                                 sym,
@@ -2235,10 +2318,10 @@ fn main() -> Result<()> {
                 [1.0, 0.8, 0.0, 0.9],
                 &glyph_atlas,
             );
-        } else if term.scroll_offset == 0 && grid.cursor_visible {
+        } else if term.scroll_offset == 0 && grid.modes.cursor_visible {
             // Normal cursor (hidden during scrollback display)
             // In blink mode, toggle visibility with cursor_blink_visible
-            let should_draw = !grid.cursor_blink || cursor_blink_visible;
+            let should_draw = !grid.cursor.blink || cursor_blink_visible;
 
             if should_draw {
                 // Display at end of preedit when composing
@@ -2247,7 +2330,7 @@ fn main() -> Result<()> {
                 let cursor_color = [1.0, 1.0, 1.0, 0.5];
 
                 // Draw according to cursor style
-                match grid.cursor_style {
+                match grid.cursor.style {
                 terminal::grid::CursorStyle::Block => {
                     text_renderer.push_rect(
                         cursor_x,

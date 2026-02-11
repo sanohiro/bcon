@@ -12,7 +12,13 @@
 //! - $: Return (X=0)
 //! - -: Newline (Y+=6, X=0)
 
-use log::trace;
+use log::{trace, warn};
+
+/// Maximum image dimension (16384 pixels - supports 8K and beyond)
+const MAX_IMAGE_DIMENSION: u32 = 16384;
+
+/// Maximum pixel buffer size (256MB - same as Kitty)
+const MAX_PIXEL_BUFFER_SIZE: usize = 256 * 1024 * 1024;
 
 /// Sixel image data (after decoding)
 #[derive(Debug, Clone)]
@@ -327,8 +333,18 @@ impl SixelDecoder {
             return;
         }
 
-        let target_w = new_w.max(self.width);
-        let target_h = new_h.max(self.height);
+        let target_w = new_w.max(self.width).min(MAX_IMAGE_DIMENSION);
+        let target_h = new_h.max(self.height).min(MAX_IMAGE_DIMENSION);
+
+        // Check total buffer size
+        let required_size = (target_w as usize) * (target_h as usize);
+        if required_size > MAX_PIXEL_BUFFER_SIZE {
+            warn!(
+                "Sixel: image size {}x{} exceeds buffer limit, clamping",
+                target_w, target_h
+            );
+            return;
+        }
 
         if self.width == 0 {
             // Initialize

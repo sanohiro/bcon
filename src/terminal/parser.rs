@@ -8,16 +8,73 @@ use std::sync::Arc;
 use log::{info, trace, warn};
 use vte::{Params, Perform};
 
+/// Maximum XTGETTCAP buffer size (64KB)
+const MAX_XTGETTCAP_BUFFER: usize = 64 * 1024;
+
 use super::grid::{CellAttrs, Color, CursorStyle, Grid, Hyperlink, UnderlineStyle};
 use super::sixel::SixelDecoder;
 use super::{DcsHandler, ImageRegistry, TerminalImage};
+
+/// Parse OSC color value
+/// Supports formats:
+/// - rgb:RRRR/GGGG/BBBB (X11 format, 16-bit per component)
+/// - rgb:RR/GG/BB (X11 format, 8-bit per component)
+/// - #RRGGBB (hex format)
+/// - #RGB (short hex format)
+fn parse_osc_color(data: &[u8]) -> Option<(u8, u8, u8)> {
+    let s = std::str::from_utf8(data).ok()?;
+
+    if let Some(hex) = s.strip_prefix('#') {
+        // #RRGGBB or #RGB format
+        match hex.len() {
+            6 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some((r, g, b))
+            }
+            3 => {
+                let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+                let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+                let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+                Some((r, g, b))
+            }
+            _ => None,
+        }
+    } else if let Some(rgb) = s.strip_prefix("rgb:") {
+        // rgb:RRRR/GGGG/BBBB or rgb:RR/GG/BB format
+        let parts: Vec<&str> = rgb.split('/').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+
+        // Parse each component (use high byte of 16-bit value)
+        let parse_component = |s: &str| -> Option<u8> {
+            let v = u16::from_str_radix(s, 16).ok()?;
+            match s.len() {
+                4 => Some((v >> 8) as u8),  // 16-bit: use high byte
+                2 => Some(v as u8),          // 8-bit: use as-is
+                1 => Some((v as u8) * 17),   // 4-bit: expand
+                _ => None,
+            }
+        };
+
+        let r = parse_component(parts[0])?;
+        let g = parse_component(parts[1])?;
+        let b = parse_component(parts[2])?;
+        Some((r, g, b))
+    } else {
+        None
+    }
+}
 
 /// vte::Perform implementation
 /// Holds reference to Grid and directly applies parsed results
 pub struct Performer<'a> {
     pub grid: &'a mut Grid,
     pub clipboard: &'a mut String,
-    pub pty_response: Vec<u8>,
+    /// PTY response buffer (borrowed, not owned)
+    pub pty_response: &'a mut Vec<u8>,
     pub dcs_handler: &'a mut Option<DcsHandler>,
     pub images: &'a mut ImageRegistry,
     /// Cell width (pixels)
@@ -40,11 +97,12 @@ impl<'a> Performer<'a> {
         cell_height: u32,
         current_dir: &'a mut Option<String>,
         clipboard_path: &'a str,
+        pty_response: &'a mut Vec<u8>,
     ) -> Self {
         Self {
             grid,
             clipboard,
-            pty_response: Vec::new(),
+            pty_response,
             dcs_handler,
             images,
             cell_width,
@@ -199,13 +257,13 @@ impl<'a> Perform for Performer<'a> {
                 match param0 {
                     5 => {
                         // Status report: report normal operation
-                        self.pty_response = b"\x1b[0n".to_vec();
+                        *self.pty_response = b"\x1b[0n".to_vec();
                     }
                     6 => {
                         // Cursor position report: ESC [ row ; col R
                         let row = self.grid.cursor_row + 1;
                         let col = self.grid.cursor_col + 1;
-                        self.pty_response = format!("\x1b[{};{}R", row, col).into_bytes();
+                        *self.pty_response = format!("\x1b[{};{}R", row, col).into_bytes();
                     }
                     _ => {}
                 }
@@ -214,23 +272,23 @@ impl<'a> Perform for Performer<'a> {
                 // DA1 - Primary Device Attributes
                 // Report VT220 compatible + feature flags
                 // 62: VT220, 1: 132 columns, 4: Sixel, 22: ANSI color, 29: ANSI text locator (mouse)
-                self.pty_response = b"\x1b[?62;1;4;22;29c".to_vec();
+                *self.pty_response = b"\x1b[?62;1;4;22;29c".to_vec();
             }
             ('c', [b'>']) => {
                 // DA2 - Secondary Device Attributes
                 // >Pp;Pv;Pc c (Pp=terminal type, Pv=firmware version, Pc=ROM number)
                 // 1: VT220, 100: bcon version 0.1.0 (encoded as 100), 0: ROM
-                self.pty_response = b"\x1b[>1;100;0c".to_vec();
+                *self.pty_response = b"\x1b[>1;100;0c".to_vec();
             }
             ('c', [b'=']) => {
                 // DA3 - Tertiary Device Attributes (Unit ID)
                 // =XXXXXXXX ST (hex unit id)
-                self.pty_response = b"\x1bP!|00000000\x1b\\".to_vec();
+                *self.pty_response = b"\x1bP!|00000000\x1b\\".to_vec();
             }
             ('q', [b'>']) => {
                 // XTVERSION - Terminal version query
                 // DCS > | Pt ST
-                self.pty_response = b"\x1bP>|bcon 0.1.0\x1b\\".to_vec();
+                *self.pty_response = b"\x1bP>|bcon 0.1.0\x1b\\".to_vec();
             }
             ('b', []) => {
                 // REP - Repeat preceding character
@@ -248,26 +306,26 @@ impl<'a> Perform for Performer<'a> {
                         .get(1)
                         .and_then(|p| p.first().copied())
                         .unwrap_or(0) as u8;
-                    self.grid.modify_other_keys = level.min(2);
-                    trace!("modifyOtherKeys: level={}", self.grid.modify_other_keys);
+                    self.grid.keyboard.modify_other_keys = level.min(2);
+                    trace!("modifyOtherKeys: level={}", self.grid.keyboard.modify_other_keys);
                 }
             }
             ('u', [b'>']) => {
                 // Kitty keyboard: Push mode
                 // CSI > flags u
-                self.grid.kitty_keyboard_flags = param0 as u32;
+                self.grid.keyboard.kitty_flags = param0 as u32;
                 trace!("Kitty keyboard: push flags={}", param0);
             }
             ('u', [b'<']) => {
                 // Kitty keyboard: Pop mode
-                self.grid.kitty_keyboard_flags = 0;
+                self.grid.keyboard.kitty_flags = 0;
                 trace!("Kitty keyboard: pop");
             }
             ('u', [b'?']) => {
                 // Kitty keyboard: Query mode
                 // Response: CSI ? flags u
-                let flags = self.grid.kitty_keyboard_flags;
-                self.pty_response = format!("\x1b[?{}u", flags).into_bytes();
+                let flags = self.grid.keyboard.kitty_flags;
+                *self.pty_response = format!("\x1b[?{}u", flags).into_bytes();
             }
             ('u', [b'=']) => {
                 // Kitty keyboard: Set mode
@@ -278,9 +336,9 @@ impl<'a> Perform for Performer<'a> {
                     .and_then(|p| p.first().copied())
                     .unwrap_or(1);
                 match mode {
-                    1 => self.grid.kitty_keyboard_flags = flags, // set
-                    2 => self.grid.kitty_keyboard_flags |= flags, // or
-                    3 => self.grid.kitty_keyboard_flags &= !flags, // not
+                    1 => self.grid.keyboard.kitty_flags = flags, // set
+                    2 => self.grid.keyboard.kitty_flags |= flags, // or
+                    3 => self.grid.keyboard.kitty_flags &= !flags, // not
                     _ => {}
                 }
                 trace!("Kitty keyboard: set flags={} mode={}", flags, mode);
@@ -308,33 +366,33 @@ impl<'a> Perform for Performer<'a> {
                 match style {
                     0 | 1 => {
                         // 0: default, 1: blinking block
-                        self.grid.cursor_style = CursorStyle::Block;
-                        self.grid.cursor_blink = true;
+                        self.grid.cursor.style = CursorStyle::Block;
+                        self.grid.cursor.blink = true;
                     }
                     2 => {
                         // Steady block
-                        self.grid.cursor_style = CursorStyle::Block;
-                        self.grid.cursor_blink = false;
+                        self.grid.cursor.style = CursorStyle::Block;
+                        self.grid.cursor.blink = false;
                     }
                     3 => {
                         // Blinking underline
-                        self.grid.cursor_style = CursorStyle::Underline;
-                        self.grid.cursor_blink = true;
+                        self.grid.cursor.style = CursorStyle::Underline;
+                        self.grid.cursor.blink = true;
                     }
                     4 => {
                         // Steady underline
-                        self.grid.cursor_style = CursorStyle::Underline;
-                        self.grid.cursor_blink = false;
+                        self.grid.cursor.style = CursorStyle::Underline;
+                        self.grid.cursor.blink = false;
                     }
                     5 => {
                         // Blinking bar
-                        self.grid.cursor_style = CursorStyle::Bar;
-                        self.grid.cursor_blink = true;
+                        self.grid.cursor.style = CursorStyle::Bar;
+                        self.grid.cursor.blink = true;
                     }
                     6 => {
                         // Steady bar
-                        self.grid.cursor_style = CursorStyle::Bar;
-                        self.grid.cursor_blink = false;
+                        self.grid.cursor.style = CursorStyle::Bar;
+                        self.grid.cursor.blink = false;
                     }
                     _ => {}
                 }
@@ -349,7 +407,7 @@ impl<'a> Perform for Performer<'a> {
                         let width_px = self.grid.cols() as u32 * self.cell_width;
                         let height_px = self.grid.rows() as u32 * self.cell_height;
                         trace!("CSI 14 t: responding {}x{} pixels", width_px, height_px);
-                        self.pty_response = format!(
+                        *self.pty_response = format!(
                             "\x1b[4;{};{}t",
                             height_px, width_px
                         ).into_bytes();
@@ -358,7 +416,7 @@ impl<'a> Perform for Performer<'a> {
                         // Report cell size in pixels
                         // Response: CSI 6 ; height ; width t
                         trace!("CSI 16 t: responding cell {}x{}", self.cell_width, self.cell_height);
-                        self.pty_response = format!(
+                        *self.pty_response = format!(
                             "\x1b[6;{};{}t",
                             self.cell_height, self.cell_width
                         ).into_bytes();
@@ -367,7 +425,7 @@ impl<'a> Perform for Performer<'a> {
                         // Report window size in characters
                         // Response: CSI 8 ; rows ; cols t
                         trace!("CSI 18 t: responding {}x{} chars", self.grid.cols(), self.grid.rows());
-                        self.pty_response = format!(
+                        *self.pty_response = format!(
                             "\x1b[8;{};{}t",
                             self.grid.rows(), self.grid.cols()
                         ).into_bytes();
@@ -408,7 +466,8 @@ impl<'a> Perform for Performer<'a> {
                 // RIS - Full Reset
                 let cols = self.grid.cols();
                 let rows = self.grid.rows();
-                *self.grid = Grid::new(cols, rows);
+                let max_scrollback = self.grid.max_scrollback;
+                *self.grid = Grid::with_scrollback(cols, rows, max_scrollback);
             }
             _ => {
                 trace!(
@@ -447,7 +506,9 @@ impl<'a> Perform for Performer<'a> {
                 decoder.push(byte);
             }
             Some(DcsHandler::XtGetTcap(ref mut buffer)) => {
-                buffer.push(byte);
+                if buffer.len() < MAX_XTGETTCAP_BUFFER {
+                    buffer.push(byte);
+                }
             }
             None => {}
         }
@@ -520,15 +581,15 @@ impl<'a> Performer<'a> {
         match mode {
             1 => {
                 // DECCKM - Application Cursor Keys
-                self.grid.application_cursor_keys = enable;
+                self.grid.modes.application_cursor_keys = enable;
             }
             7 => {
                 // DECAWM - Auto-wrap Mode
-                self.grid.auto_wrap = enable;
+                self.grid.modes.auto_wrap = enable;
             }
             25 => {
                 // DECTCEM - Text Cursor Enable Mode
-                self.grid.cursor_visible = enable;
+                self.grid.modes.cursor_visible = enable;
             }
             1049 => {
                 // Alternate Screen Buffer
@@ -540,7 +601,7 @@ impl<'a> Performer<'a> {
             }
             1000 => {
                 // X10 Mouse Tracking
-                self.grid.mouse_mode = if enable {
+                self.grid.modes.mouse_mode = if enable {
                     super::grid::MouseMode::X10
                 } else {
                     super::grid::MouseMode::None
@@ -548,7 +609,7 @@ impl<'a> Performer<'a> {
             }
             1002 => {
                 // Button Event Mouse Tracking
-                self.grid.mouse_mode = if enable {
+                self.grid.modes.mouse_mode = if enable {
                     super::grid::MouseMode::ButtonEvent
                 } else {
                     super::grid::MouseMode::None
@@ -556,7 +617,7 @@ impl<'a> Performer<'a> {
             }
             1003 => {
                 // Any Event Mouse Tracking
-                self.grid.mouse_mode = if enable {
+                self.grid.modes.mouse_mode = if enable {
                     super::grid::MouseMode::AnyEvent
                 } else {
                     super::grid::MouseMode::None
@@ -564,19 +625,19 @@ impl<'a> Performer<'a> {
             }
             1006 => {
                 // SGR Extended Mouse Mode
-                self.grid.mouse_sgr = enable;
+                self.grid.modes.mouse_sgr = enable;
             }
             2004 => {
                 // Bracketed Paste Mode
-                self.grid.bracketed_paste = enable;
+                self.grid.modes.bracketed_paste = enable;
             }
             1004 => {
                 // Focus Event Mode
-                self.grid.send_focus_events = enable;
+                self.grid.modes.send_focus_events = enable;
             }
             2026 => {
                 // Synchronized Update Mode
-                self.grid.synchronized_update = enable;
+                self.grid.modes.synchronized_update = enable;
             }
             _ => {
                 trace!("Unhandled DEC private mode: {} = {}", mode, enable);
@@ -800,7 +861,7 @@ impl<'a> Performer<'a> {
             let encoded = base64_encode(self.clipboard.as_bytes());
             let mut response = String::new();
             write!(&mut response, "\x1b]52;c;{}\x1b\\", encoded).ok();
-            self.pty_response = response.into_bytes();
+            *self.pty_response = response.into_bytes();
         } else {
             // Set: decode base64 and store in clipboard
             if let Some(decoded) = base64_decode(data) {
@@ -862,39 +923,61 @@ impl<'a> Performer<'a> {
         }
     }
 
-    /// OSC 10 (foreground color query) handler
-    /// Format: ESC ] 10 ; ? ST
+    /// OSC 10 (foreground color query/set) handler
+    /// Format: ESC ] 10 ; ? ST (query)
+    /// Format: ESC ] 10 ; rgb:RRRR/GGGG/BBBB ST (set)
+    /// Format: ESC ] 10 ; #RRGGBB ST (set)
     fn handle_osc_10(&mut self, params: &[&[u8]]) {
-        // Query: return foreground color on "?"
-        let query = if params.len() > 1 {
+        let param = if params.len() > 1 {
             params[1]
         } else {
             return;
         };
 
-        if query == b"?" {
-            // Default foreground color (white)
-            // X11 format: rgb:RRRR/GGGG/BBBB (16bit)
-            let response = format!("\x1b]10;rgb:ffff/ffff/ffff\x1b\\");
-            self.pty_response = response.into_bytes();
+        if param == b"?" {
+            // Query: return current foreground color
+            let (r, g, b) = self.grid.colors.fg.unwrap_or((0xff, 0xff, 0xff));
+            // X11 format: rgb:RRRR/GGGG/BBBB (16bit, duplicate 8bit value)
+            let response = format!(
+                "\x1b]10;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
+                r, r, g, g, b, b
+            );
+            *self.pty_response = response.into_bytes();
+        } else {
+            // Set: parse color value
+            if let Some(rgb) = parse_osc_color(param) {
+                self.grid.colors.fg = Some(rgb);
+                trace!("OSC 10: foreground color set to {:?}", rgb);
+            }
         }
     }
 
-    /// OSC 11 (background color query) handler
-    /// Format: ESC ] 11 ; ? ST
+    /// OSC 11 (background color query/set) handler
+    /// Format: ESC ] 11 ; ? ST (query)
+    /// Format: ESC ] 11 ; rgb:RRRR/GGGG/BBBB ST (set)
+    /// Format: ESC ] 11 ; #RRGGBB ST (set)
     fn handle_osc_11(&mut self, params: &[&[u8]]) {
-        // Query: return background color on "?"
-        let query = if params.len() > 1 {
+        let param = if params.len() > 1 {
             params[1]
         } else {
             return;
         };
 
-        if query == b"?" {
-            // Default background color (black)
-            // X11 format: rgb:RRRR/GGGG/BBBB (16bit)
-            let response = format!("\x1b]11;rgb:0000/0000/0000\x1b\\");
-            self.pty_response = response.into_bytes();
+        if param == b"?" {
+            // Query: return current background color
+            let (r, g, b) = self.grid.colors.bg.unwrap_or((0x00, 0x00, 0x00));
+            // X11 format: rgb:RRRR/GGGG/BBBB (16bit, duplicate 8bit value)
+            let response = format!(
+                "\x1b]11;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
+                r, r, g, g, b, b
+            );
+            *self.pty_response = response.into_bytes();
+        } else {
+            // Set: parse color value
+            if let Some(rgb) = parse_osc_color(param) {
+                self.grid.colors.bg = Some(rgb);
+                trace!("OSC 11: background color set to {:?}", rgb);
+            }
         }
     }
 
@@ -909,7 +992,7 @@ impl<'a> Performer<'a> {
             "A" => {
                 // Prompt started (fresh line)
                 trace!("Shell integration: prompt started");
-                self.grid.shell_prompt_row = Some(self.grid.cursor_row);
+                self.grid.shell.prompt_row = Some(self.grid.cursor_row);
             }
             "B" => {
                 // Prompt ended, command input starts
@@ -918,7 +1001,7 @@ impl<'a> Performer<'a> {
             "C" => {
                 // Command started (user pressed enter)
                 trace!("Shell integration: command execution started");
-                self.grid.shell_command_row = Some(self.grid.cursor_row);
+                self.grid.shell.command_row = Some(self.grid.cursor_row);
             }
             _ if marker.starts_with("D") => {
                 // Command finished: D or D;exit_code
@@ -932,8 +1015,8 @@ impl<'a> Performer<'a> {
                     None
                 };
                 trace!("Shell integration: command finished, exit_code={:?}", exit_code);
-                self.grid.shell_last_exit_code = exit_code;
-                self.grid.shell_command_row = None;
+                self.grid.shell.last_exit_code = exit_code;
+                self.grid.shell.command_row = None;
             }
             _ => {
                 trace!("Unhandled OSC 133: marker={}", marker);
@@ -979,7 +1062,7 @@ impl<'a> Performer<'a> {
 
         if !response.is_empty() {
             trace!("XTGETTCAP: sending {} bytes response", response.len());
-            self.pty_response = response;
+            *self.pty_response = response;
         }
     }
 

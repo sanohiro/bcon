@@ -3,6 +3,8 @@
 //! Core module integrating PTY, VT parser, and character grid
 //! to form the terminal emulator.
 
+#![allow(dead_code)]
+
 pub mod grid;
 pub mod kitty;
 pub mod parser;
@@ -22,6 +24,10 @@ use sixel::SixelDecoder;
 
 /// Read buffer size
 const READ_BUF_SIZE: usize = 4096;
+
+/// Maximum APC buffer size (4MB - for Kitty graphics images)
+/// Prevents memory exhaustion from malicious/corrupt input
+const MAX_APC_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
 /// Generate default clipboard file path
 /// Uses XDG_RUNTIME_DIR if available, otherwise /tmp
@@ -284,12 +290,19 @@ pub struct Terminal {
     clipboard_path: String,
     /// Current directory (OSC 7)
     pub current_directory: Option<String>,
+    /// PTY response buffer (reused across parser calls)
+    pty_response: Vec<u8>,
 }
 
 impl Terminal {
     /// Initialize terminal and spawn shell
     pub fn new(cols: usize, rows: usize) -> Result<Self> {
-        let grid = Grid::new(cols, rows);
+        Self::with_scrollback(cols, rows, 10000)
+    }
+
+    /// Initialize terminal with custom scrollback size
+    pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize) -> Result<Self> {
+        let grid = Grid::with_scrollback(cols, rows, max_scrollback);
         let vt_parser = vte::Parser::new();
         let pty = Pty::spawn(cols as u16, rows as u16)?;
 
@@ -312,6 +325,7 @@ impl Terminal {
             copy_mode: None,
             clipboard_path: default_clipboard_path(),
             current_directory: None,
+            pty_response: Vec::with_capacity(256),
         })
     }
 
@@ -428,10 +442,11 @@ impl Terminal {
                         // ST (C1) also terminates
                         self.process_apc();
                         self.apc_state = ApcState::Normal;
-                    } else {
-                        // Collect APC data
+                    } else if self.apc_buffer.len() < MAX_APC_BUFFER_SIZE {
+                        // Collect APC data (with size limit)
                         self.apc_buffer.push(byte);
                     }
+                    // If buffer is full, silently drop bytes until termination
                 }
                 ApcState::ApcEscape => {
                     if byte == b'\\' {
@@ -458,6 +473,9 @@ impl Terminal {
 
     /// Process 1 byte with vte parser
     fn process_byte_with_vte(&mut self, byte: u8) {
+        // Clear reusable response buffer
+        self.pty_response.clear();
+
         let mut performer = Performer::new(
             &mut self.grid,
             &mut self.clipboard,
@@ -467,12 +485,14 @@ impl Terminal {
             self.cell_height,
             &mut self.current_directory,
             &self.clipboard_path,
+            &mut self.pty_response,
         );
         self.vt_parser.advance(&mut performer, byte);
+
         // Write back OSC 52 query response to PTY if any
-        if !performer.pty_response.is_empty() {
-            log::trace!("PTY response: {} bytes", performer.pty_response.len());
-            let _ = self.pty.write(&performer.pty_response);
+        if !self.pty_response.is_empty() {
+            log::trace!("PTY response: {} bytes", self.pty_response.len());
+            let _ = self.pty.write(&self.pty_response);
         }
     }
 
@@ -773,7 +793,7 @@ impl Terminal {
     /// If bracketed_paste is enabled, wrap with \e[200~ and \e[201~
     pub fn paste_clipboard(&self) -> Result<()> {
         if !self.clipboard.is_empty() {
-            if self.grid.bracketed_paste {
+            if self.grid.modes.bracketed_paste {
                 // Bracketed paste mode: start sequence
                 self.pty.write(b"\x1b[200~")?;
                 self.pty.write(self.clipboard.as_bytes())?;
@@ -788,82 +808,71 @@ impl Terminal {
 
     /// Check if mouse mode is enabled
     pub fn mouse_mode_enabled(&self) -> bool {
-        self.grid.mouse_mode != grid::MouseMode::None
+        self.grid.modes.mouse_mode != grid::MouseMode::None
+    }
+
+    /// Encode and send mouse event to PTY
+    /// cb: button code
+    /// col, row: 0-indexed coordinates
+    /// press: true for press (M), false for release (m) in SGR mode
+    fn send_mouse_event(&self, cb: u8, col: usize, row: usize, press: bool) -> Result<()> {
+        let cx = (col + 1).min(223);
+        let cy = (row + 1).min(223);
+
+        if self.grid.modes.mouse_sgr {
+            let suffix = if press { 'M' } else { 'm' };
+            let seq = format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix);
+            self.pty.write(seq.as_bytes())?;
+        } else {
+            let bytes = [
+                0x1b,
+                b'[',
+                b'M',
+                cb + 32,
+                (cx as u8) + 32,
+                (cy as u8) + 32,
+            ];
+            self.pty.write(&bytes)?;
+        }
+        Ok(())
     }
 
     /// Send mouse button press event to PTY
     /// button: 0=left, 1=middle, 2=right
     /// col, row: 0-indexed
     pub fn send_mouse_press(&self, button: u8, col: usize, row: usize) -> Result<()> {
-        if self.grid.mouse_mode == grid::MouseMode::None {
+        if self.grid.modes.mouse_mode == grid::MouseMode::None {
             return Ok(());
         }
-
-        // Coordinates are 1-indexed, clamp to max
-        let cx = (col + 1).min(223);
-        let cy = (row + 1).min(223);
-
-        if self.grid.mouse_sgr {
-            // SGR format: \e[<Cb;Cx;CyM
-            let seq = format!("\x1b[<{};{};{}M", button, cx, cy);
-            self.pty.write(seq.as_bytes())?;
-        } else {
-            // X10 format: \e[M Cb+32 Cx+32 Cy+32
-            let bytes = [
-                0x1b,
-                b'[',
-                b'M',
-                button + 32,
-                (cx as u8) + 32,
-                (cy as u8) + 32,
-            ];
-            self.pty.write(&bytes)?;
-        }
-        Ok(())
+        self.send_mouse_event(button, col, row, true)
     }
 
     /// Send mouse button release event to PTY
     pub fn send_mouse_release(&self, button: u8, col: usize, row: usize) -> Result<()> {
         // X10 mode doesn't send release events
-        if self.grid.mouse_mode == grid::MouseMode::None
-            || self.grid.mouse_mode == grid::MouseMode::X10
+        if self.grid.modes.mouse_mode == grid::MouseMode::None
+            || self.grid.modes.mouse_mode == grid::MouseMode::X10
         {
             return Ok(());
         }
 
-        let cx = (col + 1).min(223);
-        let cy = (row + 1).min(223);
-
-        if self.grid.mouse_sgr {
-            // SGR format: \e[<Cb;Cx;Cym (lowercase m)
-            let seq = format!("\x1b[<{};{};{}m", button, cx, cy);
-            self.pty.write(seq.as_bytes())?;
+        if self.grid.modes.mouse_sgr {
+            // SGR format uses original button with lowercase 'm'
+            self.send_mouse_event(button, col, row, false)
         } else {
-            // Normal format: button 3 (release)
-            let bytes = [
-                0x1b,
-                b'[',
-                b'M',
-                3 + 32, // button 3 = release
-                (cx as u8) + 32,
-                (cy as u8) + 32,
-            ];
-            self.pty.write(&bytes)?;
+            // Normal format: button 3 means release
+            self.send_mouse_event(3, col, row, true)
         }
-        Ok(())
     }
 
     /// Send mouse move event to PTY (in ButtonEvent/AnyEvent mode)
     pub fn send_mouse_move(&self, col: usize, row: usize, button_held: Option<u8>) -> Result<()> {
         // AnyEvent (1003) or ButtonEvent (1002) + button held only
-        match self.grid.mouse_mode {
+        match self.grid.modes.mouse_mode {
             grid::MouseMode::AnyEvent => {}
             grid::MouseMode::ButtonEvent if button_held.is_some() => {}
             _ => return Ok(()),
         }
-
-        let cx = (col + 1).min(223);
-        let cy = (row + 1).min(223);
 
         // button code: 32+button if held, 35 if not
         let cb = match button_held {
@@ -871,40 +880,22 @@ impl Terminal {
             None => 35,        // motion only
         };
 
-        if self.grid.mouse_sgr {
-            let seq = format!("\x1b[<{};{};{}M", cb, cx, cy);
-            self.pty.write(seq.as_bytes())?;
-        } else {
-            let bytes = [0x1b, b'[', b'M', cb + 32, (cx as u8) + 32, (cy as u8) + 32];
-            self.pty.write(&bytes)?;
-        }
-        Ok(())
+        self.send_mouse_event(cb, col, row, true)
     }
 
     /// Send mouse wheel event to PTY
     /// delta: positive=down, negative=up
     pub fn send_mouse_wheel(&self, delta: i8, col: usize, row: usize) -> Result<()> {
         // X10 mode doesn't send wheel events
-        if self.grid.mouse_mode == grid::MouseMode::None
-            || self.grid.mouse_mode == grid::MouseMode::X10
+        if self.grid.modes.mouse_mode == grid::MouseMode::None
+            || self.grid.modes.mouse_mode == grid::MouseMode::X10
         {
             return Ok(());
         }
 
-        let cx = (col + 1).min(223);
-        let cy = (row + 1).min(223);
-
         // button code: 64=up, 65=down
         let cb = if delta < 0 { 64 } else { 65 };
-
-        if self.grid.mouse_sgr {
-            let seq = format!("\x1b[<{};{};{}M", cb, cx, cy);
-            self.pty.write(seq.as_bytes())?;
-        } else {
-            let bytes = [0x1b, b'[', b'M', cb + 32, (cx as u8) + 32, (cy as u8) + 32];
-            self.pty.write(&bytes)?;
-        }
-        Ok(())
+        self.send_mouse_event(cb, col, row, true)
     }
 
     /// Get cell for display row (considering scroll_offset)
@@ -1393,7 +1384,7 @@ impl Terminal {
     /// Send focus event (CSI I / CSI O)
     #[allow(dead_code)]
     pub fn send_focus_event(&self, focused: bool) -> Result<()> {
-        if self.grid.send_focus_events {
+        if self.grid.modes.send_focus_events {
             let seq = if focused { b"\x1b[I" } else { b"\x1b[O" };
             self.pty.write(seq)?;
         }
@@ -1405,7 +1396,7 @@ impl Terminal {
     /// Check if Synchronized Update mode is enabled
     #[allow(dead_code)]
     pub fn is_synchronized_update(&self) -> bool {
-        self.grid.synchronized_update
+        self.grid.modes.synchronized_update
     }
 
     /// Process arbitrary output data (e.g., /etc/issue before login)
