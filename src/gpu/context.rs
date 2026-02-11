@@ -289,6 +289,7 @@ impl GlEsVersion {
 /// OpenGL ES renderer
 pub struct GlRenderer {
     gl: glow::Context,
+    #[allow(dead_code)]
     es_version: GlEsVersion,
 }
 
@@ -341,6 +342,7 @@ impl GlRenderer {
     }
 
     /// Get ES version
+    #[allow(dead_code)]
     pub fn es_version(&self) -> GlEsVersion {
         self.es_version
     }

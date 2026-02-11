@@ -672,7 +672,7 @@ fn main() -> Result<()> {
         gpu::CurlyRenderer::new(gl).context("Failed to initialize curly renderer")?;
 
     // Create FBO for cached rendering (enables partial updates)
-    let mut fbo = gpu::Fbo::new(gl, display_config.width, display_config.height)
+    let fbo = gpu::Fbo::new(gl, display_config.width, display_config.height)
         .context("Failed to initialize FBO")?;
 
     info!("Phase 2 initialization complete");

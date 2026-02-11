@@ -215,6 +215,7 @@ impl Fbo {
     }
 
     /// Resize FBO
+    #[allow(dead_code)]
     pub fn resize(&mut self, gl: &glow::Context, width: u32, height: u32) -> Result<()> {
         if width == self.width && height == self.height {
             return Ok(());
@@ -245,6 +246,7 @@ impl Fbo {
     }
 
     /// Get FBO size
+    #[allow(dead_code)]
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
