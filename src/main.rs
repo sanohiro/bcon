@@ -698,6 +698,9 @@ fn main() -> Result<()> {
 
     info!("Terminal loop started");
 
+    // Notify systemd that we're ready
+    let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Ready]);
+
     // Keep previous frame's BO/FB
     let mut prev_bo = Some(bo);
     let mut prev_fb = Some(fb);
@@ -804,6 +807,7 @@ fn main() -> Result<()> {
         // Check for SIGTERM (graceful shutdown from systemd)
         if drm::sigterm_received() {
             info!("Received SIGTERM, shutting down gracefully...");
+            let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Stopping]);
             break;
         }
 
@@ -826,6 +830,7 @@ fn main() -> Result<()> {
         // Check child process alive
         if !term.is_alive() {
             info!("Child process terminated");
+            let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Stopping]);
             break;
         }
 

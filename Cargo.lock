@@ -187,7 +187,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "bcon"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "bitflags 2.10.0",
@@ -213,6 +213,7 @@ dependencies = [
  "notify",
  "png",
  "rustybuzz",
+ "sd-notify",
  "serde",
  "thiserror",
  "tokio",
@@ -1448,6 +1449,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "sd-notify"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b943eadf71d8b69e661330cb0e2656e31040acf21ee7708e2c238a0ec6af2bf4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
