@@ -18,6 +18,13 @@ use std::time::{Duration, Instant};
 use xkbcommon::xkb;
 use xkbcommon::xkb::keysyms;
 
+#[cfg(all(target_os = "linux", feature = "seatd"))]
+use std::cell::RefCell;
+#[cfg(all(target_os = "linux", feature = "seatd"))]
+use std::rc::Rc;
+#[cfg(all(target_os = "linux", feature = "seatd"))]
+use crate::session::SeatSession;
+
 /// Key repeat settings
 const KEY_REPEAT_DELAY_MS: u64 = 400; // Delay before first repeat
 const KEY_REPEAT_RATE_MS: u64 = 30; // Repeat interval
@@ -40,6 +47,31 @@ impl LibinputInterface for InputInterface {
     }
 
     fn close_restricted(&mut self, fd: OwnedFd) {
+        drop(fd);
+    }
+}
+
+/// LibinputInterface implementation using libseat for device access
+#[cfg(all(target_os = "linux", feature = "seatd"))]
+struct SeatInputInterface {
+    session: Rc<RefCell<SeatSession>>,
+}
+
+#[cfg(all(target_os = "linux", feature = "seatd"))]
+impl LibinputInterface for SeatInputInterface {
+    fn open_restricted(&mut self, path: &Path, _flags: i32) -> std::result::Result<OwnedFd, i32> {
+        let mut session = self.session.borrow_mut();
+        match session.open_device(path) {
+            Ok(device) => Ok(device.fd),
+            Err(e) => {
+                warn!("libseat: Cannot open device {:?}: {}", path, e);
+                Err(-libc::EACCES)
+            }
+        }
+    }
+
+    fn close_restricted(&mut self, fd: OwnedFd) {
+        // Device is closed when OwnedFd is dropped
         drop(fd);
     }
 }
@@ -181,6 +213,90 @@ impl EvdevKeyboard {
         let xkb_state = xkb::State::new(&keymap);
 
         info!("evdev keyboard initialized");
+
+        Ok(Self {
+            input,
+            xkb_state,
+            fd,
+            shift_pressed: false,
+            ctrl_pressed: false,
+            alt_pressed: false,
+            mouse_x: screen_width as f64 / 2.0,
+            mouse_y: screen_height as f64 / 2.0,
+            screen_width: screen_width as f64,
+            screen_height: screen_height as f64,
+            scroll_accum: 0.0,
+            held_keys: HashMap::new(),
+        })
+    }
+
+    /// Initialize evdev input with libseat session
+    ///
+    /// Uses libseat for device access (no root required).
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    pub fn new_with_seat(
+        screen_width: u32,
+        screen_height: u32,
+        session: Rc<RefCell<SeatSession>>,
+    ) -> Result<Self> {
+        // Create libinput context with seat-based interface
+        let interface = SeatInputInterface {
+            session: session.clone(),
+        };
+        let mut input = Libinput::new_from_path(interface);
+
+        // Scan and add devices from /dev/input/event*
+        let mut device_count = 0;
+        for entry in std::fs::read_dir("/dev/input")
+            .map_err(|e| anyhow!("Cannot scan /dev/input: {}", e))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with("event") {
+                let path_str = path.to_str().unwrap_or("");
+                if let Some(_device) = input.path_add_device(path_str) {
+                    debug!("Input device added via libseat: {}", path_str);
+                    device_count += 1;
+                }
+            }
+        }
+
+        if device_count == 0 {
+            return Err(anyhow!(
+                "No input devices found via libseat. Check seatd/logind permissions."
+            ));
+        }
+
+        info!("evdev: {} input devices added via libseat", device_count);
+
+        // Get libinput fd
+        let fd = input.as_raw_fd();
+
+        // Set fd to non-blocking
+        let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFL)
+            .map_err(|e| anyhow!("F_GETFL failed: {}", e))?;
+        let mut flags = nix::fcntl::OFlag::from_bits_truncate(flags);
+        flags.insert(nix::fcntl::OFlag::O_NONBLOCK);
+        nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_SETFL(flags))
+            .map_err(|e| anyhow!("F_SETFL failed: {}", e))?;
+
+        // Initialize xkbcommon
+        let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let keymap = xkb::Keymap::new_from_names(
+            &context,
+            "",   // rules: default
+            "",   // model: default
+            "",   // layout: default
+            "",   // variant: default
+            None, // options: default
+            xkb::COMPILE_NO_FLAGS,
+        )
+        .ok_or_else(|| anyhow!("Failed to create xkb keymap"))?;
+
+        let xkb_state = xkb::State::new(&keymap);
+
+        info!("evdev keyboard initialized with libseat");
 
         Ok(Self {
             input,

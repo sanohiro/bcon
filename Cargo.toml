@@ -1,6 +1,6 @@
 [package]
 name = "bcon"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 authors = ["Hironobu Sano"]
 description = "GPU-accelerated terminal emulator for Linux console"
@@ -53,10 +53,6 @@ toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"
 
-# File watching for hot reload (optional, Linux only)
-[target.'cfg(target_os = "linux")'.dependencies]
-notify = "6.1"
-
 # Utilities
 anyhow = "1.0"
 thiserror = "1.0"
@@ -70,13 +66,16 @@ bitflags = "2.4"
 # systemd integration (notify ready state)
 sd-notify = "0.4"
 
+# Linux-only dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+# File watching for hot reload
+notify = "6.1"
 # Session management (optional - enables running without root)
-# TODO: Enable when libseat integration is complete
-# libseat = { version = "0.2", optional = true }
+libseat = { version = "0.2", optional = true }
 
-# [features]
-# default = []
-# seatd = ["libseat"]
+[features]
+default = []
+seatd = ["libseat"]
 
 # [dev-dependencies]
 # criterion = "0.5"

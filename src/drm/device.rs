@@ -13,7 +13,7 @@ use log::{debug, info, warn};
 use nix::sys::signal::{SigSet, Signal};
 use nix::sys::signalfd::{SfdFlags, SignalFd};
 use std::fs::{File, OpenOptions};
-use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -89,6 +89,47 @@ impl Device {
                 }
             }
         }
+
+        // Get resources
+        let resources = temp.resource_handles().context("Failed to get DRM resources")?;
+
+        info!(
+            "DRM resources: connectors={}, crtcs={}, encoders={}, framebuffers={}",
+            resources.connectors().len(),
+            resources.crtcs().len(),
+            resources.encoders().len(),
+            resources.framebuffers().len()
+        );
+
+        Ok(Self { file, resources })
+    }
+
+    /// Create Device from a pre-opened file descriptor
+    ///
+    /// Used when libseat provides the DRM device fd.
+    /// The fd is duplicated, so the original can be closed.
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    pub fn from_fd(fd: RawFd) -> Result<Self> {
+        info!("Creating DRM device from fd {}", fd);
+
+        // Duplicate the fd so we own it
+        let dup_fd = nix::unistd::dup(fd).context("Failed to dup DRM fd")?;
+        let file = unsafe { File::from_raw_fd(dup_fd) };
+
+        // Create temporary device wrapper to get resources
+        struct TempDevice<'a>(&'a File);
+        impl AsFd for TempDevice<'_> {
+            fn as_fd(&self) -> BorrowedFd<'_> {
+                self.0.as_fd()
+            }
+        }
+        impl BasicDevice for TempDevice<'_> {}
+        impl ControlDevice for TempDevice<'_> {}
+
+        let temp = TempDevice(&file);
+
+        // Note: When using libseat, we don't need to call SET_MASTER
+        // libseat handles DRM master privileges automatically
 
         // Get resources
         let resources = temp.resource_handles().context("Failed to get DRM resources")?;
