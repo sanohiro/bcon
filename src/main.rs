@@ -26,6 +26,11 @@ use anyhow::{anyhow, Context, Result};
 use log::{info, trace};
 use std::time::Duration;
 
+#[cfg(all(target_os = "linux", feature = "seatd"))]
+use std::cell::RefCell;
+#[cfg(all(target_os = "linux", feature = "seatd"))]
+use std::rc::Rc;
+
 /// sRGB to linear conversion (same calculation as shader)
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -463,16 +468,40 @@ fn main() -> Result<()> {
     // Set up SIGTERM handler for graceful shutdown (systemd stop)
     drm::setup_sigterm_handler();
 
-    // Phase 0: VT switching (must happen BEFORE DRM takes over display)
-    // VtSwitcher sets up process-controlled VT switching via VT_SETMODE
-    // The kernel sends SIGUSR1/SIGUSR2 signals for VT switch requests
-    let mut vt_switcher = drm::VtSwitcher::new()
-        .context("Failed to initialize VT switcher")?;
+    // Phase 0: Session management
+    // - With seatd feature: Use libseat for rootless operation
+    // - Without seatd: Use VtSwitcher (requires root)
+
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    let seat_session = {
+        info!("Opening libseat session...");
+        Rc::new(RefCell::new(
+            session::SeatSession::open().context("Failed to open libseat session")?
+        ))
+    };
+
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+    let mut vt_switcher = {
+        // VtSwitcher sets up process-controlled VT switching via VT_SETMODE
+        // The kernel sends SIGUSR1/SIGUSR2 signals for VT switch requests
+        drm::VtSwitcher::new().context("Failed to initialize VT switcher")?
+    };
 
     // Phase 1: DRM/KMS initialization
     let drm_path = find_drm_device()?;
     info!("DRM device: {}", drm_path);
 
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    let drm_device = {
+        let seat_drm_device = seat_session
+            .borrow_mut()
+            .open_device(&drm_path)
+            .context("Cannot open DRM device via libseat")?;
+        drm::Device::from_fd(seat_drm_device.as_raw_fd())
+            .context("Cannot create DRM device from libseat fd")?
+    };
+
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let drm_device = drm::Device::open(&drm_path)
         .context("Cannot open DRM device. Root privileges may be required.")?;
 
@@ -653,6 +682,8 @@ fn main() -> Result<()> {
     term.set_clipboard_path(&cfg.paths.clipboard_file);
 
     // Display /etc/issue (like getty does) if running as root
+    // Note: When using libseat (seatd feature), we don't run as root
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     if unsafe { libc::getuid() } == 0 {
         let tty_name = format!("tty{}", vt_switcher.target_vt());
         if let Some(issue) = terminal::pty::read_issue(&tty_name) {
@@ -668,6 +699,24 @@ fn main() -> Result<()> {
     let keyboard = input::Keyboard::new().context("Failed to initialize keyboard")?;
 
     // evdev input (keyboard + mouse, continue with SSH stdin if unavailable)
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    let mut evdev_keyboard =
+        match input::EvdevKeyboard::new_with_seat(
+            display_config.width,
+            display_config.height,
+            seat_session.clone(),
+        ) {
+            Ok(kb) => {
+                info!("evdev input initialized via libseat (keyboard + mouse)");
+                Some(kb)
+            }
+            Err(e) => {
+                info!("evdev input unavailable (continuing with SSH stdin): {}", e);
+                None
+            }
+        };
+
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let mut evdev_keyboard =
         match input::EvdevKeyboard::new(display_config.width, display_config.height) {
             Ok(kb) => {
@@ -756,49 +805,91 @@ fn main() -> Result<()> {
     let mut drm_master_held = true;
 
     loop {
-        // Poll for VT switch signals (SIGUSR1/SIGUSR2 via signalfd)
-        while let Some(event) = vt_switcher.poll() {
-            match event {
-                drm::VtEvent::Release => {
-                    // Kernel requests us to release the VT
-                    info!("VT release requested");
+        // Poll for session events (VT switching)
+        #[cfg(all(target_os = "linux", feature = "seatd"))]
+        {
+            // Dispatch libseat events
+            if let Ok(true) = seat_session.borrow_mut().dispatch() {
+                // Events dispatched, check for session state changes
+            }
 
-                    // Send focus out event to terminal applications
-                    if let Err(e) = term.send_focus_event(false) {
-                        log::debug!("Failed to send FocusOut event: {}", e);
-                    }
+            // Process session events
+            while let Some(event) = seat_session.borrow().try_recv_event() {
+                match event {
+                    session::SessionEvent::Disable => {
+                        // Session disabled (VT switched away)
+                        info!("libseat: session disabled");
 
-                    if drm_master_held {
-                        if let Err(e) = drm_device.drop_master() {
-                            log::warn!("Failed to drop DRM master: {}", e);
-                        } else {
-                            drm_master_held = false;
+                        // Send focus out event to terminal applications
+                        if let Err(e) = term.send_focus_event(false) {
+                            log::debug!("Failed to send FocusOut event: {}", e);
                         }
+
+                        drm_master_held = false;
+                        // Note: libseat handles DRM master automatically
                     }
-                    // Acknowledge release - this allows the VT switch to proceed
-                    if let Err(e) = vt_switcher.ack_release() {
-                        log::warn!("Failed to acknowledge VT release: {}", e);
+                    session::SessionEvent::Enable => {
+                        // Session enabled (VT acquired)
+                        info!("libseat: session enabled");
+
+                        drm_master_held = true;
+                        needs_redraw = true;
+
+                        // Send focus in event to terminal applications
+                        if let Err(e) = term.send_focus_event(true) {
+                            log::debug!("Failed to send FocusIn event: {}", e);
+                        }
                     }
                 }
-                drm::VtEvent::Acquire => {
-                    // Kernel grants us the VT
-                    info!("VT acquire");
-                    if !drm_master_held {
-                        if let Err(e) = drm_device.set_master() {
-                            log::warn!("Failed to acquire DRM master: {}", e);
-                        } else {
-                            drm_master_held = true;
-                            needs_redraw = true;
+            }
+        }
+
+        #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+        {
+            // Poll for VT switch signals (SIGUSR1/SIGUSR2 via signalfd)
+            while let Some(event) = vt_switcher.poll() {
+                match event {
+                    drm::VtEvent::Release => {
+                        // Kernel requests us to release the VT
+                        info!("VT release requested");
+
+                        // Send focus out event to terminal applications
+                        if let Err(e) = term.send_focus_event(false) {
+                            log::debug!("Failed to send FocusOut event: {}", e);
+                        }
+
+                        if drm_master_held {
+                            if let Err(e) = drm_device.drop_master() {
+                                log::warn!("Failed to drop DRM master: {}", e);
+                            } else {
+                                drm_master_held = false;
+                            }
+                        }
+                        // Acknowledge release - this allows the VT switch to proceed
+                        if let Err(e) = vt_switcher.ack_release() {
+                            log::warn!("Failed to acknowledge VT release: {}", e);
                         }
                     }
-                    // Acknowledge acquire
-                    if let Err(e) = vt_switcher.ack_acquire() {
-                        log::warn!("Failed to acknowledge VT acquire: {}", e);
-                    }
+                    drm::VtEvent::Acquire => {
+                        // Kernel grants us the VT
+                        info!("VT acquire");
+                        if !drm_master_held {
+                            if let Err(e) = drm_device.set_master() {
+                                log::warn!("Failed to acquire DRM master: {}", e);
+                            } else {
+                                drm_master_held = true;
+                                needs_redraw = true;
+                            }
+                        }
+                        // Acknowledge acquire
+                        if let Err(e) = vt_switcher.ack_acquire() {
+                            log::warn!("Failed to acknowledge VT acquire: {}", e);
+                        }
 
-                    // Send focus in event to terminal applications
-                    if let Err(e) = term.send_focus_event(true) {
-                        log::debug!("Failed to send FocusIn event: {}", e);
+                        // Send focus in event to terminal applications
+                        if let Err(e) = term.send_focus_event(true) {
+                            log::debug!("Failed to send FocusIn event: {}", e);
+                        }
                     }
                 }
             }
