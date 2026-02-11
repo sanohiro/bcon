@@ -459,6 +459,9 @@ fn main() -> Result<()> {
         return test_shaper_mode();
     }
 
+    // Set up SIGTERM handler for graceful shutdown (systemd stop)
+    drm::setup_sigterm_handler();
+
     // Phase 0: VT switching (must happen BEFORE DRM takes over display)
     // VtSwitcher sets up process-controlled VT switching via VT_SETMODE
     // The kernel sends SIGUSR1/SIGUSR2 signals for VT switch requests
@@ -794,23 +797,13 @@ fn main() -> Result<()> {
                         log::debug!("Failed to send FocusIn event: {}", e);
                     }
                 }
-                drm::VtEvent::Terminate => {
-                    // SIGTERM received - graceful shutdown
-                    info!("Received SIGTERM, shutting down gracefully...");
-                    break;
-                }
-                drm::VtEvent::Hangup => {
-                    // SIGHUP received - could be used for config reload
-                    info!("Received SIGHUP");
-                    #[cfg(target_os = "linux")]
-                    if let Some(ref watcher) = config_watcher {
-                        // Trigger manual config reload
-                        if watcher.check_reload() {
-                            info!("Config reloaded via SIGHUP");
-                        }
-                    }
-                }
             }
+        }
+
+        // Check for SIGTERM (graceful shutdown from systemd)
+        if drm::sigterm_received() {
+            info!("Received SIGTERM, shutting down gracefully...");
+            break;
         }
 
         // Skip most processing if we don't have DRM master (VT switched away)

@@ -15,6 +15,26 @@ use nix::sys::signalfd::{SfdFlags, SignalFd};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Global flag for SIGTERM received (checked in main loop)
+static SIGTERM_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+/// Check if SIGTERM was received
+pub fn sigterm_received() -> bool {
+    SIGTERM_RECEIVED.load(Ordering::Relaxed)
+}
+
+/// Set up SIGTERM handler (call once at startup)
+pub fn setup_sigterm_handler() {
+    unsafe {
+        libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+    }
+}
+
+extern "C" fn sigterm_handler(_signo: libc::c_int) {
+    SIGTERM_RECEIVED.store(true, Ordering::Relaxed);
+}
 
 /// DRM device wrapper
 pub struct Device {
@@ -236,10 +256,6 @@ pub enum VtEvent {
     Release,
     /// Kernel grants us the VT (SIGUSR1)
     Acquire,
-    /// Termination signal (SIGTERM) - should exit gracefully
-    Terminate,
-    /// Hangup signal (SIGHUP) - typically used for config reload
-    Hangup,
 }
 
 /// VT switching manager using VT_SETMODE with VT_PROCESS mode
@@ -301,13 +317,11 @@ impl VtSwitcher {
 
         // Block signals so we can receive them via signalfd
         // SIGUSR1/SIGUSR2: VT switching
-        // SIGTERM: graceful shutdown (systemd stop)
-        // SIGHUP: hangup (optional config reload)
+        // Note: SIGTERM/SIGHUP are NOT blocked - they use default termination behavior
+        // which allows systemd to stop the service properly
         let mut mask = SigSet::empty();
         mask.add(Signal::SIGUSR1);
         mask.add(Signal::SIGUSR2);
-        mask.add(Signal::SIGTERM);
-        mask.add(Signal::SIGHUP);
 
         // Save old mask and block signals
         let old_sigmask = mask.thread_swap_mask(nix::sys::signal::SigmaskHow::SIG_BLOCK)
@@ -463,14 +477,6 @@ impl VtSwitcher {
                     // Acquire - we're getting the VT back
                     debug!("SIGUSR1 received: VT acquire");
                     Some(VtEvent::Acquire)
-                } else if signo == Signal::SIGTERM as i32 {
-                    // Termination request (systemd stop, etc.)
-                    info!("SIGTERM received: graceful shutdown requested");
-                    Some(VtEvent::Terminate)
-                } else if signo == Signal::SIGHUP as i32 {
-                    // Hangup signal
-                    info!("SIGHUP received");
-                    Some(VtEvent::Hangup)
                 } else {
                     None
                 }
