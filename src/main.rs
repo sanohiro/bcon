@@ -1782,7 +1782,21 @@ fn main() -> Result<()> {
 
         // Bind FBO for rendering
         fbo.bind(gl);
-        fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
+
+        // Clear FBO: if all dirty or overlays active, clear everything; otherwise clear only dirty rows
+        // Selection/search overlays require full clear because they change independently of content
+        let has_overlays = term.selection.is_some() || search_mode || term.copy_mode.is_some();
+        if term.grid.is_all_dirty() || has_overlays {
+            fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
+        } else if term.has_dirty_rows() {
+            // Clear only dirty rows using scissor test
+            for row in 0..term.grid.rows() {
+                if term.grid.is_row_dirty(row) {
+                    fbo.clear_rows(gl, row, row, cell_h, margin_y, bg_color.0, bg_color.1, bg_color.2);
+                }
+            }
+        }
+        // If no rows are dirty and no overlays, FBO content is preserved from previous frame
 
         text_renderer.begin();
         text_renderer.set_bg_color(bg_color.0, bg_color.1, bg_color.2);

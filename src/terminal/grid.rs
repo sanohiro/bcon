@@ -535,6 +535,12 @@ impl Grid {
         self.all_dirty || (row < self.rows && self.dirty_rows[row])
     }
 
+    /// Check if all rows are dirty (full screen redraw needed)
+    #[inline]
+    pub fn is_all_dirty(&self) -> bool {
+        self.all_dirty
+    }
+
     /// Check if any row is dirty
     #[inline]
     pub fn has_dirty_rows(&self) -> bool {
