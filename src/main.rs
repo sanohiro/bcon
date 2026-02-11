@@ -1825,9 +1825,11 @@ fn main() -> Result<()> {
         // === Pass 1.5: Selection highlight ===
         let selection_color = [config_selection.0, config_selection.1, config_selection.2, 0.35];
         if let Some(ref sel) = term.selection {
+            let max_cols = grid.cols();
             for row in 0..grid.rows() {
-                for col in 0..grid.cols() {
-                    if sel.contains(row, col) {
+                // Get column range for this row (avoids per-cell contains() check)
+                if let Some((start_col, end_col)) = sel.cols_for_row(row, max_cols) {
+                    for col in start_col..end_col {
                         let x = margin_x + col as f32 * cell_w;
                         let y = margin_y + row as f32 * cell_h;
                         text_renderer.push_rect(
@@ -1863,8 +1865,12 @@ fn main() -> Result<()> {
         }
 
         // === Pass 2: Text rendering (FreeType LCD mode) ===
+        let max_cols = grid.cols();
 
         for row in 0..grid.rows() {
+            // Pre-compute selection range for this row (avoids per-cell normalized() call)
+            let row_selection = term.selection.as_ref().and_then(|s| s.cols_for_row(row, max_cols));
+
             // Underline rendering: batch consecutive cells with same style into runs
             let mut col = 0;
             while col < grid.cols() {
@@ -2087,8 +2093,8 @@ fn main() -> Result<()> {
                     let mut bg_rgba = cell.bg.to_rgba(false);
 
                     // Selection highlight - blend in linear space
-                    if let Some(ref sel) = term.selection {
-                        if sel.contains(row, col) {
+                    if let Some((sel_start, sel_end)) = row_selection {
+                        if col >= sel_start && col < sel_end {
                             let a = selection_color[3];
                             // sRGB -> linear
                             let bg_lin = [

@@ -150,6 +150,23 @@ impl Selection {
         }
     }
 
+    /// Get column range for a specific row (returns None if row not in selection)
+    /// This is more efficient than calling contains() for every column.
+    /// Returns (start_col, end_col) where end_col is exclusive.
+    #[inline]
+    pub fn cols_for_row(&self, row: usize, max_cols: usize) -> Option<(usize, usize)> {
+        let (sr, sc, er, ec) = self.normalized();
+        if row < sr || row > er {
+            return None;
+        }
+        let start = if row == sr { sc } else { 0 };
+        let end = if row == er { ec } else { max_cols };
+        if start >= end {
+            return None;
+        }
+        Some((start, end))
+    }
+
     /// Check if specified cell is within selection range
     pub fn contains(&self, row: usize, col: usize) -> bool {
         let (sr, sc, er, ec) = self.normalized();
