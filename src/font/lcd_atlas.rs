@@ -516,6 +516,11 @@ impl LcdGlyphAtlas {
         }
     }
 
+    /// Mark texture as needing re-upload (call after GPU state loss, e.g., suspend/resume)
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
     /// Change font size and rebuild atlas
     pub fn resize(&mut self, new_size: f32) -> (f32, f32) {
         let new_size_u32 = new_size as u32;

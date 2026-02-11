@@ -829,11 +829,19 @@ fn main() -> Result<()> {
                         // Note: libseat handles DRM master automatically
                     }
                     session::SessionEvent::Enable => {
-                        // Session enabled (VT acquired)
+                        // Session enabled (VT acquired, or resume from suspend)
                         info!("libseat: session enabled");
 
                         drm_master_held = true;
                         needs_redraw = true;
+
+                        // Invalidate GPU textures (may have been lost during suspend)
+                        glyph_atlas.invalidate();
+                        if let Some(ref mut ea) = emoji_atlas {
+                            ea.invalidate();
+                        }
+                        image_renderer.invalidate_all(gl);
+                        info!("GPU textures invalidated for re-upload");
 
                         // Send focus in event to terminal applications
                         if let Err(e) = term.send_focus_event(true) {
@@ -871,7 +879,7 @@ fn main() -> Result<()> {
                         }
                     }
                     drm::VtEvent::Acquire => {
-                        // Kernel grants us the VT
+                        // Kernel grants us the VT (or resume from suspend)
                         info!("VT acquire");
                         if !drm_master_held {
                             if let Err(e) = drm_device.set_master() {
@@ -885,6 +893,14 @@ fn main() -> Result<()> {
                         if let Err(e) = vt_switcher.ack_acquire() {
                             log::warn!("Failed to acknowledge VT acquire: {}", e);
                         }
+
+                        // Invalidate GPU textures (may have been lost during suspend)
+                        glyph_atlas.invalidate();
+                        if let Some(ref mut ea) = emoji_atlas {
+                            ea.invalidate();
+                        }
+                        image_renderer.invalidate_all(gl);
+                        info!("GPU textures invalidated for re-upload");
 
                         // Send focus in event to terminal applications
                         if let Err(e) = term.send_focus_event(true) {

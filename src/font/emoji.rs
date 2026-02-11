@@ -1370,6 +1370,11 @@ impl EmojiAtlas {
         }
     }
 
+    /// Mark texture as needing re-upload (call after GPU state loss, e.g., suspend/resume)
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
     /// Clear cache on font size change
     pub fn resize(&mut self, _new_cell_height: u32) {
         // Clear cached glyphs

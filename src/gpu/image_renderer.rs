@@ -359,6 +359,18 @@ impl ImageRenderer {
         }
     }
 
+    /// Clear all cached textures (call after GPU state loss, e.g., suspend/resume)
+    /// Images will be re-uploaded from terminal's image cache on next render
+    pub fn invalidate_all(&mut self, gl: &glow::Context) {
+        unsafe {
+            for texture in self.textures.values() {
+                gl.delete_texture(*texture);
+            }
+        }
+        self.textures.clear();
+        log::info!("ImageRenderer: all textures invalidated");
+    }
+
     /// Release resources
     pub fn destroy(&self, gl: &glow::Context) {
         unsafe {
