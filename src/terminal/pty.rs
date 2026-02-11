@@ -35,7 +35,13 @@ impl Pty {
     /// Specify initial terminal size with `cols`, `rows`,
     /// and pixel size with `xpixel`, `ypixel`.
     /// `term_env` sets the TERM environment variable.
-    pub fn spawn_with_pixels(cols: u16, rows: u16, xpixel: u16, ypixel: u16, term_env: &str) -> Result<Self> {
+    pub fn spawn_with_pixels(
+        cols: u16,
+        rows: u16,
+        xpixel: u16,
+        ypixel: u16,
+        term_env: &str,
+    ) -> Result<Self> {
         let winsize = Winsize {
             ws_row: rows,
             ws_col: cols,
@@ -84,7 +90,11 @@ impl Pty {
                 }
             }
             ForkResult::Parent { child } => {
-                info!("PTY spawned: pid={}, master_fd={}", child, master.as_raw_fd());
+                info!(
+                    "PTY spawned: pid={}, master_fd={}",
+                    child,
+                    master.as_raw_fd()
+                );
 
                 // Set master fd to non-blocking
                 let flags = nix::fcntl::fcntl(master.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)?;
@@ -136,7 +146,13 @@ impl Pty {
     }
 
     /// Change terminal size (TIOCSWINSZ) - with pixel size
-    pub fn set_size_with_pixels(&self, cols: u16, rows: u16, xpixel: u16, ypixel: u16) -> Result<()> {
+    pub fn set_size_with_pixels(
+        &self,
+        cols: u16,
+        rows: u16,
+        xpixel: u16,
+        ypixel: u16,
+    ) -> Result<()> {
         let winsize = Winsize {
             ws_row: rows,
             ws_col: cols,
@@ -498,9 +514,7 @@ fn get_uname() -> UnameInfo {
     // Use CStr::from_ptr for portable handling of utsname fields
     // (i8 on x86_64, u8 on aarch64)
     unsafe fn field_to_string(ptr: *const libc::c_char) -> String {
-        std::ffi::CStr::from_ptr(ptr)
-            .to_string_lossy()
-            .into_owned()
+        std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned()
     }
 
     unsafe {

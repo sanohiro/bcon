@@ -1893,9 +1893,10 @@ fn main() -> Result<()> {
 
         // === Pass 1.6: Search match highlight (one rect per match) ===
         if search_mode {
+            let current_match = term.current_search_match();
             for row in 0..grid.rows() {
                 let matches = term.get_search_matches_for_display_row(row);
-                for (start_col, end_col, is_current) in matches {
+                for &(start_col, end_col, match_idx) in matches {
                     let clamped_end = end_col.min(grid.cols());
                     if start_col >= clamped_end {
                         continue;
@@ -1903,6 +1904,7 @@ fn main() -> Result<()> {
                     let x = margin_x + start_col as f32 * cell_w;
                     let y = margin_y + row as f32 * cell_h;
                     let w = (clamped_end - start_col) as f32 * cell_w;
+                    let is_current = current_match == Some(match_idx);
                     let color = if is_current {
                         [1.0, 0.6, 0.0, 0.5] // Current match: orange
                     } else {
@@ -1926,11 +1928,13 @@ fn main() -> Result<()> {
             let row_selection = term.selection.as_ref().and_then(|s| s.cols_for_row(row, max_cols));
 
             // Pre-compute search matches for this row (avoids per-cell function call)
-            let row_search_matches: Vec<(usize, usize, bool)> = if search_mode {
+            // Returns slice reference - no allocation needed
+            let row_search_matches = if search_mode {
                 term.get_search_matches_for_display_row(row)
             } else {
-                Vec::new()
+                &[][..]
             };
+            let current_match_idx = term.current_search_match();
 
             // Underline rendering: batch consecutive cells with same style into runs
             let mut col = 0;
@@ -2170,8 +2174,9 @@ fn main() -> Result<()> {
 
                     // Search highlight - blend in linear space (uses pre-computed matches)
                     if search_mode {
-                        for &(start_col, end_col, is_current) in &row_search_matches {
+                        for &(start_col, end_col, match_idx) in row_search_matches {
                             if col >= start_col && col < end_col.min(grid.cols()) {
+                                let is_current = current_match_idx == Some(match_idx);
                                 let hl_color = if is_current {
                                     [1.0, 0.6, 0.0, 0.5] // Orange
                                 } else {

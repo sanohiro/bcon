@@ -52,9 +52,9 @@ fn parse_osc_color(data: &[u8]) -> Option<(u8, u8, u8)> {
         let parse_component = |s: &str| -> Option<u8> {
             let v = u16::from_str_radix(s, 16).ok()?;
             match s.len() {
-                4 => Some((v >> 8) as u8),  // 16-bit: use high byte
-                2 => Some(v as u8),          // 8-bit: use as-is
-                1 => Some((v as u8) * 17),   // 4-bit: expand
+                4 => Some((v >> 8) as u8), // 16-bit: use high byte
+                2 => Some(v as u8),        // 8-bit: use as-is
+                1 => Some((v as u8) * 17), // 4-bit: expand
                 _ => None,
             }
         };
@@ -307,7 +307,10 @@ impl<'a> Perform for Performer<'a> {
                         .and_then(|p| p.first().copied())
                         .unwrap_or(0) as u8;
                     self.grid.keyboard.modify_other_keys = level.min(2);
-                    trace!("modifyOtherKeys: level={}", self.grid.keyboard.modify_other_keys);
+                    trace!(
+                        "modifyOtherKeys: level={}",
+                        self.grid.keyboard.modify_other_keys
+                    );
                 }
             }
             ('u', [b'>']) => {
@@ -336,8 +339,8 @@ impl<'a> Perform for Performer<'a> {
                     .and_then(|p| p.first().copied())
                     .unwrap_or(1);
                 match mode {
-                    1 => self.grid.keyboard.kitty_flags = flags, // set
-                    2 => self.grid.keyboard.kitty_flags |= flags, // or
+                    1 => self.grid.keyboard.kitty_flags = flags,   // set
+                    2 => self.grid.keyboard.kitty_flags |= flags,  // or
                     3 => self.grid.keyboard.kitty_flags &= !flags, // not
                     _ => {}
                 }
@@ -407,28 +410,32 @@ impl<'a> Perform for Performer<'a> {
                         let width_px = self.grid.cols() as u32 * self.cell_width;
                         let height_px = self.grid.rows() as u32 * self.cell_height;
                         trace!("CSI 14 t: responding {}x{} pixels", width_px, height_px);
-                        *self.pty_response = format!(
-                            "\x1b[4;{};{}t",
-                            height_px, width_px
-                        ).into_bytes();
+                        *self.pty_response =
+                            format!("\x1b[4;{};{}t", height_px, width_px).into_bytes();
                     }
                     16 => {
                         // Report cell size in pixels
                         // Response: CSI 6 ; height ; width t
-                        trace!("CSI 16 t: responding cell {}x{}", self.cell_width, self.cell_height);
-                        *self.pty_response = format!(
-                            "\x1b[6;{};{}t",
-                            self.cell_height, self.cell_width
-                        ).into_bytes();
+                        trace!(
+                            "CSI 16 t: responding cell {}x{}",
+                            self.cell_width,
+                            self.cell_height
+                        );
+                        *self.pty_response =
+                            format!("\x1b[6;{};{}t", self.cell_height, self.cell_width)
+                                .into_bytes();
                     }
                     18 => {
                         // Report window size in characters
                         // Response: CSI 8 ; rows ; cols t
-                        trace!("CSI 18 t: responding {}x{} chars", self.grid.cols(), self.grid.rows());
-                        *self.pty_response = format!(
-                            "\x1b[8;{};{}t",
-                            self.grid.rows(), self.grid.cols()
-                        ).into_bytes();
+                        trace!(
+                            "CSI 18 t: responding {}x{} chars",
+                            self.grid.cols(),
+                            self.grid.rows()
+                        );
+                        *self.pty_response =
+                            format!("\x1b[8;{};{}t", self.grid.rows(), self.grid.cols())
+                                .into_bytes();
                     }
                     _ => {
                         trace!("XTWINOPS: unsupported operation {}", param0);
@@ -481,8 +488,12 @@ impl<'a> Perform for Performer<'a> {
 
     /// DCS sequence start
     fn hook(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
-        trace!("DCS hook: action='{}', intermediates={:?}, params={:?}",
-            action, intermediates, params.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
+        trace!(
+            "DCS hook: action='{}', intermediates={:?}, params={:?}",
+            action,
+            intermediates,
+            params.iter().map(|p| p.to_vec()).collect::<Vec<_>>()
+        );
 
         match (action, intermediates) {
             // Sixel: DCS q or DCS P q
@@ -838,9 +849,13 @@ impl<'a> Performer<'a> {
         const MAX_OSC52_PAYLOAD: usize = 10 * 1024 * 1024;
 
         // params[0] = "52", params[1] = selection type (e.g. "c"), params[2] = data
-        trace!("OSC 52: params.len()={}, params={:?}",
+        trace!(
+            "OSC 52: params.len()={}, params={:?}",
             params.len(),
-            params.iter().map(|p| String::from_utf8_lossy(p).to_string()).collect::<Vec<_>>()
+            params
+                .iter()
+                .map(|p| String::from_utf8_lossy(p).to_string())
+                .collect::<Vec<_>>()
         );
         if params.len() < 3 {
             trace!("OSC 52: params not enough, returning");
@@ -1014,7 +1029,10 @@ impl<'a> Performer<'a> {
                 } else {
                     None
                 };
-                trace!("Shell integration: command finished, exit_code={:?}", exit_code);
+                trace!(
+                    "Shell integration: command finished, exit_code={:?}",
+                    exit_code
+                );
                 self.grid.shell.last_exit_code = exit_code;
                 self.grid.shell.command_row = None;
             }

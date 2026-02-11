@@ -291,17 +291,15 @@ impl KittyDecoder {
             }
             KittyTransmission::File => {
                 // File path: data_buffer is path string
-                let path = String::from_utf8(raw_data)
-                    .map_err(|_| "invalid file path encoding")?;
+                let path = String::from_utf8(raw_data).map_err(|_| "invalid file path encoding")?;
                 let path = path.trim();
                 info!("Kitty: reading image from file: {}", path);
-                std::fs::read(path)
-                    .map_err(|e| format!("failed to read file '{}': {}", path, e))?
+                std::fs::read(path).map_err(|e| format!("failed to read file '{}': {}", path, e))?
             }
             KittyTransmission::TempFile => {
                 // Temporary file: data_buffer is path string, delete after reading
-                let path = String::from_utf8(raw_data)
-                    .map_err(|_| "invalid temp file path encoding")?;
+                let path =
+                    String::from_utf8(raw_data).map_err(|_| "invalid temp file path encoding")?;
                 let path = path.trim();
                 info!("Kitty: reading image from temp file: {}", path);
                 let data = std::fs::read(path)
@@ -314,8 +312,7 @@ impl KittyDecoder {
             }
             KittyTransmission::SharedMemory => {
                 // Shared memory: POSIX shm_open
-                let name = String::from_utf8(raw_data)
-                    .map_err(|_| "invalid shm name encoding")?;
+                let name = String::from_utf8(raw_data).map_err(|_| "invalid shm name encoding")?;
                 let name = name.trim();
                 info!("Kitty: reading image from shared memory: {}", name);
                 read_shared_memory(name)?
@@ -455,16 +452,13 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Read data from shared memory (POSIX shm)
 fn read_shared_memory(name: &str) -> Result<Vec<u8>, String> {
-    use std::os::unix::io::FromRawFd;
     use std::io::Read;
+    use std::os::unix::io::FromRawFd;
 
     // Get file descriptor with shm_open
-    let c_name = std::ffi::CString::new(name)
-        .map_err(|_| "invalid shm name")?;
+    let c_name = std::ffi::CString::new(name).map_err(|_| "invalid shm name")?;
 
-    let fd = unsafe {
-        libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0)
-    };
+    let fd = unsafe { libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0) };
 
     if fd < 0 {
         return Err(format!(
@@ -478,10 +472,7 @@ fn read_shared_memory(name: &str) -> Result<Vec<u8>, String> {
     let stat_result = unsafe { libc::fstat(fd, &mut stat) };
     if stat_result < 0 {
         unsafe { libc::close(fd) };
-        return Err(format!(
-            "fstat failed: {}",
-            std::io::Error::last_os_error()
-        ));
+        return Err(format!("fstat failed: {}", std::io::Error::last_os_error()));
     }
 
     let size = stat.st_size as usize;

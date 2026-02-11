@@ -140,26 +140,30 @@ const fn generate_palette() -> [[f32; 4]; 256] {
 
     // Helper for 6x6x6 color cube value
     const fn cube_val(v: u8) -> u8 {
-        if v == 0 { 0 } else { 55 + 40 * v }
+        if v == 0 {
+            0
+        } else {
+            55 + 40 * v
+        }
     }
 
     // Standard 16 colors (ANSI)
-    palette[0] = rgb(0, 0, 0);          // black
-    palette[1] = rgb(205, 0, 0);        // red
-    palette[2] = rgb(0, 205, 0);        // green
-    palette[3] = rgb(205, 205, 0);      // yellow
-    palette[4] = rgb(0, 0, 238);        // blue
-    palette[5] = rgb(205, 0, 205);      // magenta
-    palette[6] = rgb(0, 205, 205);      // cyan
-    palette[7] = rgb(229, 229, 229);    // white
-    palette[8] = rgb(127, 127, 127);    // bright black
-    palette[9] = rgb(255, 0, 0);        // bright red
-    palette[10] = rgb(0, 255, 0);       // bright green
-    palette[11] = rgb(255, 255, 0);     // bright yellow
-    palette[12] = rgb(92, 92, 255);     // bright blue
-    palette[13] = rgb(255, 0, 255);     // bright magenta
-    palette[14] = rgb(0, 255, 255);     // bright cyan
-    palette[15] = rgb(255, 255, 255);   // bright white
+    palette[0] = rgb(0, 0, 0); // black
+    palette[1] = rgb(205, 0, 0); // red
+    palette[2] = rgb(0, 205, 0); // green
+    palette[3] = rgb(205, 205, 0); // yellow
+    palette[4] = rgb(0, 0, 238); // blue
+    palette[5] = rgb(205, 0, 205); // magenta
+    palette[6] = rgb(0, 205, 205); // cyan
+    palette[7] = rgb(229, 229, 229); // white
+    palette[8] = rgb(127, 127, 127); // bright black
+    palette[9] = rgb(255, 0, 0); // bright red
+    palette[10] = rgb(0, 255, 0); // bright green
+    palette[11] = rgb(255, 255, 0); // bright yellow
+    palette[12] = rgb(92, 92, 255); // bright blue
+    palette[13] = rgb(255, 0, 255); // bright magenta
+    palette[14] = rgb(0, 255, 255); // bright cyan
+    palette[15] = rgb(255, 255, 255); // bright white
 
     // 216-color cube (16-231): 6x6x6 RGB values
     let mut i = 16usize;
@@ -563,31 +567,82 @@ impl Grid {
     // These provide backward compatibility during migration
 
     // TerminalModes
-    #[inline] pub fn cursor_visible(&self) -> bool { self.modes.cursor_visible }
-    #[inline] pub fn auto_wrap(&self) -> bool { self.modes.auto_wrap }
-    #[inline] pub fn application_cursor_keys(&self) -> bool { self.modes.application_cursor_keys }
-    #[inline] pub fn bracketed_paste(&self) -> bool { self.modes.bracketed_paste }
-    #[inline] pub fn mouse_mode(&self) -> MouseMode { self.modes.mouse_mode }
-    #[inline] pub fn mouse_sgr(&self) -> bool { self.modes.mouse_sgr }
-    #[inline] pub fn send_focus_events(&self) -> bool { self.modes.send_focus_events }
-    #[inline] pub fn synchronized_update(&self) -> bool { self.modes.synchronized_update }
+    #[inline]
+    pub fn cursor_visible(&self) -> bool {
+        self.modes.cursor_visible
+    }
+    #[inline]
+    pub fn auto_wrap(&self) -> bool {
+        self.modes.auto_wrap
+    }
+    #[inline]
+    pub fn application_cursor_keys(&self) -> bool {
+        self.modes.application_cursor_keys
+    }
+    #[inline]
+    pub fn bracketed_paste(&self) -> bool {
+        self.modes.bracketed_paste
+    }
+    #[inline]
+    pub fn mouse_mode(&self) -> MouseMode {
+        self.modes.mouse_mode
+    }
+    #[inline]
+    pub fn mouse_sgr(&self) -> bool {
+        self.modes.mouse_sgr
+    }
+    #[inline]
+    pub fn send_focus_events(&self) -> bool {
+        self.modes.send_focus_events
+    }
+    #[inline]
+    pub fn synchronized_update(&self) -> bool {
+        self.modes.synchronized_update
+    }
 
     // CursorAppearance
-    #[inline] pub fn cursor_style(&self) -> CursorStyle { self.cursor.style }
-    #[inline] pub fn cursor_blink(&self) -> bool { self.cursor.blink }
+    #[inline]
+    pub fn cursor_style(&self) -> CursorStyle {
+        self.cursor.style
+    }
+    #[inline]
+    pub fn cursor_blink(&self) -> bool {
+        self.cursor.blink
+    }
 
     // ShellState
-    #[inline] pub fn shell_prompt_row(&self) -> Option<usize> { self.shell.prompt_row }
-    #[inline] pub fn shell_command_row(&self) -> Option<usize> { self.shell.command_row }
-    #[inline] pub fn shell_last_exit_code(&self) -> Option<i32> { self.shell.last_exit_code }
+    #[inline]
+    pub fn shell_prompt_row(&self) -> Option<usize> {
+        self.shell.prompt_row
+    }
+    #[inline]
+    pub fn shell_command_row(&self) -> Option<usize> {
+        self.shell.command_row
+    }
+    #[inline]
+    pub fn shell_last_exit_code(&self) -> Option<i32> {
+        self.shell.last_exit_code
+    }
 
     // KeyboardState
-    #[inline] pub fn modify_other_keys(&self) -> u8 { self.keyboard.modify_other_keys }
-    #[inline] pub fn kitty_keyboard_flags(&self) -> u32 { self.keyboard.kitty_flags }
+    #[inline]
+    pub fn modify_other_keys(&self) -> u8 {
+        self.keyboard.modify_other_keys
+    }
+    #[inline]
+    pub fn kitty_keyboard_flags(&self) -> u32 {
+        self.keyboard.kitty_flags
+    }
 
     // DynamicColors
-    #[inline] pub fn osc_fg_color(&self) -> Option<(u8, u8, u8)> { self.colors.fg }
-    #[inline] pub fn osc_bg_color(&self) -> Option<(u8, u8, u8)> { self.colors.bg }
+    #[inline]
+    pub fn osc_fg_color(&self) -> Option<(u8, u8, u8)> {
+        self.colors.fg
+    }
+    #[inline]
+    pub fn osc_bg_color(&self) -> Option<(u8, u8, u8)> {
+        self.colors.bg
+    }
 
     /// Get reference to cell
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
@@ -1002,7 +1057,10 @@ impl Grid {
             for i in 0..n {
                 let start = i * self.cols;
                 // Reuse row buffer from pool if available
-                let mut row_cells = self.row_pool.pop().unwrap_or_else(|| Vec::with_capacity(self.cols));
+                let mut row_cells = self
+                    .row_pool
+                    .pop()
+                    .unwrap_or_else(|| Vec::with_capacity(self.cols));
                 row_cells.clear();
                 row_cells.extend_from_slice(&self.cells[start..start + self.cols]);
                 self.scrollback.push_back(row_cells);

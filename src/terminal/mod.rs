@@ -115,6 +115,8 @@ pub struct SearchState {
     pub matches: Vec<(usize, usize, usize)>,
     /// Current match index
     pub current_match: usize,
+    /// Matches grouped by row for fast lookup (row -> [(start_col, end_col, match_index)])
+    row_matches: HashMap<usize, Vec<(usize, usize, usize)>>,
 }
 
 impl SearchState {
@@ -123,6 +125,18 @@ impl SearchState {
             query: String::new(),
             matches: Vec::new(),
             current_match: 0,
+            row_matches: HashMap::new(),
+        }
+    }
+
+    /// Build row_matches index from matches
+    fn build_row_index(&mut self) {
+        self.row_matches.clear();
+        for (idx, &(row, start, end)) in self.matches.iter().enumerate() {
+            self.row_matches
+                .entry(row)
+                .or_insert_with(|| Vec::with_capacity(4))
+                .push((start, end, idx));
         }
     }
 
@@ -333,7 +347,12 @@ impl Terminal {
     }
 
     /// Initialize terminal with custom scrollback size and TERM setting
-    pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize, term_env: &str) -> Result<Self> {
+    pub fn with_scrollback(
+        cols: usize,
+        rows: usize,
+        max_scrollback: usize,
+        term_env: &str,
+    ) -> Result<Self> {
         let grid = Grid::with_scrollback(cols, rows, max_scrollback);
         let vt_parser = vte::Parser::new();
         let pty = Pty::spawn(cols as u16, rows as u16, term_env)?;
@@ -434,7 +453,10 @@ impl Terminal {
         // Resize PTY (with pixel size)
         let xpixel = (new_cols as u32 * self.cell_width) as u16;
         let ypixel = (new_rows as u32 * self.cell_height) as u16;
-        if let Err(e) = self.pty.resize_with_pixels(new_cols as u16, new_rows as u16, xpixel, ypixel) {
+        if let Err(e) =
+            self.pty
+                .resize_with_pixels(new_cols as u16, new_rows as u16, xpixel, ypixel)
+        {
             log::warn!("PTY resize failed: {}", e);
         }
 
@@ -907,14 +929,7 @@ impl Terminal {
             let seq = format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix);
             self.pty.write(seq.as_bytes())?;
         } else {
-            let bytes = [
-                0x1b,
-                b'[',
-                b'M',
-                cb + 32,
-                (cx as u8) + 32,
-                (cy as u8) + 32,
-            ];
+            let bytes = [0x1b, b'[', b'M', cb + 32, (cx as u8) + 32, (cy as u8) + 32];
             self.pty.write(&bytes)?;
         }
         Ok(())
@@ -1171,6 +1186,7 @@ impl Terminal {
         if let Some(ref mut s) = self.search {
             s.matches = matches;
             s.current_match = 0;
+            s.build_row_index();
         }
 
         info!(
@@ -1208,10 +1224,12 @@ impl Terminal {
     pub fn get_search_matches_for_display_row(
         &self,
         display_row: usize,
-    ) -> Vec<(usize, usize, bool)> {
+    ) -> &[(usize, usize, usize)] {
+        static EMPTY: [(usize, usize, usize); 0] = [];
+
         let search = match &self.search {
             Some(s) => s,
-            None => return Vec::new(),
+            None => return &EMPTY,
         };
 
         let scrollback_len = self.grid.scrollback_len();
@@ -1229,13 +1247,17 @@ impl Terminal {
             }
         };
 
+        // O(1) lookup instead of O(n) linear scan
         search
-            .matches
-            .iter()
-            .enumerate()
-            .filter(|(_, (row, _, _))| *row == abs_row)
-            .map(|(idx, (_, start, end))| (*start, *end, idx == search.current_match))
-            .collect()
+            .row_matches
+            .get(&abs_row)
+            .map(|v| v.as_slice())
+            .unwrap_or(&EMPTY)
+    }
+
+    /// Get current match index (for is_current check)
+    pub fn current_search_match(&self) -> Option<usize> {
+        self.search.as_ref().map(|s| s.current_match)
     }
 
     // ========== Copy mode ==========

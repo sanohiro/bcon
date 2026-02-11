@@ -273,7 +273,13 @@ impl SixelDecoder {
 
             self.palette[color_idx as usize] = (r, g, b);
             self.current_color = color_idx;
-            trace!("Sixel: color definition #{} = ({}, {}, {})", color_idx, r, g, b);
+            trace!(
+                "Sixel: color definition #{} = ({}, {}, {})",
+                color_idx,
+                r,
+                g,
+                b
+            );
         }
     }
 
