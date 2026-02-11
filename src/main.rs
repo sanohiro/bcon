@@ -811,6 +811,9 @@ fn main() -> Result<()> {
     let mut last_blink_toggle = std::time::Instant::now();
     const CURSOR_BLINK_INTERVAL_MS: u64 = 530; // ~530ms blink interval
 
+    // Previous cursor position (for FBO dirty tracking)
+    let mut prev_cursor_row: usize = 0;
+
     // Font size change request (currently log output only)
     let mut font_size_delta: i32 = 0;
 
@@ -1780,11 +1783,16 @@ fn main() -> Result<()> {
             config_bg
         };
 
-        // Mark cursor row as dirty (cursor moves independently of content)
+        // Mark cursor rows as dirty (cursor moves independently of content)
+        // Both current and previous cursor rows need redraw
         let cursor_row = term.grid.cursor_row;
         if cursor_row < term.grid.rows() {
             term.grid.mark_dirty(cursor_row);
         }
+        if prev_cursor_row != cursor_row && prev_cursor_row < term.grid.rows() {
+            term.grid.mark_dirty(prev_cursor_row);
+        }
+        prev_cursor_row = cursor_row;
 
         // Bind FBO for rendering
         fbo.bind(gl);
