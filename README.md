@@ -26,7 +26,7 @@ bcon is the **foundation layer**. Leave session management and multiplexing to t
 
 - **Sessions**: tmux, zellij, screen
 - **Files**: yazi, ranger
-- **Editors**: Neovim, Helix
+- **Editors**: Emacs, Neovim, Helix
 
 Following the Unix philosophy, bcon does one thing well: beautiful, fast rendering.
 
@@ -124,6 +124,33 @@ curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 # Install
 sudo apt install bcon
 ```
+
+After installation, choose one of these setup options:
+
+**Option 1: systemd Service (Recommended)**
+```bash
+# Generate system config
+sudo bcon --init-config=system           # Default
+sudo bcon --init-config=system,vim,jp    # Vim + Japanese
+sudo bcon --init-config=system,emacs,jp  # Emacs + Japanese
+
+# Replace getty on tty2 with bcon
+sudo systemctl disable getty@tty2
+sudo systemctl enable bcon@tty2
+sudo systemctl start bcon@tty2
+
+# Switch to bcon
+Ctrl+Alt+F2
+```
+
+**Option 2: Login Session (GDM/SDDM)**
+```bash
+# Generate user config
+bcon --init-config=vim,jp      # or emacs,jp
+```
+Then select "bcon" from the session dropdown on the login screen.
+
+See [Usage](#usage) section for detailed setup instructions.
 
 ### From source
 

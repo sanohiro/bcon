@@ -22,7 +22,7 @@ bcon はあくまで**土台**です。画面分割やセッション管理は�
 
 - **セッション管理**: tmux, zellij, screen
 - **ファイル操作**: yazi, ranger
-- **エディタ**: Neovim, Helix
+- **エディタ**: Emacs, Neovim, Helix
 
 Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく、速いレンダリング」に集中します。
 
@@ -122,6 +122,33 @@ curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 # インストール
 sudo apt install bcon
 ```
+
+インストール後、以下のいずれかを選択：
+
+**オプション 1: systemd サービス（推奨）**
+```bash
+# システム設定を生成
+sudo bcon --init-config=system           # デフォルト
+sudo bcon --init-config=system,vim,jp    # Vim + 日本語
+sudo bcon --init-config=system,emacs,jp  # Emacs + 日本語
+
+# tty2 の getty を bcon に置き換え
+sudo systemctl disable getty@tty2
+sudo systemctl enable bcon@tty2
+sudo systemctl start bcon@tty2
+
+# bcon に切り替え
+Ctrl+Alt+F2
+```
+
+**オプション 2: ログインセッション (GDM/SDDM)**
+```bash
+# ユーザー設定を生成
+bcon --init-config=vim,jp      # または emacs,jp
+```
+ログイン画面のセッション選択で「bcon」を選択。
+
+詳細は[使い方](#使い方)セクションを参照。
 
 ### ソースからビルド
 
