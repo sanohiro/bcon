@@ -1824,7 +1824,8 @@ fn main() -> Result<()> {
 
         // Determine if partial rendering is possible (no overlays active)
         // When overlays are active, we must render all rows for correctness
-        let partial_render = !has_overlays && !grid.is_all_dirty();
+        // DISABLED: FBO caching causes cursor trails - needs cursor to be rendered outside FBO
+        let partial_render = false; // !has_overlays && !grid.is_all_dirty();
 
         // === Pass 1: Background color (run-length encoded) ===
         // Combine consecutive cells with same background into single rectangles
