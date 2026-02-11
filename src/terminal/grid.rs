@@ -128,42 +128,67 @@ impl Color {
     }
 }
 
-/// Convert 256-color palette to RGBA
+/// Pre-computed 256-color palette as RGBA (compile-time generated)
+/// This avoids runtime computation for every color lookup.
+const fn generate_palette() -> [[f32; 4]; 256] {
+    let mut palette = [[0.0f32; 4]; 256];
+
+    // Helper to convert u8 RGB to normalized f32 RGBA
+    const fn rgb(r: u8, g: u8, b: u8) -> [f32; 4] {
+        [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+    }
+
+    // Helper for 6x6x6 color cube value
+    const fn cube_val(v: u8) -> u8 {
+        if v == 0 { 0 } else { 55 + 40 * v }
+    }
+
+    // Standard 16 colors (ANSI)
+    palette[0] = rgb(0, 0, 0);          // black
+    palette[1] = rgb(205, 0, 0);        // red
+    palette[2] = rgb(0, 205, 0);        // green
+    palette[3] = rgb(205, 205, 0);      // yellow
+    palette[4] = rgb(0, 0, 238);        // blue
+    palette[5] = rgb(205, 0, 205);      // magenta
+    palette[6] = rgb(0, 205, 205);      // cyan
+    palette[7] = rgb(229, 229, 229);    // white
+    palette[8] = rgb(127, 127, 127);    // bright black
+    palette[9] = rgb(255, 0, 0);        // bright red
+    palette[10] = rgb(0, 255, 0);       // bright green
+    palette[11] = rgb(255, 255, 0);     // bright yellow
+    palette[12] = rgb(92, 92, 255);     // bright blue
+    palette[13] = rgb(255, 0, 255);     // bright magenta
+    palette[14] = rgb(0, 255, 255);     // bright cyan
+    palette[15] = rgb(255, 255, 255);   // bright white
+
+    // 216-color cube (16-231): 6x6x6 RGB values
+    let mut i = 16usize;
+    while i < 232 {
+        let n = (i - 16) as u8;
+        let b_val = n % 6;
+        let g_val = (n / 6) % 6;
+        let r_val = n / 36;
+        palette[i] = rgb(cube_val(r_val), cube_val(g_val), cube_val(b_val));
+        i += 1;
+    }
+
+    // Grayscale (232-255): 24 shades from dark to light
+    let mut i = 232usize;
+    while i < 256 {
+        let v = (8 + 10 * (i - 232)) as u8;
+        palette[i] = rgb(v, v, v);
+        i += 1;
+    }
+
+    palette
+}
+
+static PALETTE_256: [[f32; 4]; 256] = generate_palette();
+
+/// Convert 256-color palette index to RGBA (O(1) table lookup)
+#[inline]
 fn index_to_rgba(idx: u8) -> [f32; 4] {
-    let (r, g, b) = match idx {
-        // Standard 16 colors (ANSI)
-        0 => (0, 0, 0),        // black
-        1 => (205, 0, 0),      // red
-        2 => (0, 205, 0),      // green
-        3 => (205, 205, 0),    // yellow
-        4 => (0, 0, 238),      // blue
-        5 => (205, 0, 205),    // magenta
-        6 => (0, 205, 205),    // cyan
-        7 => (229, 229, 229),  // white
-        8 => (127, 127, 127),  // bright black
-        9 => (255, 0, 0),      // bright red
-        10 => (0, 255, 0),     // bright green
-        11 => (255, 255, 0),   // bright yellow
-        12 => (92, 92, 255),   // bright blue
-        13 => (255, 0, 255),   // bright magenta
-        14 => (0, 255, 255),   // bright cyan
-        15 => (255, 255, 255), // bright white
-        // 216-color cube (16-231)
-        16..=231 => {
-            let n = idx - 16;
-            let b_val = n % 6;
-            let g_val = (n / 6) % 6;
-            let r_val = n / 36;
-            let to_255 = |v: u8| if v == 0 { 0u8 } else { 55 + 40 * v };
-            (to_255(r_val), to_255(g_val), to_255(b_val))
-        }
-        // Grayscale (232-255)
-        232..=255 => {
-            let v = 8 + 10 * (idx - 232);
-            (v, v, v)
-        }
-    };
-    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+    PALETTE_256[idx as usize]
 }
 
 /// Underline style (CSI 4:x m)
