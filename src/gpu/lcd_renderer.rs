@@ -248,7 +248,8 @@ const VERTICES_PER_GLYPH: usize = 4;
 /// 1 character = 6 indices (2 triangles)
 const INDICES_PER_GLYPH: usize = 6;
 /// Maximum characters per batch
-const MAX_GLYPHS: usize = 4096;
+/// Maximum glyphs per batch (32K supports 4K displays: ~240x135 cells)
+const MAX_GLYPHS: usize = 32768;
 
 /// LCD text renderer
 pub struct LcdTextRenderer {

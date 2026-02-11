@@ -18,8 +18,8 @@ const VERTEX_FLOATS: usize = 8;
 const VERTICES_PER_GLYPH: usize = 4;
 /// 1 character = 6 indices (2 triangles)
 const INDICES_PER_GLYPH: usize = 6;
-/// Maximum characters per batch
-const MAX_GLYPHS: usize = 4096;
+/// Maximum characters per batch (32K supports 4K displays)
+const MAX_GLYPHS: usize = 32768;
 
 /// Text renderer
 pub struct TextRenderer {
