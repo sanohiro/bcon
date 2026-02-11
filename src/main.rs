@@ -19,6 +19,7 @@ mod drm;
 mod font;
 mod gpu;
 mod input;
+mod session;
 mod terminal;
 
 use anyhow::{anyhow, Context, Result};

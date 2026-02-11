@@ -1,6 +1,6 @@
 [package]
 name = "bcon"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Hironobu Sano"]
 description = "GPU-accelerated terminal emulator for Linux console"
@@ -66,6 +66,14 @@ libc = "0.2"
 nix = { version = "0.27", features = ["term", "ioctl", "fs", "process", "signal"] }
 memmap2 = "0.9"
 bitflags = "2.4"
+
+# Session management (optional - enables running without root)
+# TODO: Enable when libseat integration is complete
+# libseat = { version = "0.2", optional = true }
+
+# [features]
+# default = []
+# seatd = ["libseat"]
 
 # [dev-dependencies]
 # criterion = "0.5"
