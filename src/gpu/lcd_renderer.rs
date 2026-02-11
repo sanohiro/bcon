@@ -480,12 +480,15 @@ impl LcdTextRenderer {
         let [fr, fg_c, fb, fa] = fg;
         let [br, bg_c, bb] = bg;
 
-        // 4 vertices: top-left, top-right, bottom-right, bottom-left
+        // 4 vertices in one extend (reduces function call overhead)
         // Each vertex: pos(2) + uv(2) + fg(4) + bg(3) = 11 floats
-        self.vertices.extend_from_slice(&[gx, gy, u0, v0, fr, fg_c, fb, fa, br, bg_c, bb]);
-        self.vertices.extend_from_slice(&[gx + gw, gy, u1, v0, fr, fg_c, fb, fa, br, bg_c, bb]);
-        self.vertices.extend_from_slice(&[gx + gw, gy + gh, u1, v1, fr, fg_c, fb, fa, br, bg_c, bb]);
-        self.vertices.extend_from_slice(&[gx, gy + gh, u0, v1, fr, fg_c, fb, fa, br, bg_c, bb]);
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            gx,      gy,      u0, v0, fr, fg_c, fb, fa, br, bg_c, bb,  // top-left
+            gx + gw, gy,      u1, v0, fr, fg_c, fb, fa, br, bg_c, bb,  // top-right
+            gx + gw, gy + gh, u1, v1, fr, fg_c, fb, fa, br, bg_c, bb,  // bottom-right
+            gx,      gy + gh, u0, v1, fr, fg_c, fb, fa, br, bg_c, bb,  // bottom-left
+        ]);
 
         self.glyph_count += 1;
     }
@@ -522,10 +525,14 @@ impl LcdTextRenderer {
         let [fr, fg_c, fb, fa] = fg;
         let [br, bg_c, bb] = bg;
 
-        self.vertices.extend_from_slice(&[x, y, u, v, fr, fg_c, fb, fa, br, bg_c, bb]);
-        self.vertices.extend_from_slice(&[x + w, y, u, v, fr, fg_c, fb, fa, br, bg_c, bb]);
-        self.vertices.extend_from_slice(&[x + w, y + h, u, v, fr, fg_c, fb, fa, br, bg_c, bb]);
-        self.vertices.extend_from_slice(&[x, y + h, u, v, fr, fg_c, fb, fa, br, bg_c, bb]);
+        // 4 vertices in one extend (reduces function call overhead)
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            x,     y,     u, v, fr, fg_c, fb, fa, br, bg_c, bb,  // top-left
+            x + w, y,     u, v, fr, fg_c, fb, fa, br, bg_c, bb,  // top-right
+            x + w, y + h, u, v, fr, fg_c, fb, fa, br, bg_c, bb,  // bottom-right
+            x,     y + h, u, v, fr, fg_c, fb, fa, br, bg_c, bb,  // bottom-left
+        ]);
 
         self.glyph_count += 1;
     }

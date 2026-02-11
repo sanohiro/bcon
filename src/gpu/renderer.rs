@@ -157,19 +157,14 @@ impl TextRenderer {
 
             let [r, g, b, a] = color;
 
-            // 4 vertices: top-left, top-right, bottom-right, bottom-left
-            // Top-left
-            self.vertices
-                .extend_from_slice(&[gx, gy, u0, v0, r, g, b, a]);
-            // Top-right
-            self.vertices
-                .extend_from_slice(&[gx + gw, gy, u1, v0, r, g, b, a]);
-            // Bottom-right
-            self.vertices
-                .extend_from_slice(&[gx + gw, gy + gh, u1, v1, r, g, b, a]);
-            // Bottom-left
-            self.vertices
-                .extend_from_slice(&[gx, gy + gh, u0, v1, r, g, b, a]);
+            // 4 vertices in one extend (reduces function call overhead)
+            #[rustfmt::skip]
+            self.vertices.extend_from_slice(&[
+                gx,      gy,      u0, v0, r, g, b, a,  // top-left
+                gx + gw, gy,      u1, v0, r, g, b, a,  // top-right
+                gx + gw, gy + gh, u1, v1, r, g, b, a,  // bottom-right
+                gx,      gy + gh, u0, v1, r, g, b, a,  // bottom-left
+            ]);
 
             self.glyph_count += 1;
             cursor_x += glyph.advance;
@@ -211,15 +206,14 @@ impl TextRenderer {
 
         let [r, g, b, a] = color;
 
-        // 4 vertices: top-left, top-right, bottom-right, bottom-left
-        self.vertices
-            .extend_from_slice(&[gx, gy, u0, v0, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[gx + gw, gy, u1, v0, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[gx + gw, gy + gh, u1, v1, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[gx, gy + gh, u0, v1, r, g, b, a]);
+        // 4 vertices in one extend (reduces function call overhead)
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            gx,      gy,      u0, v0, r, g, b, a,  // top-left
+            gx + gw, gy,      u1, v0, r, g, b, a,  // top-right
+            gx + gw, gy + gh, u1, v1, r, g, b, a,  // bottom-right
+            gx,      gy + gh, u0, v1, r, g, b, a,  // bottom-left
+        ]);
 
         self.glyph_count += 1;
     }
@@ -278,15 +272,14 @@ impl TextRenderer {
 
         let [r, g, b, a] = color;
 
-        // 4 vertices: top-left, top-right, bottom-right, bottom-left
-        self.vertices
-            .extend_from_slice(&[gx, gy, u0, v0, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[gx + gw, gy, u1, v0, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[gx + gw, gy + gh, u1, v1, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[gx, gy + gh, u0, v1, r, g, b, a]);
+        // 4 vertices in one extend (reduces function call overhead)
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            gx,      gy,      u0, v0, r, g, b, a,  // top-left
+            gx + gw, gy,      u1, v0, r, g, b, a,  // top-right
+            gx + gw, gy + gh, u1, v1, r, g, b, a,  // bottom-right
+            gx,      gy + gh, u0, v1, r, g, b, a,  // bottom-left
+        ]);
 
         self.glyph_count += 1;
     }
@@ -311,13 +304,14 @@ impl TextRenderer {
         let (u, v) = atlas.solid_uv();
         let [r, g, b, a] = color;
 
-        self.vertices.extend_from_slice(&[x, y, u, v, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[x + w, y, u, v, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[x + w, y + h, u, v, r, g, b, a]);
-        self.vertices
-            .extend_from_slice(&[x, y + h, u, v, r, g, b, a]);
+        // 4 vertices in one extend (reduces function call overhead)
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            x,     y,     u, v, r, g, b, a,  // top-left
+            x + w, y,     u, v, r, g, b, a,  // top-right
+            x + w, y + h, u, v, r, g, b, a,  // bottom-right
+            x,     y + h, u, v, r, g, b, a,  // bottom-left
+        ]);
 
         self.glyph_count += 1;
     }
@@ -509,33 +503,20 @@ impl CurlyRenderer {
         }
 
         let [r, g, b, a] = color;
-        let rect = [x, y, w, h];
-        let params = [amplitude, wavelength, thickness, base_y];
 
-        // 4 vertices
-        // Top-left
-        self.vertices.extend_from_slice(&[x, y]);
-        self.vertices.extend_from_slice(&rect);
-        self.vertices.extend_from_slice(&[r, g, b, a]);
-        self.vertices.extend_from_slice(&params);
-
-        // Top-right
-        self.vertices.extend_from_slice(&[x + w, y]);
-        self.vertices.extend_from_slice(&rect);
-        self.vertices.extend_from_slice(&[r, g, b, a]);
-        self.vertices.extend_from_slice(&params);
-
-        // Bottom-right
-        self.vertices.extend_from_slice(&[x + w, y + h]);
-        self.vertices.extend_from_slice(&rect);
-        self.vertices.extend_from_slice(&[r, g, b, a]);
-        self.vertices.extend_from_slice(&params);
-
-        // Bottom-left
-        self.vertices.extend_from_slice(&[x, y + h]);
-        self.vertices.extend_from_slice(&rect);
-        self.vertices.extend_from_slice(&[r, g, b, a]);
-        self.vertices.extend_from_slice(&params);
+        // 4 vertices in one extend (reduces function call overhead)
+        // Each vertex: pos(2) + rect(4) + color(4) + params(4) = 14 floats
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            // top-left
+            x, y,           x, y, w, h,  r, g, b, a,  amplitude, wavelength, thickness, base_y,
+            // top-right
+            x + w, y,       x, y, w, h,  r, g, b, a,  amplitude, wavelength, thickness, base_y,
+            // bottom-right
+            x + w, y + h,   x, y, w, h,  r, g, b, a,  amplitude, wavelength, thickness, base_y,
+            // bottom-left
+            x, y + h,       x, y, w, h,  r, g, b, a,  amplitude, wavelength, thickness, base_y,
+        ]);
 
         self.run_count += 1;
     }

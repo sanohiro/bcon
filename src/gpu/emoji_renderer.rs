@@ -236,11 +236,14 @@ impl EmojiRenderer {
         let u1 = uv_x + uv_w;
         let v1 = uv_y + uv_h;
 
-        // 4 vertices: top-left, top-right, bottom-right, bottom-left
-        self.vertices.extend_from_slice(&[x, y, u0, v0]);
-        self.vertices.extend_from_slice(&[x + w, y, u1, v0]);
-        self.vertices.extend_from_slice(&[x + w, y + h, u1, v1]);
-        self.vertices.extend_from_slice(&[x, y + h, u0, v1]);
+        // 4 vertices in one extend (reduces function call overhead)
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            x,     y,     u0, v0,  // top-left
+            x + w, y,     u1, v0,  // top-right
+            x + w, y + h, u1, v1,  // bottom-right
+            x,     y + h, u0, v1,  // bottom-left
+        ]);
 
         self.glyph_count += 1;
     }

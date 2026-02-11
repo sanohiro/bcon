@@ -134,20 +134,15 @@ impl UiRenderer {
         let hh = h / 2.0;
         let [r, g, b, a] = color;
 
-        // 4 vertices: top-left, top-right, bottom-right, bottom-left
-        // Each vertex has the same center, half_size, radius, color
-        // Top-left
-        self.vertices
-            .extend_from_slice(&[x, y, cx, cy, hw, hh, radius, r, g, b, a]);
-        // Top-right
-        self.vertices
-            .extend_from_slice(&[x + w, y, cx, cy, hw, hh, radius, r, g, b, a]);
-        // Bottom-right
-        self.vertices
-            .extend_from_slice(&[x + w, y + h, cx, cy, hw, hh, radius, r, g, b, a]);
-        // Bottom-left
-        self.vertices
-            .extend_from_slice(&[x, y + h, cx, cy, hw, hh, radius, r, g, b, a]);
+        // 4 vertices in one extend (reduces function call overhead)
+        // Each vertex: pos(2) + center(2) + half_size(2) + radius(1) + color(4) = 11 floats
+        #[rustfmt::skip]
+        self.vertices.extend_from_slice(&[
+            x,     y,     cx, cy, hw, hh, radius, r, g, b, a,  // top-left
+            x + w, y,     cx, cy, hw, hh, radius, r, g, b, a,  // top-right
+            x + w, y + h, cx, cy, hw, hh, radius, r, g, b, a,  // bottom-right
+            x,     y + h, cx, cy, hw, hh, radius, r, g, b, a,  // bottom-left
+        ]);
 
         self.rect_count += 1;
     }
