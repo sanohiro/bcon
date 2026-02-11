@@ -14,7 +14,7 @@ pub mod renderer;
 pub mod shader;
 pub mod ui_renderer;
 
-pub use context::{EglContext, GbmDevice, GbmSurface, GlRenderer};
+pub use context::{EglContext, GbmDevice, GbmSurface, GlEsVersion, GlRenderer};
 pub use emoji_renderer::EmojiRenderer;
 pub use fbo::Fbo;
 pub use image_renderer::ImageRenderer;

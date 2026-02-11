@@ -20,8 +20,8 @@ pub struct GbmDevice {
 impl GbmDevice {
     /// Create GBM device from DRM file descriptor
     pub fn new(drm_file: std::fs::File) -> Result<Self> {
-        let device =
-            gbm::Device::new(drm_file).map_err(|e| anyhow!("Failed to create GBM device: {:?}", e))?;
+        let device = gbm::Device::new(drm_file)
+            .map_err(|e| anyhow!("Failed to create GBM device: {:?}", e))?;
         info!("GBM device created");
         Ok(Self { device })
     }
@@ -128,7 +128,9 @@ impl EglContext {
         };
 
         // Initialize EGL
-        instance.initialize(display).context("Failed to initialize EGL")?;
+        instance
+            .initialize(display)
+            .context("Failed to initialize EGL")?;
 
         // Get version info
         if let Ok(version_str) = instance.query_string(Some(display), egl::VERSION) {
@@ -246,9 +248,48 @@ impl Drop for EglContext {
     }
 }
 
+/// OpenGL ES version
+#[derive(Clone, Copy, Debug)]
+pub struct GlEsVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl GlEsVersion {
+    /// Parse version from GL_VERSION string (e.g., "OpenGL ES 3.1 Mesa 23.0.0")
+    fn parse(version_str: &str) -> Self {
+        // Look for "ES X.Y" pattern
+        let default = Self { major: 3, minor: 0 };
+
+        let es_pos = version_str.find("ES ");
+        if let Some(pos) = es_pos {
+            let after_es = &version_str[pos + 3..];
+            let version_part: String = after_es
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+
+            let parts: Vec<&str> = version_part.split('.').collect();
+            if parts.len() >= 2 {
+                if let (Ok(major), Ok(minor)) = (parts[0].parse(), parts[1].parse()) {
+                    return Self { major, minor };
+                }
+            }
+        }
+
+        default
+    }
+
+    /// Check if ES 3.1+ (supports buffer_storage)
+    pub fn supports_buffer_storage(&self) -> bool {
+        self.major > 3 || (self.major == 3 && self.minor >= 1)
+    }
+}
+
 /// OpenGL ES renderer
 pub struct GlRenderer {
     gl: glow::Context,
+    es_version: GlEsVersion,
 }
 
 impl GlRenderer {
@@ -256,17 +297,26 @@ impl GlRenderer {
     pub fn new(egl: &EglContext) -> Result<Self> {
         let gl = unsafe { glow::Context::from_loader_function(|name| egl.get_proc_address(name)) };
 
-        // Display OpenGL ES info
-        unsafe {
+        // Display OpenGL ES info and parse version
+        let es_version = unsafe {
             let version = gl.get_parameter_string(glow::VERSION);
             let renderer = gl.get_parameter_string(glow::RENDERER);
             let vendor = gl.get_parameter_string(glow::VENDOR);
             info!("OpenGL ES: {}", version);
             info!("Renderer: {}", renderer);
             info!("Vendor: {}", vendor);
-        }
 
-        Ok(Self { gl })
+            let es_ver = GlEsVersion::parse(&version);
+            info!(
+                "Detected ES {}.{} (buffer_storage: {})",
+                es_ver.major,
+                es_ver.minor,
+                es_ver.supports_buffer_storage()
+            );
+            es_ver
+        };
+
+        Ok(Self { gl, es_version })
     }
 
     /// Clear screen (fill with solid color)
@@ -288,5 +338,10 @@ impl GlRenderer {
     #[allow(dead_code)]
     pub fn gl(&self) -> &glow::Context {
         &self.gl
+    }
+
+    /// Get ES version
+    pub fn es_version(&self) -> GlEsVersion {
+        self.es_version
     }
 }
