@@ -645,7 +645,7 @@ fn main() -> Result<()> {
     // Create LCD text renderer (FreeType + linear color space compositing)
     // No shaping: FreeType provides hinted glyphs
     let mut text_renderer =
-        gpu::LcdTextRenderer::new(gl).context("Failed to initialize LCD text renderer")?;
+        gpu::LcdTextRendererInstanced::new(gl).context("Failed to initialize LCD text renderer")?;
     text_renderer.set_subpixel_bgr(subpixel_bgr);
     text_renderer.set_gamma(cfg.font.lcd_gamma);
     text_renderer.set_stem_darkening(cfg.font.lcd_stem_darkening);
