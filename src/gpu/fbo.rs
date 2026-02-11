@@ -311,7 +311,11 @@ fn compile_shader(gl: &glow::Context, shader_type: u32, source: &str) -> Result<
                 glow::FRAGMENT_SHADER => "fragment",
                 _ => "unknown",
             };
-            return Err(anyhow!("{} shader compile failed (fbo): {}", type_name, log));
+            return Err(anyhow!(
+                "{} shader compile failed (fbo): {}",
+                type_name,
+                log
+            ));
         }
 
         Ok(shader)

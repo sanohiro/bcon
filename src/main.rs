@@ -671,6 +671,10 @@ fn main() -> Result<()> {
     let mut curly_renderer =
         gpu::CurlyRenderer::new(gl).context("Failed to initialize curly renderer")?;
 
+    // Create FBO for cached rendering (enables partial updates)
+    let mut fbo = gpu::Fbo::new(gl, display_config.width, display_config.height)
+        .context("Failed to initialize FBO")?;
+
     info!("Phase 2 initialization complete");
 
     // Phase 3: Terminal initialization
@@ -1768,14 +1772,18 @@ fn main() -> Result<()> {
         }
         needs_redraw = false;
 
-        // Render screen
+        // Render screen to FBO
         // Use OSC 11 dynamic background if set, otherwise config background
         let bg_color = if let Some((r, g, b)) = term.grid.colors.bg {
             (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
         } else {
             config_bg
         };
-        renderer.clear(bg_color.0, bg_color.1, bg_color.2, 1.0);
+
+        // Bind FBO for rendering
+        fbo.bind(gl);
+        fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
+
         text_renderer.begin();
         text_renderer.set_bg_color(bg_color.0, bg_color.1, bg_color.2);
         emoji_renderer.begin();
@@ -2766,6 +2774,10 @@ fn main() -> Result<()> {
             }
         }
 
+        // Unbind FBO and blit to screen
+        fbo.unbind(gl);
+        fbo.blit_to_screen(gl, screen_w, screen_h);
+
         // Buffer swap (skip during Synchronized Update mode or when VT switched away)
         // CSI ? 2026 h starts buffering, CSI ? 2026 l displays all at once
         if !term.is_synchronized_update() && drm_master_held {
@@ -2789,9 +2801,11 @@ fn main() -> Result<()> {
     drop(keyboard);
 
     // Resource cleanup
+    fbo.destroy(gl);
     emoji_renderer.destroy(gl);
     image_renderer.destroy(gl);
     ui_renderer.destroy(gl);
+    curly_renderer.destroy(gl);
     text_renderer.destroy(gl);
     glyph_atlas.destroy(gl);
     emoji_atlas.destroy(gl);
