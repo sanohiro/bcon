@@ -2460,29 +2460,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // Draw mouse cursor (small white rectangle)
-        {
-            let cursor_size = 8.0_f32;
-            let mx = mouse_x as f32;
-            let my = mouse_y as f32;
-            // Crosshair style
-            text_renderer.push_rect(
-                mx - cursor_size / 2.0,
-                my - 1.0,
-                cursor_size,
-                2.0,
-                [1.0, 1.0, 1.0, 0.9],
-                &glyph_atlas,
-            );
-            text_renderer.push_rect(
-                mx - 1.0,
-                my - cursor_size / 2.0,
-                2.0,
-                cursor_size,
-                [1.0, 1.0, 1.0, 0.9],
-                &glyph_atlas,
-            );
-        }
+        // Mouse cursor is drawn after FBO blit (outside FBO cache)
 
         // === Pass 1: Text rendering (grid + preedit + cursor) ===
         glyph_atlas.upload_if_dirty(gl);
@@ -2813,6 +2791,32 @@ fn main() -> Result<()> {
         // Unbind FBO and blit to screen
         fbo.unbind(gl);
         fbo.blit_to_screen(gl, screen_w, screen_h);
+
+        // Draw mouse cursor directly to screen (outside FBO cache)
+        {
+            let cursor_size = 8.0_f32;
+            let mx = mouse_x as f32;
+            let my = mouse_y as f32;
+            text_renderer.begin();
+            // Crosshair style
+            text_renderer.push_rect(
+                mx - cursor_size / 2.0,
+                my - 1.0,
+                cursor_size,
+                2.0,
+                [1.0, 1.0, 1.0, 0.9],
+                &glyph_atlas,
+            );
+            text_renderer.push_rect(
+                mx - 1.0,
+                my - cursor_size / 2.0,
+                2.0,
+                cursor_size,
+                [1.0, 1.0, 1.0, 0.9],
+                &glyph_atlas,
+            );
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
 
         // Buffer swap (skip during Synchronized Update mode or when VT switched away)
         // CSI ? 2026 h starts buffering, CSI ? 2026 l displays all at once
