@@ -41,6 +41,21 @@ fn default_clipboard_path() -> String {
     }
 }
 
+/// Check if buffer contains ESC _ (APC start sequence)
+/// Manual loop is faster than windows(2).any() for small patterns
+#[inline]
+fn has_esc_underscore(buf: &[u8]) -> bool {
+    if buf.len() < 2 {
+        return false;
+    }
+    for i in 0..buf.len() - 1 {
+        if buf[i] == 0x1B && buf[i + 1] == b'_' {
+            return true;
+        }
+    }
+    false
+}
+
 /// Copy mode state
 pub struct CopyModeState {
     /// Copy mode cursor row (display coordinates)
@@ -383,6 +398,26 @@ impl Terminal {
         self.cell_height
     }
 
+    // ========== Dirty tracking ==========
+
+    /// Check if any row needs redraw
+    #[inline]
+    pub fn has_dirty_rows(&self) -> bool {
+        self.grid.has_dirty_rows()
+    }
+
+    /// Clear all dirty flags (call after rendering)
+    #[inline]
+    pub fn clear_dirty(&mut self) {
+        self.grid.clear_dirty();
+    }
+
+    /// Mark all rows as dirty (for full screen redraw)
+    #[inline]
+    pub fn mark_all_dirty(&mut self) {
+        self.grid.mark_all_dirty();
+    }
+
     /// Resize terminal (when font size changes)
     pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
         info!(
@@ -427,8 +462,9 @@ impl Terminal {
 
         // Fast path: if already in APC state or buffer contains ESC _, use slow path
         // This handles the rare APC (Kitty graphics) case
+        // Use manual loop instead of windows(2).any() to avoid iterator overhead
         let has_apc = matches!(self.apc_state, ApcState::InApc | ApcState::ApcEscape)
-            || self.read_buf[..n].windows(2).any(|w| w == [0x1B, b'_']);
+            || has_esc_underscore(&self.read_buf[..n]);
 
         if has_apc {
             // Slow path: byte-by-byte for APC handling

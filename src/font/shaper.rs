@@ -31,6 +31,12 @@ pub struct TextShaper {
     #[allow(dead_code)]
     face_cjk: Option<rustybuzz::Face<'static>>,
     features: Vec<rustybuzz::Feature>,
+    /// Reusable buffer: result list
+    result_buf: Vec<(usize, ShapedGlyph)>,
+    /// Reusable buffer: segment characters
+    segment_chars_buf: Vec<char>,
+    /// Reusable buffer: segment column positions
+    segment_cols_buf: Vec<usize>,
 }
 
 impl TextShaper {
@@ -54,6 +60,9 @@ impl TextShaper {
             face_main,
             face_cjk,
             features,
+            result_buf: Vec::with_capacity(256),
+            segment_chars_buf: Vec::with_capacity(128),
+            segment_cols_buf: Vec::with_capacity(128),
         })
     }
 
@@ -70,11 +79,11 @@ impl TextShaper {
         font_main: &Font,
     ) -> Vec<(usize, ShapedGlyph)> {
         let cols = grid.cols();
-        let mut result = Vec::new();
 
-        // For collecting consecutive segments
-        let mut segment_chars: Vec<char> = Vec::new();
-        let mut segment_cols: Vec<usize> = Vec::new();
+        // Clear and reuse internal buffers
+        self.result_buf.clear();
+        self.segment_chars_buf.clear();
+        self.segment_cols_buf.clear();
 
         let mut col = 0;
         while col < cols {
@@ -83,7 +92,7 @@ impl TextShaper {
             // Skip continuation cells (width=0), space, NUL
             if cell.width == 0 {
                 // Flush if segment exists
-                self.flush_segment(&mut segment_chars, &mut segment_cols, &mut result);
+                self.flush_segment_internal();
                 col += 1;
                 continue;
             }
@@ -92,15 +101,15 @@ impl TextShaper {
 
             if ch == ' ' || ch == '\0' {
                 // Flush if segment exists
-                self.flush_segment(&mut segment_chars, &mut segment_cols, &mut result);
+                self.flush_segment_internal();
                 col += 1;
                 continue;
             }
 
             // Wide character (width=2) -> pass through without shaping
             if cell.width == 2 {
-                self.flush_segment(&mut segment_chars, &mut segment_cols, &mut result);
-                result.push((
+                self.flush_segment_internal();
+                self.result_buf.push((
                     col,
                     ShapedGlyph {
                         key: GlyphKey {
@@ -118,8 +127,8 @@ impl TextShaper {
 
             // No glyph in main font -> pass through
             if font_main.lookup_glyph_index(ch) == 0 {
-                self.flush_segment(&mut segment_chars, &mut segment_cols, &mut result);
-                result.push((
+                self.flush_segment_internal();
+                self.result_buf.push((
                     col,
                     ShapedGlyph {
                         key: GlyphKey {
@@ -136,49 +145,35 @@ impl TextShaper {
             }
 
             // Half-width character in main font -> add to segment
-            segment_chars.push(ch);
-            segment_cols.push(col);
+            self.segment_chars_buf.push(ch);
+            self.segment_cols_buf.push(col);
             col += 1;
         }
 
         // Flush remaining segment at end of line
-        self.flush_segment(&mut segment_chars, &mut segment_cols, &mut result);
+        self.flush_segment_internal();
 
-        result
+        // Return ownership of result (buffer will be reused on next call)
+        std::mem::take(&mut self.result_buf)
     }
 
-    /// Shape collected consecutive segment and add to result
-    fn flush_segment(
-        &mut self,
-        chars: &mut Vec<char>,
-        cols: &mut Vec<usize>,
-        result: &mut Vec<(usize, ShapedGlyph)>,
-    ) {
-        if chars.is_empty() {
+    /// Shape collected consecutive segment using internal buffers
+    fn flush_segment_internal(&mut self) {
+        if self.segment_chars_buf.is_empty() {
             return;
         }
 
-        let shaped = self.shape_segment(chars, cols);
-        result.extend(shaped);
-
-        chars.clear();
-        cols.clear();
-    }
-
-    /// Shape consecutive half-width character segment
-    fn shape_segment(&mut self, chars: &[char], cols: &[usize]) -> Vec<(usize, ShapedGlyph)> {
         let mut buffer = rustybuzz::UnicodeBuffer::new();
 
         // Add each character with cluster=column number
-        for (i, &ch) in chars.iter().enumerate() {
-            buffer.add(ch, cols[i] as u32);
+        for (i, &ch) in self.segment_chars_buf.iter().enumerate() {
+            buffer.add(ch, self.segment_cols_buf[i] as u32);
         }
 
         // Execute shaping
         let glyph_buffer = rustybuzz::shape(&self.face_main, &self.features, buffer);
 
         let infos = glyph_buffer.glyph_infos();
-        let mut result = Vec::with_capacity(infos.len());
 
         for (i, info) in infos.iter().enumerate() {
             let glyph_id = info.glyph_id as u16;
@@ -189,21 +184,21 @@ impl TextShaper {
                 infos[i + 1].cluster
             } else {
                 // Last glyph: columns to segment end
-                // Last element of cols + 1 is segment end
-                (cols.last().unwrap() + 1) as u32
+                (self.segment_cols_buf.last().unwrap() + 1) as u32
             };
 
             let cell_span = (next_cluster - cluster).max(1) as u8;
 
             // Identify original character (cluster is column number)
-            let ch = chars
+            let ch = self
+                .segment_chars_buf
                 .iter()
-                .zip(cols.iter())
+                .zip(self.segment_cols_buf.iter())
                 .find(|(_, &c)| c as u32 == cluster)
                 .map(|(&ch, _)| ch)
                 .unwrap_or(' ');
 
-            result.push((
+            self.result_buf.push((
                 cluster as usize,
                 ShapedGlyph {
                     key: GlyphKey {
@@ -217,6 +212,7 @@ impl TextShaper {
             ));
         }
 
-        result
+        self.segment_chars_buf.clear();
+        self.segment_cols_buf.clear();
     }
 }

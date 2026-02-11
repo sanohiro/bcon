@@ -52,6 +52,8 @@ const VERTICES_PER_IMAGE: usize = 4;
 const INDICES_PER_IMAGE: usize = 6;
 /// Maximum images per batch
 const MAX_IMAGES: usize = 64;
+/// Maximum cached textures (LRU eviction when exceeded)
+const MAX_CACHED_TEXTURES: usize = 128;
 
 /// Image shader
 struct ImageShader {
@@ -127,6 +129,8 @@ pub struct ImageRenderer {
     ebo: glow::Buffer,
     /// Texture cache (image ID -> texture)
     textures: HashMap<u32, glow::Texture>,
+    /// LRU order (most recently used at end)
+    lru_order: Vec<u32>,
     /// Draw queue
     draw_queue: Vec<DrawCall>,
 }
@@ -192,6 +196,7 @@ impl ImageRenderer {
                 vbo,
                 ebo,
                 textures: HashMap::new(),
+                lru_order: Vec::with_capacity(MAX_CACHED_TEXTURES),
                 draw_queue: Vec::new(),
             })
         }
@@ -200,7 +205,20 @@ impl ImageRenderer {
     /// Upload image texture
     pub fn upload_image(&mut self, gl: &glow::Context, image: &TerminalImage) {
         if self.textures.contains_key(&image.id) {
+            // Already cached - update LRU order
+            self.touch_lru(image.id);
             return;
+        }
+
+        // Evict oldest textures if cache is full
+        while self.textures.len() >= MAX_CACHED_TEXTURES && !self.lru_order.is_empty() {
+            let oldest_id = self.lru_order.remove(0);
+            if let Some(texture) = self.textures.remove(&oldest_id) {
+                unsafe {
+                    gl.delete_texture(texture);
+                }
+                log::debug!("Evicted texture id={} (LRU)", oldest_id);
+            }
         }
 
         unsafe {
@@ -252,10 +270,23 @@ impl ImageRenderer {
             gl.bind_texture(glow::TEXTURE_2D, None);
 
             self.textures.insert(image.id, texture);
+            self.lru_order.push(image.id);
             info!(
-                "Image texture uploaded: id={} {}x{}",
-                image.id, image.width, image.height
+                "Image texture uploaded: id={} {}x{} (cache: {}/{})",
+                image.id,
+                image.width,
+                image.height,
+                self.textures.len(),
+                MAX_CACHED_TEXTURES
             );
+        }
+    }
+
+    /// Update LRU order (move id to end = most recently used)
+    fn touch_lru(&mut self, id: u32) {
+        if let Some(pos) = self.lru_order.iter().position(|&x| x == id) {
+            self.lru_order.remove(pos);
+            self.lru_order.push(id);
         }
     }
 
@@ -314,23 +345,12 @@ impl ImageRenderer {
                 let h = call.h;
 
                 // 4 vertices: top-left, top-right, bottom-right, bottom-left
+                #[rustfmt::skip]
                 let vertices: [f32; 16] = [
-                    x,
-                    y,
-                    0.0,
-                    0.0, // top-left
-                    x + w,
-                    y,
-                    1.0,
-                    0.0, // top-right
-                    x + w,
-                    y + h,
-                    1.0,
-                    1.0, // bottom-right
-                    x,
-                    y + h,
-                    0.0,
-                    1.0, // bottom-left
+                    x,     y,     0.0, 0.0,  // top-left
+                    x + w, y,     1.0, 0.0,  // top-right
+                    x + w, y + h, 1.0, 1.0,  // bottom-right
+                    x,     y + h, 0.0, 1.0,  // bottom-left
                 ];
 
                 let vertex_bytes = bytemuck_cast_slice(&vertices);
@@ -356,6 +376,10 @@ impl ImageRenderer {
             unsafe {
                 gl.delete_texture(texture);
             }
+            // Remove from LRU order
+            if let Some(pos) = self.lru_order.iter().position(|&x| x == id) {
+                self.lru_order.remove(pos);
+            }
         }
     }
 
@@ -368,6 +392,7 @@ impl ImageRenderer {
             }
         }
         self.textures.clear();
+        self.lru_order.clear();
         log::info!("ImageRenderer: all textures invalidated");
     }
 

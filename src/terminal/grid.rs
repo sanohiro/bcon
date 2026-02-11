@@ -440,6 +440,10 @@ pub struct Grid {
     pub colors: DynamicColors,
     /// Row buffer pool for scrollback reuse (reduces allocations)
     row_pool: Vec<Vec<Cell>>,
+    /// Dirty row flags (true = row needs redraw)
+    dirty_rows: Vec<bool>,
+    /// All rows dirty flag (optimization for full screen updates)
+    all_dirty: bool,
 }
 
 /// Mouse tracking mode
@@ -495,6 +499,8 @@ impl Grid {
             keyboard: KeyboardState::default(),
             colors: DynamicColors::default(),
             row_pool: Vec::new(),
+            dirty_rows: vec![true; rows], // All rows dirty initially
+            all_dirty: true,
         }
     }
 
@@ -504,6 +510,47 @@ impl Grid {
 
     pub fn rows(&self) -> usize {
         self.rows
+    }
+
+    // ========== Dirty row tracking ==========
+
+    /// Mark a row as dirty (needs redraw)
+    #[inline]
+    pub fn mark_dirty(&mut self, row: usize) {
+        if row < self.rows {
+            self.dirty_rows[row] = true;
+        }
+    }
+
+    /// Mark all rows as dirty
+    #[inline]
+    pub fn mark_all_dirty(&mut self) {
+        self.all_dirty = true;
+        self.dirty_rows.fill(true);
+    }
+
+    /// Check if a row is dirty
+    #[inline]
+    pub fn is_row_dirty(&self, row: usize) -> bool {
+        self.all_dirty || (row < self.rows && self.dirty_rows[row])
+    }
+
+    /// Check if any row is dirty
+    #[inline]
+    pub fn has_dirty_rows(&self) -> bool {
+        self.all_dirty || self.dirty_rows.iter().any(|&d| d)
+    }
+
+    /// Clear all dirty flags (call after rendering)
+    #[inline]
+    pub fn clear_dirty(&mut self) {
+        self.all_dirty = false;
+        self.dirty_rows.fill(false);
+    }
+
+    /// Get iterator of dirty row indices
+    pub fn dirty_row_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.rows).filter(move |&row| self.is_row_dirty(row))
     }
 
     // ========== Compatibility accessors (delegate to sub-structs) ==========
@@ -804,6 +851,9 @@ impl Grid {
 
         self.cursor_col += char_width;
         self.last_char = ch;
+
+        // Mark row as dirty
+        self.mark_dirty(self.cursor_row);
     }
 
     // ========== Cursor movement ==========
@@ -846,6 +896,7 @@ impl Grid {
                 for row in (self.cursor_row + 1)..self.rows {
                     self.clear_row(row);
                     self.remove_images_at_row(row);
+                    self.mark_dirty(row);
                 }
             }
             1 => {
@@ -853,6 +904,7 @@ impl Grid {
                 for row in 0..self.cursor_row {
                     self.clear_row(row);
                     self.remove_images_at_row(row);
+                    self.mark_dirty(row);
                 }
                 self.erase_in_line(1);
             }
@@ -863,6 +915,8 @@ impl Grid {
                 }
                 // Also clear image placements
                 self.image_placements.clear();
+                // Mark all rows dirty
+                self.mark_all_dirty();
             }
             _ => {}
         }
@@ -905,6 +959,9 @@ impl Grid {
             }
             _ => {}
         }
+
+        // Mark row as dirty
+        self.mark_dirty(row);
     }
 
     /// Clear row (optimized with fill)
@@ -977,6 +1034,11 @@ impl Grid {
             }
         }
         self.image_placements.retain(|p| p.row + p.height_cells > 0);
+
+        // Mark scroll region as dirty
+        for row in top..=bottom {
+            self.mark_dirty(row);
+        }
     }
 
     // ========== Scrollback ==========
@@ -1193,6 +1255,11 @@ impl Grid {
         }
         // Delete images that scrolled out of screen
         self.image_placements.retain(|p| p.row < self.rows);
+
+        // Mark scroll region as dirty
+        for row in top..=bottom {
+            self.mark_dirty(row);
+        }
     }
 
     /// Save cursor position (CSI s / SCOSC)
@@ -1408,5 +1475,9 @@ impl Grid {
         if new_cols != old_cols {
             self.row_pool.clear();
         }
+
+        // Resize dirty_rows and mark all dirty
+        self.dirty_rows.resize(new_rows, true);
+        self.mark_all_dirty();
     }
 }

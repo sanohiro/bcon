@@ -1800,8 +1800,12 @@ fn main() -> Result<()> {
         let grid = &term.grid;
         let ascent = glyph_atlas.ascent;
 
-        // === Pass 1: Background color (per cell) ===
+        // === Pass 1: Background color (run-length encoded) ===
+        // Combine consecutive cells with same background into single rectangles
         for row in 0..grid.rows() {
+            let y = margin_y + row as f32 * cell_h;
+            let mut run_start: Option<(usize, [f32; 4])> = None;
+
             for col in 0..grid.cols() {
                 let cell = term.display_cell(row, col);
 
@@ -1810,56 +1814,71 @@ fn main() -> Result<()> {
                     continue;
                 }
 
-                let x = margin_x + col as f32 * cell_w;
-                let y = margin_y + row as f32 * cell_h;
-                let char_cell_w = cell.width as f32 * cell_w;
-
-                // Draw background color (if not default)
                 let bg = cell.bg.to_rgba(false);
-                if bg[3] > 0.0 {
-                    text_renderer.push_rect(x, y, char_cell_w, cell_h, bg, &glyph_atlas);
+
+                if let Some((start, run_color)) = run_start {
+                    if bg == run_color {
+                        // Continue the run
+                        continue;
+                    } else {
+                        // Flush previous run
+                        if run_color[3] > 0.0 {
+                            let x = margin_x + start as f32 * cell_w;
+                            let w = (col - start) as f32 * cell_w;
+                            text_renderer.push_rect(x, y, w, cell_h, run_color, &glyph_atlas);
+                        }
+                        // Start new run
+                        run_start = Some((col, bg));
+                    }
+                } else {
+                    // Start first run
+                    run_start = Some((col, bg));
+                }
+            }
+
+            // Flush final run
+            if let Some((start, run_color)) = run_start {
+                if run_color[3] > 0.0 {
+                    let x = margin_x + start as f32 * cell_w;
+                    let w = (grid.cols() - start) as f32 * cell_w;
+                    text_renderer.push_rect(x, y, w, cell_h, run_color, &glyph_atlas);
                 }
             }
         }
 
-        // === Pass 1.5: Selection highlight ===
+        // === Pass 1.5: Selection highlight (one rect per row) ===
         let selection_color = [config_selection.0, config_selection.1, config_selection.2, 0.35];
         if let Some(ref sel) = term.selection {
             let max_cols = grid.cols();
             for row in 0..grid.rows() {
-                // Get column range for this row (avoids per-cell contains() check)
+                // Get column range for this row
                 if let Some((start_col, end_col)) = sel.cols_for_row(row, max_cols) {
-                    for col in start_col..end_col {
-                        let x = margin_x + col as f32 * cell_w;
-                        let y = margin_y + row as f32 * cell_h;
-                        text_renderer.push_rect(
-                            x,
-                            y,
-                            cell_w,
-                            cell_h,
-                            selection_color,
-                            &glyph_atlas,
-                        );
-                    }
+                    let x = margin_x + start_col as f32 * cell_w;
+                    let y = margin_y + row as f32 * cell_h;
+                    let w = (end_col - start_col) as f32 * cell_w;
+                    text_renderer.push_rect(x, y, w, cell_h, selection_color, &glyph_atlas);
                 }
             }
         }
 
-        // === Pass 1.6: Search match highlight ===
+        // === Pass 1.6: Search match highlight (one rect per match) ===
         if search_mode {
             for row in 0..grid.rows() {
                 let matches = term.get_search_matches_for_display_row(row);
                 for (start_col, end_col, is_current) in matches {
-                    for col in start_col..end_col.min(grid.cols()) {
-                        let x = margin_x + col as f32 * cell_w;
-                        let y = margin_y + row as f32 * cell_h;
-                        let color = if is_current {
-                            [1.0, 0.6, 0.0, 0.5] // Current match: orange
-                        } else {
-                            [1.0, 1.0, 0.0, 0.3] // Others: yellow
-                        };
-                        text_renderer.push_rect(x, y, cell_w, cell_h, color, &glyph_atlas);
+                    let clamped_end = end_col.min(grid.cols());
+                    if start_col >= clamped_end {
+                        continue;
                     }
+                    let x = margin_x + start_col as f32 * cell_w;
+                    let y = margin_y + row as f32 * cell_h;
+                    let w = (clamped_end - start_col) as f32 * cell_w;
+                    let color = if is_current {
+                        [1.0, 0.6, 0.0, 0.5] // Current match: orange
+                    } else {
+                        [1.0, 1.0, 0.0, 0.3] // Others: yellow
+                    };
+                    text_renderer.push_rect(x, y, w, cell_h, color, &glyph_atlas);
                 }
             }
         }
@@ -1870,6 +1889,13 @@ fn main() -> Result<()> {
         for row in 0..grid.rows() {
             // Pre-compute selection range for this row (avoids per-cell normalized() call)
             let row_selection = term.selection.as_ref().and_then(|s| s.cols_for_row(row, max_cols));
+
+            // Pre-compute search matches for this row (avoids per-cell function call)
+            let row_search_matches: Vec<(usize, usize, bool)> = if search_mode {
+                term.get_search_matches_for_display_row(row)
+            } else {
+                Vec::new()
+            };
 
             // Underline rendering: batch consecutive cells with same style into runs
             let mut col = 0;
@@ -2046,45 +2072,32 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Overline and strikethrough still per-cell
+            // Character-based rendering (FreeType LCD mode) + overline/strikethrough
+            // Combined into single loop to reduce grid traversals
             for col in 0..grid.cols() {
-                let cell = if term.scroll_offset > 0 {
-                    term.display_cell(row, col)
-                } else {
-                    grid.cell(row, col)
-                };
+                let cell = term.display_cell(row, col);
                 if cell.width == 0 {
                     continue;
                 }
 
+                let x = margin_x + col as f32 * cell_w;
+                let y = margin_y + row as f32 * cell_h;
+
                 // Overline rendering (CSI 53 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
-                    let x = margin_x + col as f32 * cell_w;
-                    let y = margin_y + row as f32 * cell_h;
                     let fg = effective_fg(&cell.fg);
                     text_renderer.push_rect(x, y, cell_w, 1.0, fg, &glyph_atlas);
                 }
 
                 // Strikethrough rendering (CSI 9 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
-                    let x = margin_x + col as f32 * cell_w;
-                    let y = margin_y + row as f32 * cell_h;
                     let fg = effective_fg(&cell.fg);
                     let strike_y = y + cell_h / 2.0;
                     text_renderer.push_rect(x, strike_y, cell_w, 1.0, fg, &glyph_atlas);
                 }
-            }
 
-            // Character-based rendering (FreeType LCD mode)
-            for col in 0..grid.cols() {
-                let cell = term.display_cell(row, col);
-                if cell.width == 0 {
-                    continue;
-                }
                 let grapheme = &cell.grapheme;
                 if !grapheme.is_empty() && grapheme != " " {
-                    let x = margin_x + col as f32 * cell_w;
-                    let y = margin_y + row as f32 * cell_h;
                     let fg = effective_fg(&cell.fg);
 
                     // Calculate final background color (needed for LCD subpixel compositing)
@@ -2120,10 +2133,9 @@ fn main() -> Result<()> {
                         }
                     }
 
-                    // Search highlight - blend in linear space
+                    // Search highlight - blend in linear space (uses pre-computed matches)
                     if search_mode {
-                        let matches = term.get_search_matches_for_display_row(row);
-                        for (start_col, end_col, is_current) in matches {
+                        for &(start_col, end_col, is_current) in &row_search_matches {
                             if col >= start_col && col < end_col.min(grid.cols()) {
                                 let hl_color = if is_current {
                                     [1.0, 0.6, 0.0, 0.5] // Orange
@@ -2767,6 +2779,9 @@ fn main() -> Result<()> {
             // Release previous frame
             prev_bo = Some(new_bo);
             prev_fb = Some(new_fb);
+
+            // Clear dirty flags after successful render
+            term.clear_dirty();
         }
     }
 
