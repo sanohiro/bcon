@@ -1822,9 +1822,17 @@ fn main() -> Result<()> {
         let grid = &term.grid;
         let ascent = glyph_atlas.ascent;
 
+        // Determine if partial rendering is possible (no overlays active)
+        // When overlays are active, we must render all rows for correctness
+        let partial_render = !has_overlays && !grid.is_all_dirty();
+
         // === Pass 1: Background color (run-length encoded) ===
         // Combine consecutive cells with same background into single rectangles
         for row in 0..grid.rows() {
+            // Skip non-dirty rows when partial rendering is enabled
+            if partial_render && !grid.is_row_dirty(row) {
+                continue;
+            }
             let y = margin_y + row as f32 * cell_h;
             let mut run_start: Option<(usize, [f32; 4])> = None;
 
@@ -1909,6 +1917,11 @@ fn main() -> Result<()> {
         let max_cols = grid.cols();
 
         for row in 0..grid.rows() {
+            // Skip non-dirty rows when partial rendering is enabled
+            if partial_render && !grid.is_row_dirty(row) {
+                continue;
+            }
+
             // Pre-compute selection range for this row (avoids per-cell normalized() call)
             let row_selection = term.selection.as_ref().and_then(|s| s.cols_for_row(row, max_cols));
 
