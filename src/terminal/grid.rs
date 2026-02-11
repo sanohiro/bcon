@@ -413,6 +413,8 @@ pub struct Grid {
     pub keyboard: KeyboardState,
     /// Dynamic colors
     pub colors: DynamicColors,
+    /// Row buffer pool for scrollback reuse (reduces allocations)
+    row_pool: Vec<Vec<Cell>>,
 }
 
 /// Mouse tracking mode
@@ -467,6 +469,7 @@ impl Grid {
             shell: ShellState::default(),
             keyboard: KeyboardState::default(),
             colors: DynamicColors::default(),
+            row_pool: Vec::new(),
         }
     }
 
@@ -879,12 +882,11 @@ impl Grid {
         }
     }
 
-    /// Clear row
+    /// Clear row (optimized with fill)
     fn clear_row(&mut self, row: usize) {
         let start = row * self.cols;
-        for i in start..(start + self.cols) {
-            self.cells[i] = Cell::default();
-        }
+        let end = start + self.cols;
+        self.cells[start..end].fill(Cell::default());
     }
 
     /// Delete images overlapping specified row
@@ -911,11 +913,20 @@ impl Grid {
         if top == 0 && bottom == self.rows - 1 {
             for i in 0..n {
                 let start = i * self.cols;
-                let row_cells = self.cells[start..start + self.cols].to_vec();
+                // Reuse row buffer from pool if available
+                let mut row_cells = self.row_pool.pop().unwrap_or_else(|| Vec::with_capacity(self.cols));
+                row_cells.clear();
+                row_cells.extend_from_slice(&self.cells[start..start + self.cols]);
                 self.scrollback.push_back(row_cells);
             }
+            // Return evicted rows to pool for reuse
             while self.scrollback.len() > self.max_scrollback {
-                self.scrollback.pop_front();
+                if let Some(old_row) = self.scrollback.pop_front() {
+                    // Keep pool size bounded (max 32 rows)
+                    if self.row_pool.len() < 32 {
+                        self.row_pool.push(old_row);
+                    }
+                }
             }
         }
 
@@ -1337,15 +1348,17 @@ impl Grid {
             return;
         }
 
+        let old_cols = self.cols;
+
         // Create new cell array
         let mut new_cells = vec![Cell::default(); new_cols * new_rows];
 
         // Copy existing cells (only common area)
         let copy_rows = self.rows.min(new_rows);
-        let copy_cols = self.cols.min(new_cols);
+        let copy_cols = old_cols.min(new_cols);
 
         for row in 0..copy_rows {
-            let src_start = row * self.cols;
+            let src_start = row * old_cols;
             let dst_start = row * new_cols;
             new_cells[dst_start..dst_start + copy_cols]
                 .clone_from_slice(&self.cells[src_start..src_start + copy_cols]);
@@ -1365,5 +1378,10 @@ impl Grid {
 
         // Clear image placements
         self.image_placements.clear();
+
+        // Clear row pool if column count changed (old rows have wrong size)
+        if new_cols != old_cols {
+            self.row_pool.clear();
+        }
     }
 }

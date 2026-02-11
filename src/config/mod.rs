@@ -327,6 +327,44 @@ impl Default for AppearanceConfig {
     }
 }
 
+impl AppearanceConfig {
+    /// Parse hex color string (RRGGBB) to normalized RGB tuple (0.0-1.0)
+    pub fn parse_hex_color(hex: &str) -> (f32, f32, f32) {
+        let hex = hex.trim_start_matches('#');
+        if hex.len() >= 6 {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                u8::from_str_radix(&hex[0..2], 16),
+                u8::from_str_radix(&hex[2..4], 16),
+                u8::from_str_radix(&hex[4..6], 16),
+            ) {
+                return (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+            }
+        }
+        // Fallback to black
+        (0.0, 0.0, 0.0)
+    }
+
+    /// Get background color as normalized RGB
+    pub fn background_rgb(&self) -> (f32, f32, f32) {
+        Self::parse_hex_color(&self.background)
+    }
+
+    /// Get foreground color as normalized RGB
+    pub fn foreground_rgb(&self) -> (f32, f32, f32) {
+        Self::parse_hex_color(&self.foreground)
+    }
+
+    /// Get cursor color as normalized RGB
+    pub fn cursor_rgb(&self) -> (f32, f32, f32) {
+        Self::parse_hex_color(&self.cursor)
+    }
+
+    /// Get selection color as normalized RGB
+    pub fn selection_rgb(&self) -> (f32, f32, f32) {
+        Self::parse_hex_color(&self.selection)
+    }
+}
+
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {

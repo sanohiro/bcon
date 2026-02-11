@@ -556,7 +556,8 @@ fn main() -> Result<()> {
     let saved_crtc = drm::SavedCrtc::save(&drm_device, &display_config)?;
 
     // Render first frame and set mode
-    renderer.clear(0.0, 0.0, 0.0, 1.0); // Initialize with black
+    let init_bg = cfg.appearance.background_rgb();
+    renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
     egl_context.swap_buffers()?;
 
     let bo = gbm_surface.lock_front_buffer()?;
@@ -697,6 +698,7 @@ fn main() -> Result<()> {
         grid_cols,
         grid_rows,
         cfg.terminal.scrollback_lines,
+        &cfg.terminal.term_env,
     )
     .context("Failed to initialize terminal")?;
 
@@ -829,6 +831,13 @@ fn main() -> Result<()> {
 
     // DRM master state (for VT switching)
     let mut drm_master_held = true;
+
+    // Appearance colors (from config, may be overridden by OSC 10/11)
+    let config_bg = cfg.appearance.background_rgb();
+    let config_fg = cfg.appearance.foreground_rgb();
+    let config_cursor = cfg.appearance.cursor_rgb();
+    let config_selection = cfg.appearance.selection_rgb();
+    let config_cursor_opacity = cfg.appearance.cursor_opacity;
 
     loop {
         // Poll for session events (VT switching)
@@ -1760,11 +1769,33 @@ fn main() -> Result<()> {
         needs_redraw = false;
 
         // Render screen
-        renderer.clear(0.0, 0.0, 0.0, 1.0); // Black background
+        // Use OSC 11 dynamic background if set, otherwise config background
+        let bg_color = if let Some((r, g, b)) = term.grid.colors.bg {
+            (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
+        } else {
+            config_bg
+        };
+        renderer.clear(bg_color.0, bg_color.1, bg_color.2, 1.0);
         text_renderer.begin();
-        text_renderer.set_bg_color(0.0, 0.0, 0.0); // For LCD subpixel compositing
+        text_renderer.set_bg_color(bg_color.0, bg_color.1, bg_color.2);
         emoji_renderer.begin();
         curly_renderer.begin();
+
+        // Effective foreground color: OSC 10 > config > hardcoded white
+        let default_fg = if let Some((r, g, b)) = term.grid.colors.fg {
+            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+        } else {
+            [config_fg.0, config_fg.1, config_fg.2, 1.0]
+        };
+
+        // Helper to get foreground color, using default_fg for Color::Default
+        let effective_fg = |color: &terminal::grid::Color| -> [f32; 4] {
+            if matches!(color, terminal::grid::Color::Default) {
+                default_fg
+            } else {
+                color.to_rgba(true)
+            }
+        };
 
         let grid = &term.grid;
         let ascent = glyph_atlas.ascent;
@@ -1792,6 +1823,7 @@ fn main() -> Result<()> {
         }
 
         // === Pass 1.5: Selection highlight ===
+        let selection_color = [config_selection.0, config_selection.1, config_selection.2, 0.35];
         if let Some(ref sel) = term.selection {
             for row in 0..grid.rows() {
                 for col in 0..grid.cols() {
@@ -1803,7 +1835,7 @@ fn main() -> Result<()> {
                             y,
                             cell_w,
                             cell_h,
-                            [0.3, 0.5, 0.8, 0.35], // Semi-transparent blue
+                            selection_color,
                             &glyph_atlas,
                         );
                     }
@@ -1862,7 +1894,7 @@ fn main() -> Result<()> {
                 let run_color = cell
                     .underline_color
                     .map(|c| c.to_rgba(true))
-                    .unwrap_or_else(|| cell.fg.to_rgba(true));
+                    .unwrap_or_else(|| effective_fg(&cell.fg));
                 let run_has_hyperlink = cell.hyperlink.is_some();
 
                 // Find run end
@@ -1881,7 +1913,7 @@ fn main() -> Result<()> {
                     let next_color = next_cell
                         .underline_color
                         .map(|c| c.to_rgba(true))
-                        .unwrap_or_else(|| next_cell.fg.to_rgba(true));
+                        .unwrap_or_else(|| effective_fg(&next_cell.fg));
                     let next_has_hyperlink = next_cell.hyperlink.is_some();
 
                     // Continue run while style, color, and hyperlink match
@@ -2023,7 +2055,7 @@ fn main() -> Result<()> {
                 if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
                     let x = margin_x + col as f32 * cell_w;
                     let y = margin_y + row as f32 * cell_h;
-                    let fg = cell.fg.to_rgba(true);
+                    let fg = effective_fg(&cell.fg);
                     text_renderer.push_rect(x, y, cell_w, 1.0, fg, &glyph_atlas);
                 }
 
@@ -2031,7 +2063,7 @@ fn main() -> Result<()> {
                 if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
                     let x = margin_x + col as f32 * cell_w;
                     let y = margin_y + row as f32 * cell_h;
-                    let fg = cell.fg.to_rgba(true);
+                    let fg = effective_fg(&cell.fg);
                     let strike_y = y + cell_h / 2.0;
                     text_renderer.push_rect(x, strike_y, cell_w, 1.0, fg, &glyph_atlas);
                 }
@@ -2047,18 +2079,17 @@ fn main() -> Result<()> {
                 if !grapheme.is_empty() && grapheme != " " {
                     let x = margin_x + col as f32 * cell_w;
                     let y = margin_y + row as f32 * cell_h;
-                    let fg = cell.fg.to_rgba(true);
+                    let fg = effective_fg(&cell.fg);
 
                     // Calculate final background color (needed for LCD subpixel compositing)
                     // Composite in order: cell BG -> selection highlight -> search highlight
                     // Blend in linear space to match shader
                     let mut bg_rgba = cell.bg.to_rgba(false);
 
-                    // Selection highlight (semi-transparent blue) - blend in linear space
+                    // Selection highlight - blend in linear space
                     if let Some(ref sel) = term.selection {
                         if sel.contains(row, col) {
-                            let sel_color = [0.3, 0.5, 0.8, 0.35];
-                            let a = sel_color[3];
+                            let a = selection_color[3];
                             // sRGB -> linear
                             let bg_lin = [
                                 srgb_to_linear(bg_rgba[0]),
@@ -2066,9 +2097,9 @@ fn main() -> Result<()> {
                                 srgb_to_linear(bg_rgba[2]),
                             ];
                             let sel_lin = [
-                                srgb_to_linear(sel_color[0]),
-                                srgb_to_linear(sel_color[1]),
-                                srgb_to_linear(sel_color[2]),
+                                srgb_to_linear(selection_color[0]),
+                                srgb_to_linear(selection_color[1]),
+                                srgb_to_linear(selection_color[2]),
                             ];
                             // Blend in linear space
                             let blended_lin = [
@@ -2327,7 +2358,7 @@ fn main() -> Result<()> {
                 // Display at end of preedit when composing
                 let cursor_x = margin_x + (grid.cursor_col + preedit_total_cols) as f32 * cell_w;
                 let cursor_y = margin_y + grid.cursor_row as f32 * cell_h;
-                let cursor_color = [1.0, 1.0, 1.0, 0.5];
+                let cursor_color = [config_cursor.0, config_cursor.1, config_cursor.2, config_cursor_opacity];
 
                 // Draw according to cursor style
                 match grid.cursor.style {

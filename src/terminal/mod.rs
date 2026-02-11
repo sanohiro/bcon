@@ -297,14 +297,14 @@ pub struct Terminal {
 impl Terminal {
     /// Initialize terminal and spawn shell
     pub fn new(cols: usize, rows: usize) -> Result<Self> {
-        Self::with_scrollback(cols, rows, 10000)
+        Self::with_scrollback(cols, rows, 10000, "xterm-256color")
     }
 
-    /// Initialize terminal with custom scrollback size
-    pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize) -> Result<Self> {
+    /// Initialize terminal with custom scrollback size and TERM setting
+    pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize, term_env: &str) -> Result<Self> {
         let grid = Grid::with_scrollback(cols, rows, max_scrollback);
         let vt_parser = vte::Parser::new();
-        let pty = Pty::spawn(cols as u16, rows as u16)?;
+        let pty = Pty::spawn(cols as u16, rows as u16, term_env)?;
 
         Ok(Self {
             grid,
@@ -408,27 +408,68 @@ impl Terminal {
 
         trace!("PTY read: {} bytes", n);
 
-        // Process byte stream (manually parse APC sequences)
+        // Fast path: if already in APC state or buffer contains ESC _, use slow path
+        // This handles the rare APC (Kitty graphics) case
+        let has_apc = matches!(self.apc_state, ApcState::InApc | ApcState::ApcEscape)
+            || self.read_buf[..n].windows(2).any(|w| w == [0x1B, b'_']);
+
+        if has_apc {
+            // Slow path: byte-by-byte for APC handling
+            self.process_pty_output_slow(n);
+        } else {
+            // Fast path: single Performer for all bytes
+            self.process_pty_output_fast(n);
+        }
+
+        Ok(n)
+    }
+
+    /// Fast path: process all bytes with single Performer (no APC)
+    fn process_pty_output_fast(&mut self, n: usize) {
+        self.pty_response.clear();
+
+        let mut performer = Performer::new(
+            &mut self.grid,
+            &mut self.clipboard,
+            &mut self.dcs_handler,
+            &mut self.images,
+            self.cell_width,
+            self.cell_height,
+            &mut self.current_directory,
+            &self.clipboard_path,
+            &mut self.pty_response,
+        );
+
+        for i in 0..n {
+            self.vt_parser.advance(&mut performer, self.read_buf[i]);
+        }
+
+        drop(performer);
+
+        if !self.pty_response.is_empty() {
+            log::trace!("PTY response: {} bytes", self.pty_response.len());
+            let _ = self.pty.write(&self.pty_response);
+        }
+    }
+
+    /// Slow path: byte-by-byte processing with APC state machine
+    fn process_pty_output_slow(&mut self, n: usize) {
         for i in 0..n {
             let byte = self.read_buf[i];
 
             match self.apc_state {
                 ApcState::Normal => {
                     if byte == 0x1B {
-                        // ESC detected
                         self.apc_state = ApcState::Escape;
                     } else {
-                        // Normal byte -> pass to vte
                         self.process_byte_with_vte(byte);
                     }
                 }
                 ApcState::Escape => {
                     if byte == b'_' {
-                        // ESC _ = APC start
                         self.apc_state = ApcState::InApc;
                         self.apc_buffer.clear();
                     } else {
-                        // Not APC -> pass ESC and current byte to vte
                         self.apc_state = ApcState::Normal;
                         self.process_byte_with_vte(0x1B);
                         self.process_byte_with_vte(byte);
@@ -436,28 +477,21 @@ impl Terminal {
                 }
                 ApcState::InApc => {
                     if byte == 0x1B {
-                        // Possible APC termination (ESC \)
                         self.apc_state = ApcState::ApcEscape;
                     } else if byte == 0x9C {
-                        // ST (C1) also terminates
                         self.process_apc();
                         self.apc_state = ApcState::Normal;
                     } else if self.apc_buffer.len() < MAX_APC_BUFFER_SIZE {
-                        // Collect APC data (with size limit)
                         self.apc_buffer.push(byte);
                     }
-                    // If buffer is full, silently drop bytes until termination
                 }
                 ApcState::ApcEscape => {
                     if byte == b'\\' {
-                        // ESC \ = ST, APC terminates
                         self.process_apc();
                         self.apc_state = ApcState::Normal;
                     } else {
-                        // Not ST -> add ESC as data
                         self.apc_buffer.push(0x1B);
                         if byte == 0x1B {
-                            // Consecutive ESC
                             self.apc_state = ApcState::ApcEscape;
                         } else {
                             self.apc_buffer.push(byte);
@@ -467,13 +501,10 @@ impl Terminal {
                 }
             }
         }
-
-        Ok(n)
     }
 
-    /// Process 1 byte with vte parser
+    /// Process single byte with vte parser (used in slow path)
     fn process_byte_with_vte(&mut self, byte: u8) {
-        // Clear reusable response buffer
         self.pty_response.clear();
 
         let mut performer = Performer::new(
@@ -489,7 +520,6 @@ impl Terminal {
         );
         self.vt_parser.advance(&mut performer, byte);
 
-        // Write back OSC 52 query response to PTY if any
         if !self.pty_response.is_empty() {
             log::trace!("PTY response: {} bytes", self.pty_response.len());
             let _ = self.pty.write(&self.pty_response);
@@ -1403,8 +1433,24 @@ impl Terminal {
     ///
     /// This is similar to process_pty_output but takes external data.
     pub fn process_output(&mut self, data: &[u8]) {
+        // Use fast path (single Performer) for external data
+        // APC sequences are not expected in /etc/issue
+        self.pty_response.clear();
+
+        let mut performer = Performer::new(
+            &mut self.grid,
+            &mut self.clipboard,
+            &mut self.dcs_handler,
+            &mut self.images,
+            self.cell_width,
+            self.cell_height,
+            &mut self.current_directory,
+            &self.clipboard_path,
+            &mut self.pty_response,
+        );
+
         for &byte in data {
-            self.process_byte_with_vte(byte);
+            self.vt_parser.advance(&mut performer, byte);
         }
     }
 }

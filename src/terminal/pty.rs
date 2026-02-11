@@ -25,15 +25,17 @@ impl Pty {
     /// Create PTY and spawn shell
     ///
     /// Specify initial terminal size with `cols`, `rows`.
-    pub fn spawn(cols: u16, rows: u16) -> Result<Self> {
-        Self::spawn_with_pixels(cols, rows, 0, 0)
+    /// `term_env` sets the TERM environment variable.
+    pub fn spawn(cols: u16, rows: u16, term_env: &str) -> Result<Self> {
+        Self::spawn_with_pixels(cols, rows, 0, 0, term_env)
     }
 
     /// Create PTY and spawn shell (with pixel size)
     ///
     /// Specify initial terminal size with `cols`, `rows`,
     /// and pixel size with `xpixel`, `ypixel`.
-    pub fn spawn_with_pixels(cols: u16, rows: u16, xpixel: u16, ypixel: u16) -> Result<Self> {
+    /// `term_env` sets the TERM environment variable.
+    pub fn spawn_with_pixels(cols: u16, rows: u16, xpixel: u16, ypixel: u16, term_env: &str) -> Result<Self> {
         let winsize = Winsize {
             ws_row: rows,
             ws_col: cols,
@@ -49,7 +51,7 @@ impl Pty {
         match fork_result {
             ForkResult::Child => {
                 // Child process: set environment variables and spawn shell
-                std::env::set_var("TERM", "xterm-256color");
+                std::env::set_var("TERM", term_env);
                 std::env::set_var("COLORTERM", "truecolor");
 
                 // If running as root (uid=0), use /bin/login for authentication
