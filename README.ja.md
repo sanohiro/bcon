@@ -174,6 +174,19 @@ sudo systemctl start bcon@tty2
 Ctrl+Alt+F2
 ```
 
+### ログインセッション (GDM/SDDM)
+
+rootless ビルドでは、ログイン画面から bcon をセッションとして選択できます：
+
+```bash
+# セッションファイルをインストール
+sudo cp bcon.desktop /usr/share/wayland-sessions/
+
+# GDM/SDDM のセッション選択に "bcon" が表示される
+```
+
+デスクトップ環境を起動せずに直接 bcon にログインできます。メモリ節約、起動時間短縮に効果的。
+
 ### rootless systemd サービス
 
 rootless ビルド (`--features seatd`) 用のサービス設定：

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=bcon
+Comment=GPU-accelerated console terminal
+Comment[ja]=GPU アクセラレーション対応コンソールターミナル
+Exec=/usr/local/bin/bcon
+Type=Application
+DesktopNames=bcon

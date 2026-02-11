@@ -176,6 +176,19 @@ sudo systemctl start bcon@tty2
 Ctrl+Alt+F2
 ```
 
+### Login Session (GDM/SDDM)
+
+With rootless build, bcon can be selected as a session from the login screen:
+
+```bash
+# Install session file
+sudo cp bcon.desktop /usr/share/wayland-sessions/
+
+# Now "bcon" appears in GDM/SDDM session selector
+```
+
+This allows direct login to bcon without starting a desktop environment — saves memory and boot time.
+
 ### Rootless systemd Service
 
 For rootless builds (`--features seatd`), create a user-specific service:
