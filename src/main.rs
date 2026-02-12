@@ -600,6 +600,17 @@ fn main() -> Result<()> {
         font::atlas::load_cjk_font().map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
     };
 
+    // Load symbols/Nerd Font (for yazi, etc. - continue on failure)
+    let symbols_font_data: Option<&[u8]> = if !cfg.font.symbols.is_empty() {
+        std::fs::read(&cfg.font.symbols)
+            .ok()
+            .map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
+    } else {
+        // Auto-detect Nerd Font via fontconfig
+        font::fontconfig::load_nerd_font_fc()
+            .map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
+    };
+
     // LCD filter settings (from config)
     let lcd_filter = font::freetype::LcdFilterMode::from_str(&cfg.font.lcd_filter);
     let lcd_subpixel = font::freetype::LcdSubpixel::from_str(&cfg.font.lcd_subpixel);
@@ -612,6 +623,7 @@ fn main() -> Result<()> {
         gl,
         font_data,
         font_size,
+        symbols_font_data,
         cjk_font_data,
         lcd_mode,
         lcd_filter,

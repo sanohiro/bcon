@@ -43,6 +43,8 @@ pub struct Config {
 pub struct FontConfig {
     /// Main font path (searches system fonts if empty)
     pub main: String,
+    /// Symbol/icon font path for Nerd Font icons (searches system fonts if empty)
+    pub symbols: String,
     /// CJK font path (searches system fonts if empty)
     pub cjk: String,
     /// Emoji font path (searches system fonts if empty)
@@ -279,6 +281,7 @@ impl Default for FontConfig {
     fn default() -> Self {
         Self {
             main: String::new(),
+            symbols: String::new(),
             cjk: String::new(),
             emoji: String::new(),
             size: 18.0,                        // Recommended for console readability
@@ -540,6 +543,9 @@ impl Config {
             }
         }
 
+        // Auto-detect Nerd Font for symbols/icons (yazi, etc.)
+        let nerd_font_path = detect_nerd_font_path();
+
         // Generate preset name (exclude "system" from display)
         let display_presets: Vec<&str> = presets
             .iter()
@@ -562,17 +568,33 @@ impl Config {
         // Serialize only keybinds (font settings use system defaults)
         let keybinds_toml = toml::to_string_pretty(&keybinds)?;
 
-        // Japanese/CJK section (only if preset includes japanese)
-        let japanese_section = if include_japanese {
-            r#"
-[font]
-cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+        // Build font section based on detected fonts
+        let font_section = {
+            let mut lines = Vec::new();
+            if nerd_font_path.is_some() || include_japanese {
+                lines.push("[font]".to_string());
+            }
+            if let Some(ref nerd_path) = nerd_font_path {
+                lines.push(format!("symbols = \"{}\"", nerd_path));
+            }
+            if include_japanese {
+                lines.push("cjk = \"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc\"".to_string());
+            }
+            if !lines.is_empty() {
+                lines.join("\n") + "\n"
+            } else {
+                String::new()
+            }
+        };
 
+        // Japanese/CJK terminal settings
+        let terminal_section = if include_japanese {
+            r#"
 [terminal]
 ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "man", "htop", "top"]
-"#
+"#.to_string()
         } else {
-            ""
+            String::new()
         };
 
         let template = format!(
@@ -584,7 +606,8 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # bcon will automatically find system fonts via fontconfig.
 
 [keybinds]
-{keybinds_toml}{japanese_section}
+{keybinds_toml}
+{font_section}{terminal_section}
 # =============================================================================
 # Font Configuration (Optional)
 # =============================================================================
@@ -906,6 +929,58 @@ impl ConfigWatcher {
 /// Get default config file path
 pub fn default_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("bcon").join("config.toml"))
+}
+
+/// Detect Nerd Font path by checking common installation locations
+fn detect_nerd_font_path() -> Option<String> {
+    // Common Nerd Font paths on Debian/Ubuntu
+    let candidates = [
+        // Hack Nerd Font (apt: fonts-hack-nerd)
+        "/usr/share/fonts/truetype/hack-nerd/HackNerdFontMono-Regular.ttf",
+        "/usr/share/fonts/truetype/hack-nerd/HackNerdFont-Regular.ttf",
+        "/usr/share/fonts/truetype/hack/HackNerdFontMono-Regular.ttf",
+        // FiraCode Nerd Font
+        "/usr/share/fonts/truetype/firacode-nerd/FiraCodeNerdFontMono-Regular.ttf",
+        "/usr/share/fonts/truetype/firacode-nerd/FiraCodeNerdFont-Regular.ttf",
+        // JetBrainsMono Nerd Font
+        "/usr/share/fonts/truetype/jetbrains-mono-nerd/JetBrainsMonoNerdFontMono-Regular.ttf",
+        "/usr/share/fonts/truetype/jetbrains-mono-nerd/JetBrainsMonoNerdFont-Regular.ttf",
+        // Manual install locations (~/.local/share/fonts)
+        // These are expanded at runtime
+    ];
+
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            info!("Detected Nerd Font: {}", path);
+            return Some(path.to_string());
+        }
+    }
+
+    // Check user fonts directory
+    if let Some(data_dir) = dirs::data_dir() {
+        let user_fonts = data_dir.join("fonts");
+        let nerd_font_patterns = [
+            "HackNerdFont",
+            "FiraCodeNerdFont",
+            "JetBrainsMonoNerdFont",
+            "DejaVuSansMNerdFont",
+        ];
+
+        if let Ok(entries) = std::fs::read_dir(&user_fonts) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                for pattern in nerd_font_patterns {
+                    if name.contains(pattern) && name.ends_with(".ttf") {
+                        let path = entry.path().to_string_lossy().to_string();
+                        info!("Detected Nerd Font (user): {}", path);
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

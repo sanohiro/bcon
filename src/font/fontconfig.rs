@@ -105,6 +105,41 @@ impl FontFinder {
         warn!("Color emoji font not found");
         None
     }
+
+    /// Search for Nerd Font (symbol/icon font)
+    pub fn find_nerd_font(&self) -> Option<FontMatch> {
+        let candidates = [
+            // Nerd Font variants (most common)
+            "Hack Nerd Font Mono",
+            "Hack Nerd Font",
+            "HackNerdFontMono",
+            "HackNerdFont",
+            "FiraCode Nerd Font Mono",
+            "FiraCode Nerd Font",
+            "FiraCodeNerdFontMono",
+            "FiraCodeNerdFont",
+            "JetBrainsMono Nerd Font Mono",
+            "JetBrainsMono Nerd Font",
+            "JetBrainsMonoNerdFontMono",
+            "JetBrainsMonoNerdFont",
+            "DejaVuSansMono Nerd Font Mono",
+            "DejaVuSansMono Nerd Font",
+            "DejaVuSansM Nerd Font Mono",
+            "DejaVuSansM Nerd Font",
+            "SauceCodePro Nerd Font Mono",
+            "SauceCodePro Nerd Font",
+            "Symbols Nerd Font Mono",
+            "Symbols Nerd Font",
+        ];
+
+        for name in candidates {
+            if let Some(m) = self.find_font(name) {
+                return Some(m);
+            }
+        }
+
+        None
+    }
 }
 
 /// Load font file
@@ -172,4 +207,33 @@ pub fn load_emoji_font_fc() -> Option<Vec<u8>> {
     }
 
     None
+}
+
+/// Search and load Nerd Font (symbol/icon font) using fontconfig
+pub fn load_nerd_font_fc() -> Option<Vec<u8>> {
+    let finder = match FontFinder::new() {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("fontconfig initialization failed: {:?}", e);
+            return None;
+        }
+    };
+
+    if let Some(font_match) = finder.find_nerd_font() {
+        info!(
+            "Nerd Font (fontconfig): {} ({})",
+            font_match.family,
+            font_match.path.display()
+        );
+        return load_font_file(&font_match.path).ok();
+    }
+
+    None
+}
+
+/// Find Nerd Font path (for config generation)
+pub fn find_nerd_font_path() -> Option<String> {
+    let finder = FontFinder::new().ok()?;
+    let font_match = finder.find_nerd_font()?;
+    Some(font_match.path.to_string_lossy().to_string())
 }

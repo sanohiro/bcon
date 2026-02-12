@@ -58,6 +58,7 @@ pub struct LcdGlyphAtlas {
 
     // FreeType font
     font_main: FtFont,
+    font_symbols: Option<FtFont>,
     font_cjk: Option<FtFont>,
     font_size: u32,
 
@@ -82,6 +83,7 @@ impl LcdGlyphAtlas {
         gl: &glow::Context,
         font_data: &[u8],
         font_size: u32,
+        symbols_font_data: Option<&[u8]>,
         cjk_font_data: Option<&[u8]>,
         lcd_mode: LcdMode,
         lcd_filter: LcdFilterMode,
@@ -90,6 +92,21 @@ impl LcdGlyphAtlas {
         hinting_mode: HintingMode,
     ) -> Result<Self> {
         let font_main = FtFont::from_bytes(font_data, font_size, lcd_mode, lcd_filter, lcd_weights, hinting_mode)?;
+
+        let font_symbols = if let Some(symbols_data) = symbols_font_data {
+            match FtFont::from_bytes(symbols_data, font_size, lcd_mode, lcd_filter, lcd_weights, hinting_mode) {
+                Ok(f) => {
+                    info!("Symbols font (Nerd Font) loaded (FreeType)");
+                    Some(f)
+                }
+                Err(e) => {
+                    warn!("Failed to load symbols font: {:?}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         let font_cjk = if let Some(cjk_data) = cjk_font_data {
             match FtFont::from_bytes(cjk_data, font_size, lcd_mode, lcd_filter, lcd_weights, hinting_mode) {
@@ -279,6 +296,7 @@ impl LcdGlyphAtlas {
             ascent,
             solid_uv,
             font_main,
+            font_symbols,
             font_cjk,
             font_size,
             cursor_x,
@@ -292,6 +310,7 @@ impl LcdGlyphAtlas {
 
     /// Ensure glyph for character
     /// Caches all 3 phases if subpixel phase is enabled
+    /// Fallback chain: main -> symbols (Nerd Font) -> CJK
     pub fn ensure_glyph(&mut self, ch: char) {
         if ch <= ' ' {
             return;
@@ -301,6 +320,20 @@ impl LcdGlyphAtlas {
         if !self.glyphs.contains_key(&ch) {
             let ft_glyph = if let Some(g) = self.font_main.rasterize(ch) {
                 g
+            } else if let Some(ref symbols) = self.font_symbols {
+                if let Some(g) = symbols.rasterize(ch) {
+                    g
+                } else if let Some(ref cjk) = self.font_cjk {
+                    if let Some(g) = cjk.rasterize(ch) {
+                        g
+                    } else {
+                        debug!("Glyph not found: U+{:04X}", ch as u32);
+                        return;
+                    }
+                } else {
+                    debug!("Glyph not found: U+{:04X}", ch as u32);
+                    return;
+                }
             } else if let Some(ref cjk) = self.font_cjk {
                 if let Some(g) = cjk.rasterize(ch) {
                     g
@@ -330,6 +363,18 @@ impl LcdGlyphAtlas {
 
                 let ft_glyph = if let Some(g) = self.font_main.rasterize_with_phase(ch, phase) {
                     g
+                } else if let Some(ref mut symbols) = self.font_symbols {
+                    if let Some(g) = symbols.rasterize_with_phase(ch, phase) {
+                        g
+                    } else if let Some(ref mut cjk) = self.font_cjk {
+                        if let Some(g) = cjk.rasterize_with_phase(ch, phase) {
+                            g
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
                 } else if let Some(ref mut cjk) = self.font_cjk {
                     if let Some(g) = cjk.rasterize_with_phase(ch, phase) {
                         g

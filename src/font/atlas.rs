@@ -71,6 +71,8 @@ pub struct GlyphAtlas {
     // Fields for dynamic rasterization
     /// Main font
     font_main: Font,
+    /// Symbol/icon fallback font (Nerd Font)
+    font_symbols: Option<Font>,
     /// CJK fallback font
     font_cjk: Option<Font>,
     /// Font size (logical size)
@@ -98,6 +100,7 @@ impl GlyphAtlas {
         gl: &glow::Context,
         font_data: &[u8],
         font_size: f32,
+        symbols_font_data: Option<&[u8]>,
         cjk_font_data: Option<&[u8]>,
     ) -> Result<Self> {
         // Supersampling: rasterize at 2x size
@@ -111,6 +114,22 @@ impl GlyphAtlas {
             "Main font loaded ({}x supersampling)",
             RENDER_SCALE
         );
+
+        // Load symbols/Nerd Font fallback
+        let font_symbols = if let Some(symbols_data) = symbols_font_data {
+            match Font::from_bytes(symbols_data, FontSettings::default()) {
+                Ok(f) => {
+                    info!("Symbols font (Nerd Font) loaded");
+                    Some(f)
+                }
+                Err(e) => {
+                    warn!("Failed to load symbols font (continuing): {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Load CJK fallback font
         let font_cjk = if let Some(cjk_data) = cjk_font_data {
@@ -319,6 +338,7 @@ impl GlyphAtlas {
             ascent,
             solid_uv,
             font_main,
+            font_symbols,
             font_cjk,
             font_size,
             render_size,
@@ -396,7 +416,7 @@ impl GlyphAtlas {
 
     /// Ensure character glyph exists in atlas
     ///
-    /// If not registered, rasterize and add from main font -> CJK font
+    /// If not registered, rasterize and add from main font -> symbols font -> CJK font
     pub fn ensure_glyph(&mut self, ch: char) {
         if self.glyphs.contains_key(&ch) {
             return;
@@ -408,8 +428,23 @@ impl GlyphAtlas {
         }
 
         // Select source font for rasterization (rasterize at high resolution)
+        // Fallback chain: main -> symbols (Nerd Font) -> CJK
         let (metrics, bitmap) = if self.font_main.lookup_glyph_index(ch) != 0 {
             self.font_main.rasterize(ch, self.render_size)
+        } else if let Some(ref symbols_font) = self.font_symbols {
+            if symbols_font.lookup_glyph_index(ch) != 0 {
+                symbols_font.rasterize(ch, self.render_size)
+            } else if let Some(ref cjk_font) = self.font_cjk {
+                if cjk_font.lookup_glyph_index(ch) != 0 {
+                    cjk_font.rasterize(ch, self.render_size)
+                } else {
+                    debug!("Glyph not found: U+{:04X} '{}'", ch as u32, ch);
+                    return;
+                }
+            } else {
+                debug!("Glyph not found (no CJK font): U+{:04X} '{}'", ch as u32, ch);
+                return;
+            }
         } else if let Some(ref cjk_font) = self.font_cjk {
             if cjk_font.lookup_glyph_index(ch) != 0 {
                 cjk_font.rasterize(ch, self.render_size)
@@ -419,7 +454,7 @@ impl GlyphAtlas {
             }
         } else {
             debug!(
-                "Glyph not found (no CJK font): U+{:04X} '{}'",
+                "Glyph not found (no fallback font): U+{:04X} '{}'",
                 ch as u32, ch
             );
             return;
