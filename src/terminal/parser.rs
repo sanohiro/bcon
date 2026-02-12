@@ -129,11 +129,7 @@ impl<'a> Perform for Performer<'a> {
                 self.grid.linefeed();
             }
             0x0D => self.grid.carriage_return(),     // CR
-            0x07 => {
-                // BEL - log for debugging frequent bells
-                trace!("BEL triggered");
-                self.grid.bell_triggered = true;
-            }
+            0x07 => self.grid.bell_triggered = true, // BEL
             _ => {
                 trace!("Unhandled control character: 0x{:02x}", byte);
             }
