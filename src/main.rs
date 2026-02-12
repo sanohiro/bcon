@@ -1607,7 +1607,9 @@ fn main() -> Result<()> {
                             let mods_shift = (state & 0x1) != 0; // Shift
 
                             let sym = xkbcommon::xkb::Keysym::new(keysym);
-                            let utf8 = xkbcommon::xkb::keysym_to_utf8(sym);
+                            // keysym_to_utf8 may contain NUL terminator, filter it out
+                            let utf8_raw = xkbcommon::xkb::keysym_to_utf8(sym);
+                            let utf8: String = utf8_raw.chars().filter(|&c| c != '\0').collect();
                             let kb_config = input::KeyboardConfig {
                                 application_cursor_keys: term.grid.modes.application_cursor_keys,
                                 modify_other_keys: term.grid.keyboard.modify_other_keys,
@@ -1621,6 +1623,8 @@ fn main() -> Result<()> {
                                 mods_shift,
                                 &kb_config,
                             );
+                            // Filter NUL bytes from result as well
+                            let bytes: Vec<u8> = bytes.into_iter().filter(|&b| b != 0).collect();
                             if !bytes.is_empty() {
                                 let _ = term.write_to_pty(&bytes);
                                 needs_redraw = true;
