@@ -57,6 +57,9 @@ fn is_emoji_codepoint(cp: u32) -> bool {
         0x1FA00..=0x1FAFF |  // Symbols and Pictographs Extended
         0x1F1E0..=0x1F1FF |  // Regional Indicator Symbols (flags)
 
+        // Fitzpatrick skin tone modifiers
+        0x1F3FB..=0x1F3FF |  // 🏻🏼🏽🏾🏿
+
         // Symbol blocks (used in ZWJ sequences)
         0x2600..=0x26FF   |  // Miscellaneous Symbols (♀♂⚕⚖ etc)
         0x2700..=0x27BF   |  // Dingbats (✈✂ etc)
@@ -1164,11 +1167,13 @@ impl Grid {
     }
 
     /// Backspace (BS)
+    /// Move cursor left by 1 column only.
+    /// Note: Do NOT auto-adjust for wide characters here.
+    /// Shells like bash/zsh send multiple BS bytes for wide chars,
+    /// so each BS should move exactly 1 column.
     pub fn backspace(&mut self) {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
-            // If moved to continuation cell (width=0), go back to head cell
-            self.cursor_col = self.find_wide_char_head(self.cursor_row, self.cursor_col);
         }
     }
 
@@ -1243,6 +1248,11 @@ impl Grid {
         for row in (bottom + 1 - n)..=bottom {
             self.clear_row(row);
         }
+
+        // Mark affected rows as dirty
+        for row in start..=bottom {
+            self.mark_dirty(row);
+        }
     }
 
     /// Delete characters (CSI P / DCH)
@@ -1251,6 +1261,27 @@ impl Grid {
         let row = self.cursor_row;
         let col = self.cursor_col;
         let n = n.min(self.cols - col);
+
+        // Handle wide character at cursor position
+        // If cursor is on continuation cell (width=0), clear the orphaned head cell
+        if self.cell(row, col).width == 0 && col > 0 {
+            *self.cell_mut(row, col - 1) = Cell::default();
+        }
+
+        // Handle wide character at deletion boundary (col + n)
+        // If the cell being shifted in is a continuation cell, clear its orphaned head
+        if col + n < self.cols && self.cell(row, col + n).width == 0 && col + n > 0 {
+            *self.cell_mut(row, col + n - 1) = Cell::default();
+        }
+
+        // Handle wide character that will be partially deleted
+        // If the last cell in deletion range is a wide char head, clear its continuation
+        if n > 0 && col + n - 1 < self.cols {
+            let last_deleted = col + n - 1;
+            if self.cell(row, last_deleted).width == 2 && last_deleted + 1 < self.cols {
+                *self.cell_mut(row, last_deleted + 1) = Cell::default();
+            }
+        }
 
         // Shift from col+n to end of line to col
         let row_start = row * self.cols;
@@ -1266,6 +1297,8 @@ impl Grid {
         for c in (self.cols - n)..self.cols {
             *self.cell_mut(row, c) = Cell::default();
         }
+
+        self.mark_dirty(row);
     }
 
     /// Insert characters (CSI @ / ICH)
@@ -1274,6 +1307,31 @@ impl Grid {
         let row = self.cursor_row;
         let col = self.cursor_col;
         let n = n.min(self.cols - col);
+
+        // Handle wide character at cursor position
+        // If cursor is on continuation cell (width=0), clear the head cell
+        if self.cell(row, col).width == 0 && col > 0 {
+            *self.cell_mut(row, col - 1) = Cell::default();
+        }
+
+        // Handle wide character at insertion boundary
+        // If cursor is on head cell of wide char, its continuation will be orphaned after shift
+        if self.cell(row, col).width == 2 && col + 1 < self.cols {
+            *self.cell_mut(row, col + 1) = Cell::default();
+        }
+
+        // Handle wide character that will be pushed off the right edge
+        // Check if the cell at (cols-n) is a wide char head that will lose its continuation
+        let shift_boundary = self.cols - n;
+        if shift_boundary > 0 && shift_boundary < self.cols {
+            if self.cell(row, shift_boundary - 1).width == 2 {
+                // Wide char head at shift_boundary-1, continuation at shift_boundary
+                // After shift, continuation goes to shift_boundary+n which might be off-screen
+                // But actually the head will stay, continuation will be overwritten
+                // Clear the head since its continuation will be lost
+                *self.cell_mut(row, shift_boundary - 1) = Cell::default();
+            }
+        }
 
         // Shift from col to end-n to col+n (copy right to left)
         let row_start = row * self.cols;
@@ -1285,6 +1343,8 @@ impl Grid {
         for c in col..(col + n) {
             *self.cell_mut(row, c) = Cell::default();
         }
+
+        self.mark_dirty(row);
     }
 
     /// Erase characters (CSI X / ECH)
@@ -1294,9 +1354,31 @@ impl Grid {
         let col = self.cursor_col;
         let n = n.min(self.cols - col);
 
+        // Handle wide character at start position
+        // If start is on continuation cell (width=0), clear the head cell too
+        if self.cell(row, col).width == 0 && col > 0 {
+            *self.cell_mut(row, col - 1) = Cell::default();
+        }
+
+        // Handle wide character at end position
+        // If end position is on a head cell of wide char, the continuation cell will be orphaned
+        let end_col = col + n;
+        if end_col < self.cols && self.cell(row, end_col).width == 0 {
+            // Cell at end_col is continuation, its head is inside erase range - OK
+        } else if end_col > 0 && end_col <= self.cols {
+            // Check if the cell just before end is a wide char head
+            let last_erased = end_col - 1;
+            if self.cell(row, last_erased).width == 2 && end_col < self.cols {
+                // Wide char head at end of erase range, continuation cell outside - clear it
+                *self.cell_mut(row, end_col) = Cell::default();
+            }
+        }
+
         for c in col..(col + n) {
             *self.cell_mut(row, c) = Cell::default();
         }
+
+        self.mark_dirty(row);
     }
 
     /// Scroll down (CSI T / SD)
@@ -1401,6 +1483,8 @@ impl Grid {
         self.cursor_row = 0;
         self.cursor_col = 0;
         self.image_placements.clear();
+        // Mark all rows dirty for FBO cache invalidation
+        self.mark_all_dirty();
     }
 
     /// Return to main screen buffer (?1049 reset)
@@ -1410,6 +1494,8 @@ impl Grid {
             self.cursor_row = saved.cursor_row;
             self.cursor_col = saved.cursor_col;
             self.image_placements.clear();
+            // Mark all rows dirty for FBO cache invalidation
+            self.mark_all_dirty();
         }
     }
 
@@ -1440,6 +1526,11 @@ impl Grid {
         // Clear inserted rows
         for row in self.cursor_row..(self.cursor_row + n) {
             self.clear_row(row);
+        }
+
+        // Mark affected rows as dirty
+        for row in self.cursor_row..=bottom {
+            self.mark_dirty(row);
         }
     }
 

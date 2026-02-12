@@ -197,6 +197,9 @@ impl Fbo {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             gl.viewport(0, 0, screen_width as i32, screen_height as i32);
 
+            // Disable blending to fully replace screen content
+            gl.disable(glow::BLEND);
+
             // Use blit shader
             gl.use_program(Some(self.blit_program));
             gl.uniform_1_i32(Some(&self.u_texture), 0);
@@ -211,6 +214,9 @@ impl Fbo {
 
             gl.bind_vertex_array(None);
             gl.bind_texture(glow::TEXTURE_2D, None);
+
+            // Re-enable blending for subsequent rendering (cursors, overlays)
+            gl.enable(glow::BLEND);
         }
     }
 

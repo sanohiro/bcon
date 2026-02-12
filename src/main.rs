@@ -443,7 +443,7 @@ fn main() -> Result<()> {
     let mut kb_font_reset = config::ParsedKeybinds::parse(&cfg.keybinds.font_reset);
     let mut kb_scroll_up = config::ParsedKeybinds::parse(&cfg.keybinds.scroll_up);
     let mut kb_scroll_down = config::ParsedKeybinds::parse(&cfg.keybinds.scroll_down);
-    let mut kb_ime_toggle = config::ParsedKeybinds::parse(&cfg.keybinds.ime_toggle);
+    // kb_ime_toggle removed - use fcitx5's Ctrl+Space instead
 
     // Config file change watcher (Linux only)
     #[cfg(target_os = "linux")]
@@ -811,9 +811,6 @@ fn main() -> Result<()> {
     let mut last_blink_toggle = std::time::Instant::now();
     const CURSOR_BLINK_INTERVAL_MS: u64 = 530; // ~530ms blink interval
 
-    // Previous cursor position (for FBO dirty tracking)
-    let mut prev_cursor_row: usize = 0;
-
     // Font size change request (currently log output only)
     let mut font_size_delta: i32 = 0;
 
@@ -826,15 +823,8 @@ fn main() -> Result<()> {
     // Screenshot flag
     let mut take_screenshot = false;
 
-    // IME enabled state (bcon-level toggle)
-    let mut ime_enabled = true;
-    // IME manual override (disable auto-switch when user explicitly toggles)
-    let mut ime_manual_override = false;
-    // Previous foreground process name (for change detection)
-    let mut last_fg_process: Option<String> = None;
-    // Last foreground process check time (rate limiting)
-    let mut last_fg_check = std::time::Instant::now();
-    const FG_CHECK_INTERVAL_MS: u64 = 200; // Check every 200ms
+    // IME is always enabled when ime_client is connected
+    // User controls input method switching via fcitx5's Ctrl+Space
 
     // DRM master state (for VT switching)
     let mut drm_master_held = true;
@@ -997,7 +987,7 @@ fn main() -> Result<()> {
                 kb_font_reset = config::ParsedKeybinds::parse(&new_cfg.keybinds.font_reset);
                 kb_scroll_up = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_up);
                 kb_scroll_down = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_down);
-                kb_ime_toggle = config::ParsedKeybinds::parse(&new_cfg.keybinds.ime_toggle);
+                // kb_ime_toggle removed
 
                 // Update IME disable app list
                 cfg = new_cfg;
@@ -1095,16 +1085,14 @@ fn main() -> Result<()> {
                 ctrl_pressed = raw.mods_ctrl;
 
                 if !raw.is_press {
-                    // Only send release events when IME is enabled
-                    if ime_enabled {
-                        if let Some(ref ime) = ime_client {
-                            ime.send_key(input::ime::ImeKeyEvent {
-                                keysym: raw.keysym,
-                                keycode: raw.keycode,
-                                state: raw.xkb_state,
-                                is_release: true,
-                            });
-                        }
+                    // Send release events to IME if connected
+                    if let Some(ref ime) = ime_client {
+                        ime.send_key(input::ime::ImeKeyEvent {
+                            keysym: raw.keysym,
+                            keycode: raw.keycode,
+                            state: raw.xkb_state,
+                            is_release: true,
+                        });
                     }
                     continue;
                 }
@@ -1114,6 +1102,7 @@ fn main() -> Result<()> {
                 let ctrl = raw.mods_ctrl;
                 let alt = raw.mods_alt;
                 let keysym = raw.keysym;
+
 
                 // Scroll up (configurable)
                 if kb_scroll_up.matches(ctrl, shift, alt, raw.keycode, keysym) {
@@ -1373,51 +1362,16 @@ fn main() -> Result<()> {
                     needs_redraw = true;
                 }
 
-                // IME toggle (configurable)
-                if kb_ime_toggle.matches(ctrl, shift, alt, raw.keycode, keysym) {
-                    ime_enabled = !ime_enabled;
-                    ime_manual_override = true; // Manual override: disable auto-switch
-                    info!("IME {} (manual)", if ime_enabled { "enabled" } else { "disabled" });
-                    // Visual feedback with bell flash
-                    bell_flash_until = Some(
-                        std::time::Instant::now() + Duration::from_millis(BELL_FLASH_DURATION_MS),
-                    );
-                    needs_redraw = true;
-                    continue;
-                }
-
-                // Process other keys normally
-                // When IME enabled, send to fcitx5; when disabled, send directly to PTY
-                if ime_enabled {
-                    if let Some(ref ime) = ime_client {
-                        ime.send_key(input::ime::ImeKeyEvent {
-                            keysym: raw.keysym,
-                            keycode: raw.keycode,
-                            state: raw.xkb_state,
-                            is_release: false,
-                        });
-                    } else {
-                        // Send directly to PTY when IME client is unavailable
-                        let sym = xkbcommon::xkb::Keysym::new(raw.keysym);
-                        let kb_config = input::KeyboardConfig {
-                            application_cursor_keys: term.grid.modes.application_cursor_keys,
-                            modify_other_keys: term.grid.keyboard.modify_other_keys,
-                            kitty_flags: term.grid.keyboard.kitty_flags,
-                        };
-                        let bytes = input::keysym_to_bytes_with_mods(
-                            sym,
-                            &raw.utf8,
-                            raw.mods_ctrl,
-                            raw.mods_alt,
-                            raw.mods_shift,
-                            &kb_config,
-                        );
-                        if !bytes.is_empty() {
-                            let _ = term.write_to_pty(&bytes);
-                        }
-                    }
+                // Process keys: send to fcitx5 if connected, otherwise directly to PTY
+                if let Some(ref ime) = ime_client {
+                    ime.send_key(input::ime::ImeKeyEvent {
+                        keysym: raw.keysym,
+                        keycode: raw.keycode,
+                        state: raw.xkb_state,
+                        is_release: false,
+                    });
                 } else {
-                    // Send directly to PTY when IME is disabled
+                    // Send directly to PTY when IME client is unavailable
                     let sym = xkbcommon::xkb::Keysym::new(raw.keysym);
                     let kb_config = input::KeyboardConfig {
                         application_cursor_keys: term.grid.modes.application_cursor_keys,
@@ -1618,6 +1572,8 @@ fn main() -> Result<()> {
                 match event {
                     input::ime::ImeEvent::Commit(text) => {
                         info!("IME Commit: {:?}", text);
+                        // Mark cursor row dirty before clearing preedit (for FBO cache)
+                        term.grid.mark_dirty(term.grid.cursor_row);
                         let _ = term.write_to_pty(text.as_bytes());
                         preedit.clear();
                         candidate_state = None;
@@ -1636,6 +1592,8 @@ fn main() -> Result<()> {
                     }
                     input::ime::ImeEvent::PreeditClear => {
                         trace!("IME PreeditClear");
+                        // Mark cursor row dirty before clearing preedit (for FBO cache)
+                        term.grid.mark_dirty(term.grid.cursor_row);
                         preedit.clear();
                         needs_redraw = true;
                     }
@@ -1680,6 +1638,8 @@ fn main() -> Result<()> {
                     }
                     input::ime::ImeEvent::ClearCandidates => {
                         trace!("IME ClearCandidates");
+                        // Mark all rows dirty to clear candidate window from FBO cache
+                        term.grid.mark_all_dirty();
                         candidate_state = None;
                         needs_redraw = true;
                     }
@@ -1721,52 +1681,14 @@ fn main() -> Result<()> {
                 needs_redraw = true;
             } else {
                 bell_flash_until = None;
+                needs_redraw = true; // Redraw once more to clear the flash
             }
         }
 
         // Focus events are sent when VT switch signals are processed above
         // (VtSwitcher handles SIGUSR1/SIGUSR2 for acquire/release)
 
-        // IME auto-switch based on foreground process
-        // Rate limited (considering command execution cost like tmux display-message)
-        let now = std::time::Instant::now();
-        if !cfg.terminal.ime_disabled_apps.is_empty()
-            && now.duration_since(last_fg_check).as_millis() >= FG_CHECK_INTERVAL_MS as u128
-        {
-            last_fg_check = now;
-            let current_fg = term.foreground_process_name();
-            if current_fg != last_fg_process {
-                // Reset manual override when process changes
-                if ime_manual_override {
-                    ime_manual_override = false;
-                    info!("IME returned to auto mode");
-                }
-
-                if let Some(ref proc_name) = current_fg {
-                    // Check if process name is in the list
-                    let should_disable =
-                        cfg.terminal.ime_disabled_apps.iter().any(|app| {
-                            proc_name == app || proc_name.ends_with(&format!("/{}", app))
-                        });
-
-                    let new_ime_state = !should_disable;
-                    if ime_enabled != new_ime_state {
-                        ime_enabled = new_ime_state;
-                        info!(
-                            "IME auto-{}: {} ({})",
-                            if ime_enabled { "enabled" } else { "disabled" },
-                            proc_name,
-                            if should_disable {
-                                "disabled app"
-                            } else {
-                                "normal"
-                            }
-                        );
-                    }
-                }
-                last_fg_process = current_fg;
-            }
-        }
+        // IME auto-switch removed - user controls via fcitx5's Ctrl+Space
 
         // Sleep briefly if no changes (reduce CPU load)
         if !needs_redraw {
@@ -1783,22 +1705,19 @@ fn main() -> Result<()> {
             config_bg
         };
 
-        // Mark cursor rows as dirty (cursor moves independently of content)
-        // Both current and previous cursor rows need redraw
-        let cursor_row = term.grid.cursor_row;
-        if cursor_row < term.grid.rows() {
-            term.grid.mark_dirty(cursor_row);
-        }
-        if prev_cursor_row != cursor_row && prev_cursor_row < term.grid.rows() {
-            term.grid.mark_dirty(prev_cursor_row);
-        }
-        prev_cursor_row = cursor_row;
+        // Cursor is drawn outside FBO (after blit), so no need to mark cursor rows dirty
 
         // Bind FBO for rendering
         fbo.bind(gl);
 
-        // Clear FBO: if all dirty or overlays active, clear everything; otherwise clear only dirty rows
-        let has_overlays = term.selection.is_some() || search_mode || term.copy_mode.is_some();
+        // Overlays that require full FBO clear (dynamic content that doesn't use dirty tracking)
+        let has_overlays = term.selection.is_some()
+            || search_mode
+            || term.copy_mode.is_some()
+            || !preedit.is_empty()  // IME preedit changes without dirty tracking
+            || candidate_state.is_some();  // IME candidate window
+
+        // Clear FBO: full clear when overlays active or all dirty, otherwise only dirty rows
         if term.grid.is_all_dirty() || has_overlays {
             fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
         } else if term.has_dirty_rows() {
@@ -1835,7 +1754,6 @@ fn main() -> Result<()> {
 
         // Determine if partial rendering is possible (no overlays active)
         // When overlays are active, we must render all rows for correctness
-        // DISABLED: FBO caching causes cursor trails - needs cursor to be rendered outside FBO
         let partial_render = !has_overlays && !grid.is_all_dirty();
 
         // === Pass 1: Background color (run-length encoded) ===
@@ -2134,17 +2052,20 @@ fn main() -> Result<()> {
                 let x = margin_x + col as f32 * cell_w;
                 let y = margin_y + row as f32 * cell_h;
 
+                // Width of cell in pixels (wide chars occupy 2 cells)
+                let cell_pixel_w = cell.width as f32 * cell_w;
+
                 // Overline rendering (CSI 53 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
                     let fg = effective_fg(&cell.fg);
-                    text_renderer.push_rect(x, y, cell_w, 1.0, fg, &glyph_atlas);
+                    text_renderer.push_rect(x, y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
                 // Strikethrough rendering (CSI 9 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
                     let fg = effective_fg(&cell.fg);
                     let strike_y = y + cell_h / 2.0;
-                    text_renderer.push_rect(x, strike_y, cell_w, 1.0, fg, &glyph_atlas);
+                    text_renderer.push_rect(x, strike_y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
                 let grapheme = &cell.grapheme;
@@ -2258,9 +2179,13 @@ fn main() -> Result<()> {
                         }
                     }
                     if !emoji_drawn {
-                        glyph_atlas.ensure_glyph(first_char);
+                        // Ensure all glyphs in grapheme are in atlas
+                        for ch in grapheme.chars() {
+                            glyph_atlas.ensure_glyph(ch);
+                        }
                         let baseline_y = (y + ascent).round();
-                        text_renderer.push_char_with_bg(first_char, x, baseline_y, fg, bg, &glyph_atlas);
+                        // Render full grapheme (handles combining characters correctly)
+                        text_renderer.push_text_with_bg(grapheme, x, baseline_y, fg, bg, &glyph_atlas);
                     }
                 }
             }
@@ -2289,11 +2214,7 @@ fn main() -> Result<()> {
         }
         image_renderer.flush(gl, screen_w, screen_h);
 
-        // === Pass 3.5: Emoji rendering ===
-        emoji_atlas.upload_if_dirty(gl);
-        emoji_renderer.flush(gl, &emoji_atlas, screen_w, screen_h);
-
-        // === Pass 3.6: Curly line rendering (SDF + smoothstep) ===
+        // === Pass 3.5: Curly line rendering (SDF + smoothstep) ===
         curly_renderer.flush(gl, screen_w, screen_h);
 
         // === Preedit rendering (IME composition text) ===
@@ -2305,17 +2226,35 @@ fn main() -> Result<()> {
             let pe_row = grid.cursor_row;
             let pe_y = margin_y + pe_row as f32 * cell_h;
 
-            // Draw in order: background -> text per segment
+            // Calculate total width first (for background)
             // fcitx5 format flags: 8=Underline(composing), 16=Highlight(conversion target)
+            let total_cols: usize = preedit
+                .segments
+                .iter()
+                .flat_map(|seg| seg.text.chars())
+                .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+                .sum();
 
-            // Pass A: Background rectangles for conversion target segments
+            // Pass A: Draw background for entire preedit area (covers grid content)
+            let pe_x = margin_x + pe_col as f32 * cell_w;
+            let pe_w = total_cols as f32 * cell_w;
+            text_renderer.push_rect(
+                pe_x,
+                pe_y,
+                pe_w,
+                cell_h,
+                [bg_color.0, bg_color.1, bg_color.2, 1.0], // Terminal background
+                &glyph_atlas,
+            );
+
+            // Pass B: Draw highlight backgrounds for conversion target segments
             let mut offset_col = 0usize;
             for seg in &preedit.segments {
                 let is_highlight = (seg.format & 16) != 0;
                 let seg_cols: usize = seg
                     .text
                     .chars()
-                    .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                    .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                     .sum();
 
                 if is_highlight {
@@ -2326,36 +2265,36 @@ fn main() -> Result<()> {
                         pe_y,
                         seg_w,
                         cell_h,
-                        [0.7, 0.7, 0.7, 1.0],
+                        [0.7, 0.7, 0.7, 1.0], // Highlight background
                         &glyph_atlas,
                     );
                 }
                 offset_col += seg_cols;
             }
-            let total_cols = offset_col;
 
-            // Pass B: Text
+            // Pass C: Draw text and underlines
             offset_col = 0;
             for seg in &preedit.segments {
                 let is_highlight = (seg.format & 16) != 0;
                 let fg = if is_highlight {
-                    [0.0, 0.0, 0.0, 1.0] // Black (on white background)
+                    [0.0, 0.0, 0.0, 1.0] // Black (on highlight background)
                 } else {
-                    [1.0, 1.0, 1.0, 1.0] // White
+                    [1.0, 1.0, 1.0, 1.0] // White (on terminal background)
                 };
 
                 let seg_start = offset_col;
                 for ch in seg.text.chars() {
                     let char_x = margin_x + (pe_col + offset_col) as f32 * cell_w;
                     let baseline_y = (pe_y + ascent).round();
-                    let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                    let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
 
+                    // Skip zero-width characters for positioning but still render them
                     glyph_atlas.ensure_glyph(ch);
                     text_renderer.push_char(ch, char_x, baseline_y, fg, &glyph_atlas);
                     offset_col += ch_w;
                 }
 
-                // Underline for composing segment
+                // Underline for composing (non-highlight) segments
                 if !is_highlight {
                     let ul_x = margin_x + (pe_col + seg_start) as f32 * cell_w;
                     let ul_w = (offset_col - seg_start) as f32 * cell_w;
@@ -2376,103 +2315,17 @@ fn main() -> Result<()> {
             0
         };
 
-        // Draw cursor (white rectangular block)
-        // Only show copy mode cursor during copy mode
-        if let Some(ref cm) = term.copy_mode {
-            // Copy mode cursor (yellow outline)
-            let cursor_x = margin_x + cm.cursor_col as f32 * cell_w;
-            let cursor_y = margin_y + cm.cursor_row as f32 * cell_h;
-            let border = 2.0_f32;
-            // Top edge
-            text_renderer.push_rect(
-                cursor_x,
-                cursor_y,
-                cell_w,
-                border,
-                [1.0, 0.8, 0.0, 0.9],
-                &glyph_atlas,
-            );
-            // Bottom edge
-            text_renderer.push_rect(
-                cursor_x,
-                cursor_y + cell_h - border,
-                cell_w,
-                border,
-                [1.0, 0.8, 0.0, 0.9],
-                &glyph_atlas,
-            );
-            // Left edge
-            text_renderer.push_rect(
-                cursor_x,
-                cursor_y,
-                border,
-                cell_h,
-                [1.0, 0.8, 0.0, 0.9],
-                &glyph_atlas,
-            );
-            // Right edge
-            text_renderer.push_rect(
-                cursor_x + cell_w - border,
-                cursor_y,
-                border,
-                cell_h,
-                [1.0, 0.8, 0.0, 0.9],
-                &glyph_atlas,
-            );
-        } else if term.scroll_offset == 0 && grid.modes.cursor_visible {
-            // Normal cursor (hidden during scrollback display)
-            // In blink mode, toggle visibility with cursor_blink_visible
-            let should_draw = !grid.cursor.blink || cursor_blink_visible;
-
-            if should_draw {
-                // Display at end of preedit when composing
-                let cursor_x = margin_x + (grid.cursor_col + preedit_total_cols) as f32 * cell_w;
-                let cursor_y = margin_y + grid.cursor_row as f32 * cell_h;
-                let cursor_color = [config_cursor.0, config_cursor.1, config_cursor.2, config_cursor_opacity];
-
-                // Draw according to cursor style
-                match grid.cursor.style {
-                terminal::grid::CursorStyle::Block => {
-                    text_renderer.push_rect(
-                        cursor_x,
-                        cursor_y,
-                        cell_w,
-                        cell_h,
-                        cursor_color,
-                        &glyph_atlas,
-                    );
-                }
-                terminal::grid::CursorStyle::Underline => {
-                    let underline_h = 2.0;
-                    text_renderer.push_rect(
-                        cursor_x,
-                        cursor_y + cell_h - underline_h,
-                        cell_w,
-                        underline_h,
-                        cursor_color,
-                        &glyph_atlas,
-                    );
-                }
-                terminal::grid::CursorStyle::Bar => {
-                    let bar_w = 2.0;
-                    text_renderer.push_rect(
-                        cursor_x,
-                        cursor_y,
-                        bar_w,
-                        cell_h,
-                        cursor_color,
-                        &glyph_atlas,
-                    );
-                }
-                }
-            }
-        }
-
-        // Mouse cursor is drawn after FBO blit (outside FBO cache)
+        // Text cursor and mouse cursor are drawn after FBO blit (outside FBO cache)
+        // to avoid cursor trails in cached content
 
         // === Pass 1: Text rendering (grid + preedit + cursor) ===
         glyph_atlas.upload_if_dirty(gl);
         text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+
+        // === Pass 1.5: Emoji rendering (after text, so emoji shows on top of selection) ===
+        // text_renderer disables blending for LCD compositing, so emoji must be drawn after
+        emoji_atlas.upload_if_dirty(gl);
+        emoji_renderer.flush(gl, &emoji_atlas, screen_w, screen_h);
 
         // === Candidate window rendering (3 passes: UI background -> candidate text) ===
         if let Some(ref cands) = candidate_state {
@@ -2483,17 +2336,17 @@ fn main() -> Result<()> {
                 let corner_radius = 6.0_f32;
                 let highlight_radius = 4.0_f32;
 
-                // Calculate candidate text width
+                // Calculate candidate text width (use unwrap_or(0) for control chars)
                 let mut max_label_w = 0.0_f32;
                 let mut max_text_w = 0.0_f32;
                 for (label, text) in &cands.candidates {
                     let label_cols: usize = label
                         .chars()
-                        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                         .sum();
                     let text_cols: usize = text
                         .chars()
-                        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                         .sum();
                     max_label_w = max_label_w.max(label_cols as f32 * cell_w);
                     max_text_w = max_text_w.max(text_cols as f32 * cell_w);
@@ -2510,11 +2363,11 @@ fn main() -> Result<()> {
                 };
                 let win_h = padding * 2.0 + num_cands * item_h - item_gap + indicator_h;
 
-                // Window position: directly below preedit
+                // Window position: directly below preedit (include margin)
                 let pe_col = grid.cursor_col;
                 let pe_row = grid.cursor_row;
-                let mut win_x = pe_col as f32 * cell_w;
-                let mut win_y = (pe_row + 1) as f32 * cell_h;
+                let mut win_x = margin_x + pe_col as f32 * cell_w;
+                let mut win_y = margin_y + (pe_row + 1) as f32 * cell_h;
 
                 // Screen edge overflow correction
                 if win_x + win_w > screen_w as f32 {
@@ -2560,10 +2413,17 @@ fn main() -> Result<()> {
                 // Pass 3: Candidate text rendering
                 text_renderer.begin();
 
+                // Background colors for LCD subpixel compositing
+                let win_bg = [0.15, 0.15, 0.18];        // Window background (matches ui_renderer)
+                let sel_bg = [0.3, 0.45, 0.7];          // Selection highlight background
+
                 for (i, (label, text)) in cands.candidates.iter().enumerate() {
                     let is_selected = i as i32 == cands.selected_index;
                     let item_y = win_y + padding + i as f32 * item_h;
                     let baseline_y = (item_y + ascent).round();
+
+                    // Background for LCD compositing
+                    let item_bg = if is_selected { sel_bg } else { win_bg };
 
                     // Label color
                     let label_color = if is_selected {
@@ -2583,14 +2443,14 @@ fn main() -> Result<()> {
                     for ch in label.chars() {
                         glyph_atlas.ensure_glyph(ch);
                     }
-                    text_renderer.push_text(label, label_x, baseline_y, label_color, &glyph_atlas);
+                    text_renderer.push_text_with_bg(label, label_x, baseline_y, label_color, item_bg, &glyph_atlas);
 
                     // Text rendering
                     let text_x = win_x + padding + max_label_w + label_text_gap;
                     for ch in text.chars() {
                         glyph_atlas.ensure_glyph(ch);
                     }
-                    text_renderer.push_text(text, text_x, baseline_y, text_color, &glyph_atlas);
+                    text_renderer.push_text_with_bg(text, text_x, baseline_y, text_color, item_bg, &glyph_atlas);
                 }
 
                 // Page indicator
@@ -2610,14 +2470,15 @@ fn main() -> Result<()> {
                         // Right-align
                         let ind_cols: usize = indicator
                             .chars()
-                            .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                            .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                             .sum();
                         let ind_x = win_x + win_w - padding - ind_cols as f32 * cell_w;
-                        text_renderer.push_text(
+                        text_renderer.push_text_with_bg(
                             indicator,
                             ind_x,
                             baseline_y,
                             [0.5, 0.55, 0.6, 1.0],
+                            win_bg,  // Use window background for LCD compositing
                             &glyph_atlas,
                         );
                     }
@@ -2660,14 +2521,18 @@ fn main() -> Result<()> {
                 "[COPY] v:select  y:yank  hjkl:move  /:search  Esc:exit"
             };
 
+            // Background color for LCD compositing (matches ui_renderer bar)
+            let bar_bg = [0.2, 0.15, 0.1];
+
             for ch in status.chars() {
                 glyph_atlas.ensure_glyph(ch);
             }
-            text_renderer.push_text(
+            text_renderer.push_text_with_bg(
                 status,
                 padding,
                 bar_y + 4.0 + ascent,
                 [1.0, 0.9, 0.7, 1.0],
+                bar_bg,
                 &glyph_atlas,
             );
 
@@ -2697,16 +2562,20 @@ fn main() -> Result<()> {
                 // Text
                 text_renderer.begin();
 
+                // Background color for LCD compositing (matches ui_renderer bar)
+                let search_bar_bg = [0.15, 0.15, 0.2];
+
                 // Prompt "/"
                 let prompt = "/";
                 for ch in prompt.chars() {
                     glyph_atlas.ensure_glyph(ch);
                 }
-                text_renderer.push_text(
+                text_renderer.push_text_with_bg(
                     prompt,
                     padding,
                     bar_y + 4.0 + ascent,
                     [0.6, 0.6, 0.6, 1.0],
+                    search_bar_bg,
                     &glyph_atlas,
                 );
 
@@ -2715,11 +2584,12 @@ fn main() -> Result<()> {
                 for ch in search.query.chars() {
                     glyph_atlas.ensure_glyph(ch);
                 }
-                text_renderer.push_text(
+                text_renderer.push_text_with_bg(
                     &search.query,
                     query_x,
                     bar_y + 4.0 + ascent,
                     [1.0, 1.0, 1.0, 1.0],
+                    search_bar_bg,
                     &glyph_atlas,
                 );
 
@@ -2727,7 +2597,7 @@ fn main() -> Result<()> {
                 let query_cols: usize = search
                     .query
                     .chars()
-                    .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                    .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                     .sum();
                 let cursor_x = query_x + query_cols as f32 * cell_w;
                 text_renderer.push_rect(
@@ -2748,14 +2618,15 @@ fn main() -> Result<()> {
                     }
                     let info_cols: usize = match_info
                         .chars()
-                        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                         .sum();
                     let info_x = screen_w as f32 - padding - info_cols as f32 * cell_w;
-                    text_renderer.push_text(
+                    text_renderer.push_text_with_bg(
                         &match_info,
                         info_x,
                         bar_y + 4.0 + ascent,
                         [0.7, 0.7, 0.7, 1.0],
+                        search_bar_bg,
                         &glyph_atlas,
                     );
                 }
@@ -2765,23 +2636,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // === Bell flash (visual bell) ===
-        if bell_flash_until.is_some() {
-            // Light up screen edges (border only)
-            let border = 4.0;
-            let color = [1.0, 0.6, 0.2, 0.8]; // Orange
-            text_renderer.begin();
-            // Top
-            text_renderer.push_rect(0.0, 0.0, screen_w as f32, border, color, &glyph_atlas);
-            // Bottom
-            text_renderer.push_rect(0.0, screen_h as f32 - border, screen_w as f32, border, color, &glyph_atlas);
-            // Left
-            text_renderer.push_rect(0.0, border, border, screen_h as f32 - border * 2.0, color, &glyph_atlas);
-            // Right
-            text_renderer.push_rect(screen_w as f32 - border, border, border, screen_h as f32 - border * 2.0, color, &glyph_atlas);
-            glyph_atlas.upload_if_dirty(gl);
-            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
-        }
+        // Bell flash is drawn after FBO blit (outside FBO cache)
 
         // === Screenshot ===
         if take_screenshot {
@@ -2799,6 +2654,104 @@ fn main() -> Result<()> {
         // Unbind FBO and blit to screen
         fbo.unbind(gl);
         fbo.blit_to_screen(gl, screen_w, screen_h);
+
+        // Draw text cursor directly to screen (outside FBO cache)
+        // This prevents cursor trails in cached content
+        {
+            text_renderer.begin();
+
+            if let Some(ref cm) = term.copy_mode {
+                // Copy mode cursor (yellow outline)
+                let cursor_x = margin_x + cm.cursor_col as f32 * cell_w;
+                let cursor_y = margin_y + cm.cursor_row as f32 * cell_h;
+                let border = 2.0_f32;
+                // Top edge
+                text_renderer.push_rect(
+                    cursor_x,
+                    cursor_y,
+                    cell_w,
+                    border,
+                    [1.0, 0.8, 0.0, 0.9],
+                    &glyph_atlas,
+                );
+                // Bottom edge
+                text_renderer.push_rect(
+                    cursor_x,
+                    cursor_y + cell_h - border,
+                    cell_w,
+                    border,
+                    [1.0, 0.8, 0.0, 0.9],
+                    &glyph_atlas,
+                );
+                // Left edge
+                text_renderer.push_rect(
+                    cursor_x,
+                    cursor_y,
+                    border,
+                    cell_h,
+                    [1.0, 0.8, 0.0, 0.9],
+                    &glyph_atlas,
+                );
+                // Right edge
+                text_renderer.push_rect(
+                    cursor_x + cell_w - border,
+                    cursor_y,
+                    border,
+                    cell_h,
+                    [1.0, 0.8, 0.0, 0.9],
+                    &glyph_atlas,
+                );
+            } else if term.scroll_offset == 0 && grid.modes.cursor_visible {
+                // Normal cursor (hidden during scrollback display)
+                // In blink mode, toggle visibility with cursor_blink_visible
+                let should_draw = !grid.cursor.blink || cursor_blink_visible;
+
+                if should_draw {
+                    // Display at end of preedit when composing
+                    let cursor_x = margin_x + (grid.cursor_col + preedit_total_cols) as f32 * cell_w;
+                    let cursor_y = margin_y + grid.cursor_row as f32 * cell_h;
+                    let cursor_color = [config_cursor.0, config_cursor.1, config_cursor.2, config_cursor_opacity];
+
+                    // Draw according to cursor style
+                    match grid.cursor.style {
+                        terminal::grid::CursorStyle::Block => {
+                            text_renderer.push_rect(
+                                cursor_x,
+                                cursor_y,
+                                cell_w,
+                                cell_h,
+                                cursor_color,
+                                &glyph_atlas,
+                            );
+                        }
+                        terminal::grid::CursorStyle::Underline => {
+                            let underline_h = 2.0;
+                            text_renderer.push_rect(
+                                cursor_x,
+                                cursor_y + cell_h - underline_h,
+                                cell_w,
+                                underline_h,
+                                cursor_color,
+                                &glyph_atlas,
+                            );
+                        }
+                        terminal::grid::CursorStyle::Bar => {
+                            let bar_w = 2.0;
+                            text_renderer.push_rect(
+                                cursor_x,
+                                cursor_y,
+                                bar_w,
+                                cell_h,
+                                cursor_color,
+                                &glyph_atlas,
+                            );
+                        }
+                    }
+                }
+            }
+
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
 
         // Draw mouse cursor directly to screen (outside FBO cache)
         {
@@ -2823,6 +2776,23 @@ fn main() -> Result<()> {
                 [1.0, 1.0, 1.0, 0.9],
                 &glyph_atlas,
             );
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
+
+        // === Bell flash (visual bell) - outside FBO cache ===
+        if bell_flash_until.is_some() {
+            // Light up screen edges (border only)
+            let border = 4.0;
+            let color = [1.0, 0.6, 0.2, 0.8]; // Orange
+            text_renderer.begin();
+            // Top
+            text_renderer.push_rect(0.0, 0.0, screen_w as f32, border, color, &glyph_atlas);
+            // Bottom
+            text_renderer.push_rect(0.0, screen_h as f32 - border, screen_w as f32, border, color, &glyph_atlas);
+            // Left
+            text_renderer.push_rect(0.0, border, border, screen_h as f32 - border * 2.0, color, &glyph_atlas);
+            // Right
+            text_renderer.push_rect(screen_w as f32 - border, border, border, screen_h as f32 - border * 2.0, color, &glyph_atlas);
             text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
         }
 
