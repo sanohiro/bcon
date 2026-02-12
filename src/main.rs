@@ -1790,7 +1790,12 @@ fn main() -> Result<()> {
                     continue;
                 }
 
-                let bg = cell.bg.to_rgba(false);
+                // Handle INVERSE attribute (SGR 7): swap fg and bg
+                let bg = if cell.attrs.contains(terminal::grid::CellAttrs::INVERSE) {
+                    effective_fg(&cell.fg)
+                } else {
+                    cell.bg.to_rgba(false)
+                };
 
                 if let Some((start, run_color)) = run_start {
                     if bg == run_color {
@@ -2071,27 +2076,39 @@ fn main() -> Result<()> {
                 // Width of cell in pixels (wide chars occupy 2 cells)
                 let cell_pixel_w = cell.width as f32 * cell_w;
 
+                // Check INVERSE for decorations
+                let is_inverse = cell.attrs.contains(terminal::grid::CellAttrs::INVERSE);
+
                 // Overline rendering (CSI 53 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
-                    let fg = effective_fg(&cell.fg);
+                    let fg = if is_inverse { cell.bg.to_rgba(true) } else { effective_fg(&cell.fg) };
                     text_renderer.push_rect(x, y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
                 // Strikethrough rendering (CSI 9 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
-                    let fg = effective_fg(&cell.fg);
+                    let fg = if is_inverse { cell.bg.to_rgba(true) } else { effective_fg(&cell.fg) };
                     let strike_y = y + cell_h / 2.0;
                     text_renderer.push_rect(x, strike_y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
                 let grapheme = &cell.grapheme;
                 if !grapheme.is_empty() && grapheme != " " {
-                    let fg = effective_fg(&cell.fg);
+                    // Handle INVERSE attribute (SGR 7): swap fg and bg (is_inverse defined above)
+                    let fg = if is_inverse {
+                        cell.bg.to_rgba(true)
+                    } else {
+                        effective_fg(&cell.fg)
+                    };
 
                     // Calculate final background color (needed for LCD subpixel compositing)
                     // Composite in order: cell BG -> selection highlight -> search highlight
                     // Blend in linear space to match shader
-                    let mut bg_rgba = cell.bg.to_rgba(false);
+                    let mut bg_rgba = if is_inverse {
+                        effective_fg(&cell.fg)
+                    } else {
+                        cell.bg.to_rgba(false)
+                    };
 
                     // Selection highlight - blend in linear space
                     if let Some((sel_start, sel_end)) = row_selection {
