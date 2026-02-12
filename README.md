@@ -71,212 +71,80 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 
 ## Requirements
 
-- Linux with DRM/KMS support
+- Linux with DRM/KMS support (Debian/Ubuntu recommended)
 - GPU with OpenGL ES 2.0+
-- Rust toolchain (1.82+)
 
-### Privilege Options
+## Installation (Debian/Ubuntu)
 
-| Mode | Requirement | Build Command |
-|------|-------------|---------------|
-| Root mode | Run as root (`sudo`) | `cargo build --release` |
-| Rootless mode | systemd-logind or seatd | `cargo build --release --features seatd` |
-
-**Rootless mode** uses [libseat](https://sr.ht/~kennylevinsen/seatd/) for proper session management. Benefits:
-- No root required
-- Proper session tracking (`loginctl list-sessions`)
-- Integration with screen lock, power management
-- Clean VT switching with Wayland/X11 sessions
-
-### System Packages (Debian/Ubuntu)
+### Basic Setup
 
 ```bash
-# Build dependencies
-sudo apt install \
-    libdrm-dev libgbm-dev \
-    libegl1-mesa-dev libgles2-mesa-dev \
-    libxkbcommon-dev libinput-dev libudev-dev \
-    libdbus-1-dev libwayland-dev \
-    libfontconfig1-dev libfreetype-dev \
-    pkg-config cmake clang
-
-# Optional: for rootless build (--features seatd)
-sudo apt install libseat-dev
-
-# Runtime (fonts)
-sudo apt install fonts-dejavu-core
-
-# Optional: Japanese support
-sudo apt install fonts-noto-cjk fcitx5 fcitx5-mozc
-
-# Optional: Color emoji
-sudo apt install fonts-noto-color-emoji
-```
-
-## Installation
-
-### apt (Debian/Ubuntu)
-
-```bash
-# Add repository
+# 1. Install bcon
 curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
-
-# Install
 sudo apt install bcon
-```
 
-After installation, choose one of these setup options:
-
-**Option 1: systemd Service (Recommended)**
-```bash
-# Generate system config
+# 2. Generate config file
 sudo bcon --init-config=system           # Default
-sudo bcon --init-config=system,vim,jp    # Vim + Japanese
-sudo bcon --init-config=system,emacs,jp  # Emacs + Japanese
+sudo bcon --init-config=system,vim       # Vim users
+sudo bcon --init-config=system,emacs     # Emacs users
 
-# Replace getty on tty2 with bcon
+# 3. Enable systemd service (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# Switch to bcon
-Ctrl+Alt+F2
+# 4. Switch to bcon
+# Ctrl+Alt+F2
 ```
 
-**Option 2: Login Session (GDM/SDDM)**
-```bash
-# Generate user config
-bcon --init-config=vim,jp      # or emacs,jp
-```
-Then select "bcon" from the session dropdown on the login screen.
-
-See [Usage](#usage) section for detailed setup instructions.
-
-### From source
+### Japanese Environment Setup
 
 ```bash
-# Standard build (requires root to run)
-cargo build --release
+# 1. Install bcon and Japanese packages
+curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
+sudo apt install bcon fonts-noto-cjk fonts-noto-color-emoji fcitx5 fcitx5-mozc
 
-# Rootless build (requires logind/seatd)
-cargo build --release --features seatd
+# 2. Setup fcitx5 auto-start
+echo 'fcitx5 -d &>/dev/null' >> ~/.bashrc
+# or ~/.zshrc
 
-# Generate config file
-./target/release/bcon --init-config
+# 3. Generate config file (Japanese preset)
+sudo bcon --init-config=system,vim,jp    # Vim users
+sudo bcon --init-config=system,emacs,jp  # Emacs users
 
-# For Japanese users
-./target/release/bcon --init-config=vim,jp
-```
-
-## Usage
-
-### Manual Start
-
-Run from TTY (virtual console), not inside X11/Wayland:
-
-```bash
-# Switch to TTY
-Ctrl+Alt+F2
-
-# Run bcon (standard build)
-sudo ./target/release/bcon
-
-# Run bcon (rootless build with --features seatd)
-./target/release/bcon
-
-# Return to graphical session
-Ctrl+Alt+F1  # or F7
-```
-
-### systemd Service (Recommended for Daily Use)
-
-```bash
-# Install binary and service
-sudo cp target/release/bcon /usr/local/bin/
-sudo cp bcon@.service /etc/systemd/system/
-
-# Generate system config
-sudo bcon --init-config=system,vim,jp
-
-# Enable on tty2 (keeps tty1 as fallback)
+# 4. Enable systemd service (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# Switch to bcon
-Ctrl+Alt+F2
+# 5. Switch to bcon
+# Ctrl+Alt+F2
+
+# Toggle IME: Ctrl+Space (fcitx5 default)
 ```
 
-### Login Session (GDM/SDDM)
+### User Login Session (no sudo required)
 
-With rootless build, bcon can be selected as a session from the login screen:
+Start directly from GDM/SDDM login screen:
 
 ```bash
-# Install session file
-sudo cp bcon.desktop /usr/share/wayland-sessions/
+# 1. Install bcon
+curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
+sudo apt install bcon
 
-# Now "bcon" appears in GDM/SDDM session selector
+# 2. Generate user config
+bcon --init-config=vim,jp    # saves to ~/.config/bcon/config.toml
+
+# 3. Select "bcon" session from login screen
 ```
 
-This allows direct login to bcon without starting a desktop environment — saves memory and boot time.
-
-### Rootless systemd Service
-
-For rootless builds (`--features seatd`), create a user-specific service:
-
-```ini
-# /etc/systemd/system/bcon@.service
-[Unit]
-Description=bcon terminal on %I
-After=systemd-logind.service
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/bcon
-StandardInput=tty
-StandardOutput=tty
-TTYPath=/dev/%I
-TTYReset=yes
-TTYVHangup=yes
-
-# Rootless: run as regular user
-User=youruser
-Group=youruser
-SupplementaryGroups=video input
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### With Japanese Input (IME)
-
-```bash
-# Start fcitx5 daemon
-fcitx5 -d
-
-# Run bcon (preserve environment for D-Bus)
-sudo -E ./target/release/bcon
-
-# Toggle IME: configured key (default: Ctrl+Shift+J)
-```
+Log in directly to bcon without starting a desktop environment. Saves memory and boot time.
 
 ## Configuration
 
-Config file locations (in priority order):
-1. `~/.config/bcon/config.toml` (user config)
-2. `/etc/bcon/config.toml` (system config)
-3. Built-in defaults
-
-### Generate Config
-
-```bash
-# Default (international)
-bcon --init-config
-
-# With presets (combine with comma)
-bcon --init-config=vim,jp
-bcon --init-config=emacs,japanese
-```
+Config file locations:
+- `/etc/bcon/config.toml` (system config, for systemd service)
+- `~/.config/bcon/config.toml` (user config)
 
 ### Available Presets
 
@@ -296,14 +164,13 @@ main = "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf"
 cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 emoji = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
 size = 16.0
-render_mode = "lcd"       # "grayscale" or "lcd"
-lcd_filter = "light"      # "none" | "default" | "light" | "legacy"
+render_mode = "lcd"
+lcd_filter = "light"
 
 [keybinds]
 copy = ["ctrl+shift+c", "ctrl+insert"]
 paste = ["ctrl+shift+v", "shift+insert"]
 screenshot = ["printscreen", "ctrl+shift+s"]
-ime_toggle = "ctrl+shift+j"
 
 [terminal]
 scrollback_lines = 10000
@@ -337,7 +204,6 @@ screenshot_dir = "~/Pictures"
 | Font Reset | `Ctrl+0` | Reset font size |
 | Scroll Up | `Shift+PageUp` | Scroll back |
 | Scroll Down | `Shift+PageDown` | Scroll forward |
-| IME Toggle | `Ctrl+Shift+J` | Toggle IME on/off |
 
 ### Copy Mode Keys (Vim-like)
 
@@ -352,35 +218,66 @@ screenshot_dir = "~/Pictures"
 | `/` | Search |
 | `Esc` | Exit copy mode |
 
+## Other Installation Methods
+
+### Build from Source
+
+```bash
+# Build dependencies
+sudo apt install \
+    libdrm-dev libgbm-dev \
+    libegl1-mesa-dev libgles2-mesa-dev \
+    libxkbcommon-dev libinput-dev libudev-dev \
+    libdbus-1-dev libwayland-dev \
+    libfontconfig1-dev libfreetype-dev \
+    pkg-config cmake clang
+
+# Rust toolchain (1.82+) required
+cargo build --release
+
+# Generate config
+./target/release/bcon --init-config=vim,jp
+```
+
+### Manual Start
+
+Run directly from TTY (virtual console):
+
+```bash
+# Switch to TTY
+Ctrl+Alt+F2
+
+# Run bcon
+sudo ./target/release/bcon
+
+# Return to graphical session
+Ctrl+Alt+F1  # or F7
+```
+
+### Rootless Mode
+
+Run without root privileges using libseat:
+
+```bash
+# Additional package
+sudo apt install libseat-dev
+
+# Rootless build
+cargo build --release --features seatd
+
+# Run without root
+./target/release/bcon
+```
+
+Benefits:
+- No root required
+- Proper session tracking (`loginctl list-sessions`)
+- Integration with screen lock, power management
+
 ## Limitations
 
-- **Multi-seat (DRM lease)**: Not supported. bcon uses exclusive access to the GPU. For multi-seat setups (multiple users on one PC with separate monitors/keyboards), use traditional X11/Wayland solutions.
-- **Multiple monitors**: Currently outputs to one monitor only. If you have multiple monitors connected, bcon will use the first detected display.
-
-## Architecture
-
-```
-User Application (shell, vim, etc.)
-         ↓ PTY
-        bcon
-         ↓
-┌────────────────────────────┐
-│ VT Parser (escape codes)   │
-│ Text Shaper (rustybuzz)    │
-│ Glyph Rasterizer (fontdue) │
-│ GPU Renderer (OpenGL ES)   │
-│ DRM/KMS Output             │
-└────────────────────────────┘
-         ↓
-       Display
-```
-
-## Target Users
-
-- Developers using AI coding tools (Claude Code, aider, Codex)
-- Server administrators who want rich terminal features
-- Minimalists who don't need a full desktop environment
-- Raspberry Pi / embedded Linux users
+- **Multi-seat (DRM lease)**: Not supported. bcon uses exclusive access to the GPU.
+- **Multiple monitors**: Currently outputs to one monitor only.
 
 ## License
 

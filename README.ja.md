@@ -69,212 +69,80 @@ Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく�
 
 ## 動作要件
 
-- DRM/KMS サポートのある Linux
+- DRM/KMS サポートのある Linux (Debian/Ubuntu 推奨)
 - OpenGL ES 2.0+ 対応 GPU
-- Rust ツールチェイン (1.82+)
 
-### 実行権限オプション
+## インストール (Debian/Ubuntu)
 
-| モード | 必要条件 | ビルドコマンド |
-|--------|----------|----------------|
-| root モード | root で実行 (`sudo`) | `cargo build --release` |
-| rootless モード | systemd-logind または seatd | `cargo build --release --features seatd` |
-
-**rootless モード**は [libseat](https://sr.ht/~kennylevinsen/seatd/) を使用してセッション管理を行います:
-- root 権限不要
-- セッション追跡 (`loginctl list-sessions`)
-- スクリーンロック、電源管理との連携
-- Wayland/X11 セッションとのクリーンな VT 切り替え
-
-### システムパッケージ (Debian/Ubuntu)
+### 基本セットアップ
 
 ```bash
-# ビルド依存
-sudo apt install \
-    libdrm-dev libgbm-dev \
-    libegl1-mesa-dev libgles2-mesa-dev \
-    libxkbcommon-dev libinput-dev libudev-dev \
-    libdbus-1-dev libwayland-dev \
-    libfontconfig1-dev libfreetype-dev \
-    pkg-config cmake clang
-
-# オプション: rootless ビルド (--features seatd)
-sudo apt install libseat-dev
-
-# ランタイム (フォント)
-sudo apt install fonts-dejavu-core
-
-# オプション: 日本語サポート
-sudo apt install fonts-noto-cjk fcitx5 fcitx5-mozc
-
-# オプション: カラー絵文字
-sudo apt install fonts-noto-color-emoji
-```
-
-## インストール
-
-### apt (Debian/Ubuntu)
-
-```bash
-# リポジトリ追加
+# 1. bcon をインストール
 curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
-
-# インストール
 sudo apt install bcon
-```
 
-インストール後、以下のいずれかを選択：
-
-**オプション 1: systemd サービス（推奨）**
-```bash
-# システム設定を生成
+# 2. 設定ファイルを生成
 sudo bcon --init-config=system           # デフォルト
-sudo bcon --init-config=system,vim,jp    # Vim + 日本語
-sudo bcon --init-config=system,emacs,jp  # Emacs + 日本語
+sudo bcon --init-config=system,vim       # Vim ユーザー
+sudo bcon --init-config=system,emacs     # Emacs ユーザー
 
-# tty2 の getty を bcon に置き換え
+# 3. systemd サービスを有効化 (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# bcon に切り替え
-Ctrl+Alt+F2
+# 4. bcon に切り替え
+# Ctrl+Alt+F2
 ```
 
-**オプション 2: ログインセッション (GDM/SDDM)**
-```bash
-# ユーザー設定を生成
-bcon --init-config=vim,jp      # または emacs,jp
-```
-ログイン画面のセッション選択で「bcon」を選択。
-
-詳細は[使い方](#使い方)セクションを参照。
-
-### ソースからビルド
+### 日本語環境セットアップ
 
 ```bash
-# 標準ビルド (root で実行)
-cargo build --release
+# 1. bcon と日本語関連パッケージをインストール
+curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
+sudo apt install bcon fonts-noto-cjk fonts-noto-color-emoji fcitx5 fcitx5-mozc
 
-# rootless ビルド (logind/seatd で実行)
-cargo build --release --features seatd
+# 2. fcitx5 自動起動を設定
+echo 'fcitx5 -d &>/dev/null' >> ~/.bashrc
+# または ~/.zshrc
 
-# 設定ファイル生成
-./target/release/bcon --init-config
+# 3. 設定ファイルを生成 (日本語プリセット)
+sudo bcon --init-config=system,vim,jp    # Vim ユーザー
+sudo bcon --init-config=system,emacs,jp  # Emacs ユーザー
 
-# 日本語ユーザー向け
-./target/release/bcon --init-config=vim,jp
-```
-
-## 使い方
-
-### 手動起動
-
-TTY (仮想コンソール) から実行。X11/Wayland 内からは実行不可：
-
-```bash
-# TTY に切り替え
-Ctrl+Alt+F2
-
-# bcon を実行 (標準ビルド)
-sudo ./target/release/bcon
-
-# bcon を実行 (rootless ビルド: --features seatd)
-./target/release/bcon
-
-# グラフィカルセッションに戻る
-Ctrl+Alt+F1  # または F7
-```
-
-### systemd サービス (常用におすすめ)
-
-```bash
-# バイナリとサービスファイルをインストール
-sudo cp target/release/bcon /usr/local/bin/
-sudo cp bcon@.service /etc/systemd/system/
-
-# システム設定を生成
-sudo bcon --init-config=system,vim,jp
-
-# tty2 で有効化 (tty1 はフォールバック用に残す)
+# 4. systemd サービスを有効化 (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# bcon に切り替え
-Ctrl+Alt+F2
+# 5. bcon に切り替え
+# Ctrl+Alt+F2
+
+# IME 切り替え: Ctrl+Space (fcitx5 デフォルト)
 ```
 
-### ログインセッション (GDM/SDDM)
+### ユーザー権限で起動 (sudo 不要)
 
-rootless ビルドでは、ログイン画面から bcon をセッションとして選択できます：
+GDM/SDDM などのログインマネージャーから直接起動:
 
 ```bash
-# セッションファイルをインストール
-sudo cp bcon.desktop /usr/share/wayland-sessions/
+# 1. bcon をインストール (rootless ビルド版)
+curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
+sudo apt install bcon
 
-# GDM/SDDM のセッション選択に "bcon" が表示される
+# 2. ユーザー設定ファイルを生成
+bcon --init-config=vim,jp    # ~/.config/bcon/config.toml に保存
+
+# 3. ログイン画面で「bcon」セッションを選択
 ```
 
-デスクトップ環境を起動せずに直接 bcon にログインできます。メモリ節約、起動時間短縮に効果的。
-
-### rootless systemd サービス
-
-rootless ビルド (`--features seatd`) 用のサービス設定：
-
-```ini
-# /etc/systemd/system/bcon@.service
-[Unit]
-Description=bcon terminal on %I
-After=systemd-logind.service
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/bcon
-StandardInput=tty
-StandardOutput=tty
-TTYPath=/dev/%I
-TTYReset=yes
-TTYVHangup=yes
-
-# rootless: 一般ユーザーで実行
-User=youruser
-Group=youruser
-SupplementaryGroups=video input
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### 日本語入力 (IME) を使う場合
-
-```bash
-# fcitx5 デーモンを起動
-fcitx5 -d
-
-# bcon を実行 (D-Bus のために環境変数を保持)
-sudo -E ./target/release/bcon
-
-# IME 切り替え: 設定キー (デフォルト: Ctrl+Shift+J)
-```
+デスクトップ環境なしで直接 bcon にログイン。メモリ節約・起動時間短縮に効果的。
 
 ## 設定
 
-設定ファイルの優先順位:
-1. `~/.config/bcon/config.toml` (ユーザー設定)
-2. `/etc/bcon/config.toml` (システム設定)
-3. ビルトインデフォルト
-
-### 設定ファイル生成
-
-```bash
-# デフォルト
-bcon --init-config
-
-# プリセット指定 (カンマで複数指定可)
-bcon --init-config=vim,jp
-bcon --init-config=emacs,japanese
-```
+設定ファイルの場所:
+- `/etc/bcon/config.toml` (システム設定、systemd サービス用)
+- `~/.config/bcon/config.toml` (ユーザー設定)
 
 ### 利用可能なプリセット
 
@@ -301,7 +169,6 @@ lcd_filter = "light"
 copy = ["ctrl+shift+c", "ctrl+insert"]
 paste = ["ctrl+shift+v", "shift+insert"]
 screenshot = ["printscreen", "ctrl+shift+s"]
-ime_toggle = "ctrl+shift+j"
 
 [terminal]
 scrollback_lines = 10000
@@ -335,7 +202,6 @@ screenshot_dir = "~/Pictures"
 | フォントリセット | `Ctrl+0` | フォントサイズリセット |
 | スクロールアップ | `Shift+PageUp` | 上にスクロール |
 | スクロールダウン | `Shift+PageDown` | 下にスクロール |
-| IME 切り替え | `Ctrl+Shift+J` | IME のオン/オフ |
 
 ### コピーモードキー (Vim ライク)
 
@@ -350,10 +216,77 @@ screenshot_dir = "~/Pictures"
 | `/` | 検索 |
 | `Esc` | コピーモード終了 |
 
+## その他のインストール・起動方法
+
+### ソースからビルド
+
+```bash
+# ビルド依存パッケージ
+sudo apt install \
+    libdrm-dev libgbm-dev \
+    libegl1-mesa-dev libgles2-mesa-dev \
+    libxkbcommon-dev libinput-dev libudev-dev \
+    libdbus-1-dev libwayland-dev \
+    libfontconfig1-dev libfreetype-dev \
+    pkg-config cmake clang
+
+# Rust ツールチェイン (1.82+) が必要
+cargo build --release
+
+# 設定ファイル生成
+./target/release/bcon --init-config=vim,jp
+```
+
+### 手動起動
+
+TTY (仮想コンソール) から直接実行:
+
+```bash
+# TTY に切り替え
+Ctrl+Alt+F2
+
+# bcon を実行
+sudo ./target/release/bcon
+
+# グラフィカルセッションに戻る
+Ctrl+Alt+F1  # または F7
+```
+
+### ログインセッション (GDM/SDDM)
+
+ログイン画面から bcon をセッションとして選択できます:
+
+```bash
+# セッションファイルをインストール
+sudo cp bcon.desktop /usr/share/wayland-sessions/
+```
+
+デスクトップ環境を起動せずに直接 bcon にログイン。メモリ節約、起動時間短縮に効果的。
+
+### rootless モード
+
+root 権限なしで実行するには libseat を使用:
+
+```bash
+# 追加パッケージ
+sudo apt install libseat-dev
+
+# rootless ビルド
+cargo build --release --features seatd
+
+# root なしで実行可能
+./target/release/bcon
+```
+
+メリット:
+- root 権限不要
+- セッション追跡 (`loginctl list-sessions`)
+- スクリーンロック、電源管理との連携
+
 ## 制限事項
 
-- **マルチシート (DRM リース)**: 非対応。bcon は GPU を排他的に使用します。1台の PC で複数ユーザーが別々のモニター/キーボードを使う構成には、従来の X11/Wayland をご利用ください。
-- **マルチモニタ**: 現在は1つのモニタにのみ出力。複数モニタが接続されている場合、最初に検出されたディスプレイを使用します。
+- **マルチシート (DRM リース)**: 非対応。bcon は GPU を排他的に使用します。
+- **マルチモニタ**: 現在は1つのモニタにのみ出力。
 
 ## ライセンス
 
