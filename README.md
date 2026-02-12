@@ -102,7 +102,13 @@ sudo systemctl start bcon@tty2
 ```bash
 # 1. Install bcon and Japanese packages
 curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
-sudo apt install bcon fonts-noto-cjk fonts-noto-color-emoji fcitx5 fcitx5-mozc
+sudo apt install bcon fonts-noto-cjk fonts-noto-color-emoji
+
+# Minimal fcitx5 install (recommended)
+# Standard fcitx5 pulls in many Qt/GTK GUI modules.
+# bcon runs without X11/Wayland, so GUI is unnecessary.
+# Use --no-install-recommends for minimal footprint.
+sudo apt install --no-install-recommends fcitx5 fcitx5-mozc
 
 # 2. Setup fcitx5 auto-start
 echo 'fcitx5 -d &>/dev/null' >> ~/.bashrc
