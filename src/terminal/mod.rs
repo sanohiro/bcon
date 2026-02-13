@@ -745,17 +745,28 @@ impl Terminal {
     /// Scroll towards history (upward)
     pub fn scroll_back(&mut self, n: usize) {
         let max = self.grid.scrollback_len();
-        self.scroll_offset = (self.scroll_offset + n).min(max);
+        let new_offset = (self.scroll_offset + n).min(max);
+        if new_offset != self.scroll_offset {
+            self.scroll_offset = new_offset;
+            self.grid.mark_all_dirty(); // Redraw all rows when scrolling
+        }
     }
 
     /// Scroll towards live (downward)
     pub fn scroll_forward(&mut self, n: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(n);
+        let new_offset = self.scroll_offset.saturating_sub(n);
+        if new_offset != self.scroll_offset {
+            self.scroll_offset = new_offset;
+            self.grid.mark_all_dirty(); // Redraw all rows when scrolling
+        }
     }
 
     /// Return to live position
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = 0;
+        if self.scroll_offset != 0 {
+            self.scroll_offset = 0;
+            self.grid.mark_all_dirty(); // Redraw all rows when returning to live
+        }
     }
 
     // ========== Text selection & clipboard ==========
@@ -1210,11 +1221,15 @@ impl Terminal {
         if match_row < scrollback_len {
             // In scrollback
             self.scroll_offset = scrollback_len - match_row;
+            self.grid.mark_all_dirty();
         } else {
             // In grid
             let grid_row = match_row - scrollback_len;
             if grid_row < grid_rows {
-                self.scroll_offset = 0; // Visible in live view
+                if self.scroll_offset != 0 {
+                    self.scroll_offset = 0; // Visible in live view
+                    self.grid.mark_all_dirty();
+                }
             }
         }
     }
@@ -1291,10 +1306,12 @@ impl Terminal {
             // Scroll back if going past top
             if delta_row < 0 && cm.cursor_row == 0 && self.scroll_offset < max_scroll {
                 self.scroll_offset += 1;
+                self.grid.mark_all_dirty();
             }
             // Scroll forward if going past bottom
             else if delta_row > 0 && cm.cursor_row >= rows - 1 && self.scroll_offset > 0 {
                 self.scroll_offset -= 1;
+                self.grid.mark_all_dirty();
             } else {
                 cm.cursor_row = new_row.min(rows - 1);
             }
@@ -1313,7 +1330,11 @@ impl Terminal {
     /// Copy mode: go to beginning
     pub fn copy_mode_goto_top(&mut self) {
         if let Some(ref mut cm) = self.copy_mode {
-            self.scroll_offset = self.grid.scrollback_len();
+            let new_offset = self.grid.scrollback_len();
+            if self.scroll_offset != new_offset {
+                self.scroll_offset = new_offset;
+                self.grid.mark_all_dirty();
+            }
             cm.cursor_row = 0;
             cm.cursor_col = 0;
             if cm.selecting {
@@ -1325,7 +1346,10 @@ impl Terminal {
     /// Copy mode: go to end
     pub fn copy_mode_goto_bottom(&mut self) {
         if let Some(ref mut cm) = self.copy_mode {
-            self.scroll_offset = 0;
+            if self.scroll_offset != 0 {
+                self.scroll_offset = 0;
+                self.grid.mark_all_dirty();
+            }
             cm.cursor_row = self.grid.rows() - 1;
             cm.cursor_col = 0;
             if cm.selecting {

@@ -20,12 +20,14 @@ layout(location = 0) in vec4 a_pos_size;     // xy = position, zw = size
 layout(location = 1) in vec4 a_uv_pos_size;  // xy = uv position, zw = uv size
 layout(location = 2) in vec4 a_fg_color;
 layout(location = 3) in vec3 a_bg_color;
+layout(location = 4) in float a_lcd_disable; // 1.0 = use grayscale AA
 
 uniform mat4 u_projection;
 
 out vec2 v_uv;
 out vec4 v_fg_color;
 out vec3 v_bg_color;
+out float v_lcd_disable;
 
 void main() {
     // gl_VertexID: 0=TL, 1=TR, 2=BL, 3=BR (triangle strip order)
@@ -41,6 +43,7 @@ void main() {
     v_uv = uv;
     v_fg_color = a_fg_color;
     v_bg_color = a_bg_color;
+    v_lcd_disable = a_lcd_disable;
 }
 "#;
 
@@ -50,6 +53,7 @@ precision highp float;
 in vec2 v_uv;
 in vec4 v_fg_color;
 in vec3 v_bg_color;
+in float v_lcd_disable;
 
 uniform sampler2D u_atlas;
 uniform float u_gamma;
@@ -105,6 +109,11 @@ void main() {
         float darken = smoothstep(0.0, 0.5, avg_cov) * u_stem_darkening;
         coverage = min(coverage + darken, vec3(1.0));
     }
+
+    // Per-instance LCD disable: use grayscale AA for colored backgrounds
+    // Use max instead of avg to preserve sharpness (especially for thin strokes like 'r')
+    float gray = max(max(coverage.r, coverage.g), coverage.b);
+    coverage = mix(coverage, vec3(gray), v_lcd_disable);
 
     vec3 fg_linear = srgb_to_linear(v_fg_color.rgb);
     vec3 bg_linear = srgb_to_linear(v_bg_color);
@@ -234,8 +243,8 @@ impl LcdShaderInstanced {
     }
 }
 
-/// Per-instance data: pos_size(4) + uv_pos_size(4) + fg(4) + bg(3) = 15 floats
-const INSTANCE_FLOATS: usize = 15;
+/// Per-instance data: pos_size(4) + uv_pos_size(4) + fg(4) + bg(3) + lcd_disable(1) = 16 floats
+const INSTANCE_FLOATS: usize = 16;
 /// Maximum glyphs per batch (32K supports 4K displays)
 const MAX_GLYPHS: usize = 32768;
 
@@ -293,6 +302,11 @@ impl LcdTextRendererInstanced {
             gl.vertex_attrib_pointer_f32(3, 3, glow::FLOAT, false, stride, 48);
             gl.vertex_attrib_divisor(3, 1);
 
+            // a_lcd_disable: location=4, float
+            gl.enable_vertex_attrib_array(4);
+            gl.vertex_attrib_pointer_f32(4, 1, glow::FLOAT, false, stride, 60);
+            gl.vertex_attrib_divisor(4, 1);
+
             gl.bind_vertex_array(None);
 
             info!("LCD instanced text renderer initialized (66% less GPU transfer)");
@@ -344,10 +358,10 @@ impl LcdTextRendererInstanced {
 
     /// Add a character (using default background)
     pub fn push_char(&mut self, ch: char, x: f32, y: f32, fg: [f32; 4], atlas: &LcdGlyphAtlas) {
-        self.push_char_with_bg(ch, x, y, fg, self.default_bg, atlas);
+        self.push_char_with_bg(ch, x, y, fg, self.default_bg, 0.0, atlas);
     }
 
-    /// Add a character with specific background
+    /// Add a character with specific background and LCD disable flag
     pub fn push_char_with_bg(
         &mut self,
         ch: char,
@@ -355,6 +369,7 @@ impl LcdTextRendererInstanced {
         y: f32,
         fg: [f32; 4],
         bg: [f32; 3],
+        lcd_disable: f32,
         atlas: &LcdGlyphAtlas,
     ) {
         if self.glyph_count >= MAX_GLYPHS {
@@ -370,15 +385,31 @@ impl LcdTextRendererInstanced {
         };
 
         let phase_offset = atlas.phase_offset(x_frac);
-        self.push_glyph_info(glyph, x + phase_offset, y, fg, bg);
+
+        // Fix underscore position: don't let it go too far below baseline
+        if ch == '_' && glyph.bearing_y < 0.0 {
+            let min_bearing = -(atlas.ascent * 0.06);
+            let adjusted_bearing = glyph.bearing_y.max(min_bearing);
+            self.push_glyph_info_with_adjusted_bearing(
+                glyph,
+                x + phase_offset,
+                y,
+                adjusted_bearing,
+                fg,
+                bg,
+                lcd_disable,
+            );
+        } else {
+            self.push_glyph_info(glyph, x + phase_offset, y, fg, bg, lcd_disable);
+        }
     }
 
-    /// Add text string (using default background)
+    /// Add text string (using default background, LCD enabled)
     pub fn push_text(&mut self, text: &str, x: f32, y: f32, fg: [f32; 4], atlas: &LcdGlyphAtlas) {
-        self.push_text_with_bg(text, x, y, fg, self.default_bg, atlas);
+        self.push_text_with_bg_lcd(text, x, y, fg, self.default_bg, 0.0, atlas);
     }
 
-    /// Add text string with specific background
+    /// Add text string with specific background (LCD enabled)
     pub fn push_text_with_bg(
         &mut self,
         text: &str,
@@ -388,6 +419,20 @@ impl LcdTextRendererInstanced {
         bg: [f32; 3],
         atlas: &LcdGlyphAtlas,
     ) {
+        self.push_text_with_bg_lcd(text, x, y, fg, bg, 0.0, atlas);
+    }
+
+    /// Add text string with specific background and LCD disable flag
+    pub fn push_text_with_bg_lcd(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        fg: [f32; 4],
+        bg: [f32; 3],
+        lcd_disable: f32,
+        atlas: &LcdGlyphAtlas,
+    ) {
         let mut cursor_x = x;
         for ch in text.chars() {
             let x_frac = cursor_x.fract();
@@ -395,7 +440,24 @@ impl LcdTextRendererInstanced {
 
             if let Some(glyph) = atlas.get_glyph_phased(ch, x_frac) {
                 let phase_offset = atlas.phase_offset(x_frac);
-                self.push_glyph_info(glyph, cursor_x + phase_offset, y, fg, bg);
+
+                // Fix underscore position: don't let it go too far below baseline
+                // Clamp bearing_y to at most ~6% of ascent below baseline (scales with font size)
+                if ch == '_' && glyph.bearing_y < 0.0 {
+                    let min_bearing = -(atlas.ascent * 0.06);
+                    let adjusted_bearing = glyph.bearing_y.max(min_bearing);
+                    self.push_glyph_info_with_adjusted_bearing(
+                        glyph,
+                        cursor_x + phase_offset,
+                        y,
+                        adjusted_bearing,
+                        fg,
+                        bg,
+                        lcd_disable,
+                    );
+                } else {
+                    self.push_glyph_info(glyph, cursor_x + phase_offset, y, fg, bg, lcd_disable);
+                }
                 cursor_x += glyph.advance;
             } else {
                 cursor_x += atlas.cell_width;
@@ -404,14 +466,51 @@ impl LcdTextRendererInstanced {
     }
 
     /// Add glyph info as instance data
-    fn push_glyph_info(&mut self, glyph: &GlyphInfo, x: f32, y: f32, fg: [f32; 4], bg: [f32; 3]) {
+    fn push_glyph_info(
+        &mut self,
+        glyph: &GlyphInfo,
+        x: f32,
+        y: f32,
+        fg: [f32; 4],
+        bg: [f32; 3],
+        lcd_disable: f32,
+    ) {
+        self.push_glyph_info_internal(glyph, x, y, glyph.bearing_y, fg, bg, lcd_disable);
+    }
+
+    /// Add glyph with adjusted bearing_y (for underscore position fix)
+    fn push_glyph_info_with_adjusted_bearing(
+        &mut self,
+        glyph: &GlyphInfo,
+        x: f32,
+        y: f32,
+        bearing_y_override: f32,
+        fg: [f32; 4],
+        bg: [f32; 3],
+        lcd_disable: f32,
+    ) {
+        self.push_glyph_info_internal(glyph, x, y, bearing_y_override, fg, bg, lcd_disable);
+    }
+
+    /// Internal: add glyph info as instance data
+    fn push_glyph_info_internal(
+        &mut self,
+        glyph: &GlyphInfo,
+        x: f32,
+        y: f32,
+        bearing_y: f32,
+        fg: [f32; 4],
+        bg: [f32; 3],
+        lcd_disable: f32,
+    ) {
         if glyph.width == 0 || glyph.height == 0 {
             return;
         }
 
         // Position and size
         let gx = (x + glyph.bearing_x).floor() + 0.5;
-        let gy = (y - glyph.bearing_y).round();
+        let gy = (y - bearing_y).round();
+
         let gw = glyph.width as f32;
         let gh = glyph.height as f32;
 
@@ -424,13 +523,56 @@ impl LcdTextRendererInstanced {
         let [fr, fg_c, fb, fa] = fg;
         let [br, bg_c, bb] = bg;
 
-        // 15 floats per instance
+        // 16 floats per instance
         #[rustfmt::skip]
         self.instances.extend_from_slice(&[
             gx, gy, gw, gh,           // pos_size
             u0, v0, uw, vh,           // uv_pos_size
             fr, fg_c, fb, fa,         // fg_color
             br, bg_c, bb,             // bg_color
+            lcd_disable,              // lcd_disable flag
+        ]);
+
+        self.glyph_count += 1;
+    }
+
+    /// Add glyph scaled to specific size (for Powerline characters)
+    pub fn push_glyph_scaled(
+        &mut self,
+        glyph: &GlyphInfo,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        fg: [f32; 4],
+        bg: [f32; 3],
+        lcd_disable: f32,
+        _atlas: &LcdGlyphAtlas,
+    ) {
+        if self.glyph_count >= MAX_GLYPHS {
+            return;
+        }
+        if glyph.width == 0 || glyph.height == 0 {
+            return;
+        }
+
+        // UV coordinates from glyph
+        let u0 = glyph.uv_x;
+        let v0 = glyph.uv_y;
+        let uw = glyph.uv_w;
+        let vh = glyph.uv_h;
+
+        let [fr, fg_c, fb, fa] = fg;
+        let [br, bg_c, bb] = bg;
+
+        // Draw at specified position and size (scaled)
+        #[rustfmt::skip]
+        self.instances.extend_from_slice(&[
+            x, y, w, h,               // pos_size (scaled)
+            u0, v0, uw, vh,           // uv_pos_size
+            fr, fg_c, fb, fa,         // fg_color
+            br, bg_c, bb,             // bg_color
+            lcd_disable,              // lcd_disable flag
         ]);
 
         self.glyph_count += 1;
@@ -474,6 +616,7 @@ impl LcdTextRendererInstanced {
             u, v, 0.0, 0.0,           // uv_pos_size (size=0 for solid)
             fr, fg_c, fb, fa,         // fg_color
             br, bg_c, bb,             // bg_color
+            0.0,                      // lcd_disable (not used for rects)
         ]);
 
         self.glyph_count += 1;

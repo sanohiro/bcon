@@ -29,6 +29,8 @@ pub struct Config {
     pub keybinds: KeybindConfig,
     /// Appearance settings
     pub appearance: AppearanceConfig,
+    /// Color scheme settings (ANSI 16 colors)
+    pub colors: ColorsConfig,
     /// Terminal settings
     pub terminal: TerminalConfig,
     /// Keyboard settings
@@ -115,6 +117,45 @@ pub struct AppearanceConfig {
     /// Display scale factor (1.0, 1.25, 1.5, 1.75, 2.0)
     /// Used for HiDPI displays. Font size is multiplied by this value.
     pub scale: f32,
+}
+
+/// Color scheme settings (ANSI 16 colors)
+/// Colors are specified as RRGGBB hex strings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorsConfig {
+    /// Color 0: Black
+    pub black: String,
+    /// Color 1: Red
+    pub red: String,
+    /// Color 2: Green
+    pub green: String,
+    /// Color 3: Yellow
+    pub yellow: String,
+    /// Color 4: Blue
+    pub blue: String,
+    /// Color 5: Magenta
+    pub magenta: String,
+    /// Color 6: Cyan
+    pub cyan: String,
+    /// Color 7: White
+    pub white: String,
+    /// Color 8: Bright Black (Gray)
+    pub bright_black: String,
+    /// Color 9: Bright Red
+    pub bright_red: String,
+    /// Color 10: Bright Green
+    pub bright_green: String,
+    /// Color 11: Bright Yellow
+    pub bright_yellow: String,
+    /// Color 12: Bright Blue
+    pub bright_blue: String,
+    /// Color 13: Bright Magenta
+    pub bright_magenta: String,
+    /// Color 14: Bright Cyan
+    pub bright_cyan: String,
+    /// Color 15: Bright White
+    pub bright_white: String,
 }
 
 /// Terminal settings
@@ -270,6 +311,7 @@ impl Default for Config {
             paths: PathConfig::default(),
             keybinds: KeybindConfig::default(),
             appearance: AppearanceConfig::default(),
+            colors: ColorsConfig::default(),
             terminal: TerminalConfig::default(),
             keyboard: KeyboardInputConfig::default(),
             display: DisplayOutputConfig::default(),
@@ -365,6 +407,73 @@ impl AppearanceConfig {
     /// Get selection color as normalized RGB
     pub fn selection_rgb(&self) -> (f32, f32, f32) {
         Self::parse_hex_color(&self.selection)
+    }
+}
+
+/// Modern color scheme defaults (inspired by One Dark / Catppuccin)
+/// Muted, pleasant colors that are easy on the eyes
+impl Default for ColorsConfig {
+    fn default() -> Self {
+        Self {
+            // Normal colors (muted)
+            black: "282c34".to_string(),         // Soft black
+            red: "e06c75".to_string(),           // Muted red
+            green: "98c379".to_string(),         // Soft green
+            yellow: "e5c07b".to_string(),        // Warm yellow
+            blue: "61afef".to_string(),          // Soft blue
+            magenta: "c678dd".to_string(),       // Soft purple
+            cyan: "56b6c2".to_string(),          // Soft cyan
+            white: "abb2bf".to_string(),         // Light gray
+
+            // Bright colors (slightly more vibrant)
+            bright_black: "5c6370".to_string(),  // Gray
+            bright_red: "e06c75".to_string(),    // Same red (already vibrant)
+            bright_green: "98c379".to_string(),  // Same green
+            bright_yellow: "e5c07b".to_string(), // Same yellow
+            bright_blue: "61afef".to_string(),   // Same blue
+            bright_magenta: "c678dd".to_string(), // Same magenta
+            bright_cyan: "56b6c2".to_string(),   // Same cyan
+            bright_white: "ffffff".to_string(),  // Pure white
+        }
+    }
+}
+
+impl ColorsConfig {
+    /// Parse hex color string to [f32; 4] RGBA
+    fn parse_color(hex: &str) -> [f32; 4] {
+        let hex = hex.trim_start_matches('#');
+        if hex.len() >= 6 {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                u8::from_str_radix(&hex[0..2], 16),
+                u8::from_str_radix(&hex[2..4], 16),
+                u8::from_str_radix(&hex[4..6], 16),
+            ) {
+                return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
+            }
+        }
+        [1.0, 1.0, 1.0, 1.0] // Fallback: white
+    }
+
+    /// Get ANSI 16 colors as array of [f32; 4] for shader use
+    pub fn to_palette(&self) -> [[f32; 4]; 16] {
+        [
+            Self::parse_color(&self.black),
+            Self::parse_color(&self.red),
+            Self::parse_color(&self.green),
+            Self::parse_color(&self.yellow),
+            Self::parse_color(&self.blue),
+            Self::parse_color(&self.magenta),
+            Self::parse_color(&self.cyan),
+            Self::parse_color(&self.white),
+            Self::parse_color(&self.bright_black),
+            Self::parse_color(&self.bright_red),
+            Self::parse_color(&self.bright_green),
+            Self::parse_color(&self.bright_yellow),
+            Self::parse_color(&self.bright_blue),
+            Self::parse_color(&self.bright_magenta),
+            Self::parse_color(&self.bright_cyan),
+            Self::parse_color(&self.bright_white),
+        ]
     }
 }
 
@@ -661,6 +770,52 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # cursor = "ffffff"
 # selection = "44475a"
 # scale = 1.0               # Display scale (1.0, 1.25, 1.5, 1.75, 2.0 for HiDPI)
+
+# =============================================================================
+# Color Scheme (Optional - ANSI 16 colors)
+# =============================================================================
+# Default: One Dark inspired (modern, muted colors)
+#
+# [colors]
+# black = "282c34"
+# red = "e06c75"
+# green = "98c379"
+# yellow = "e5c07b"
+# blue = "61afef"
+# magenta = "c678dd"
+# cyan = "56b6c2"
+# white = "abb2bf"
+# bright_black = "5c6370"
+# bright_red = "e06c75"
+# bright_green = "98c379"
+# bright_yellow = "e5c07b"
+# bright_blue = "61afef"
+# bright_magenta = "c678dd"
+# bright_cyan = "56b6c2"
+# bright_white = "ffffff"
+#
+# Popular color schemes:
+#
+# --- Dracula ---
+# black = "21222c", red = "ff5555", green = "50fa7b", yellow = "f1fa8c"
+# blue = "bd93f9", magenta = "ff79c6", cyan = "8be9fd", white = "f8f8f2"
+# bright_black = "6272a4", bright_red = "ff6e6e", bright_green = "69ff94"
+# bright_yellow = "ffffa5", bright_blue = "d6acff", bright_magenta = "ff92df"
+# bright_cyan = "a4ffff", bright_white = "ffffff"
+#
+# --- Nord ---
+# black = "3b4252", red = "bf616a", green = "a3be8c", yellow = "ebcb8b"
+# blue = "81a1c1", magenta = "b48ead", cyan = "88c0d0", white = "e5e9f0"
+# bright_black = "4c566a", bright_red = "bf616a", bright_green = "a3be8c"
+# bright_yellow = "ebcb8b", bright_blue = "81a1c1", bright_magenta = "b48ead"
+# bright_cyan = "8fbcbb", bright_white = "eceff4"
+#
+# --- Gruvbox Dark ---
+# black = "282828", red = "cc241d", green = "98971a", yellow = "d79921"
+# blue = "458588", magenta = "b16286", cyan = "689d6a", white = "a89984"
+# bright_black = "928374", bright_red = "fb4934", bright_green = "b8bb26"
+# bright_yellow = "fabd2f", bright_blue = "83a598", bright_magenta = "d3869b"
+# bright_cyan = "8ec07c", bright_white = "ebdbb2"
 
 # =============================================================================
 # Terminal Settings (Optional)

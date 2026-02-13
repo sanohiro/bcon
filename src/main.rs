@@ -49,6 +49,233 @@ fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
+/// Check if character is a Powerline, block, or rounded corner transition glyph
+/// These glyphs create visual transitions between background colors
+#[inline]
+fn is_transition_char(ch: char) -> bool {
+    let cp = ch as u32;
+    matches!(cp,
+        // Powerline symbols: U+E0B0-U+E0D4 (arrows, rounded, etc.)
+        0xE0B0..=0xE0D4 |
+        // Half blocks and other block elements used for UI transitions
+        0x2580 |        // ▀ upper half block
+        0x2584 |        // ▄ lower half block
+        0x258C |        // ▌ left half block
+        0x2590 |        // ▐ right half block
+        // Quarter blocks
+        0x2596..=0x259F
+    )
+}
+
+/// Draw box-drawing characters programmatically for pixel-perfect alignment
+fn draw_box_drawing(
+    ch: char,
+    x: f32,
+    y: f32,
+    cell_w: f32,
+    cell_h: f32,
+    fg: [f32; 4],
+    atlas: &crate::font::lcd_atlas::LcdGlyphAtlas,
+    tr: &mut crate::gpu::LcdTextRendererInstanced,
+) -> bool {
+    let t = (cell_h * 0.12).clamp(1.0, 2.0).round();
+    // Line centers - where the middle of the line stroke sits
+    let line_cx = (x + (cell_w - t) * 0.5).round() + t * 0.5;
+    let line_cy = (y + (cell_h - t) * 0.5).round() + t * 0.5;
+    // Rectangle positions for lines
+    let rect_x = (x + (cell_w - t) * 0.5).round();
+    let rect_y = (y + (cell_h - t) * 0.5).round();
+
+    // First try rounded corners with line center info
+    if draw_rounded_corner(ch, x, y, cell_w, cell_h, t, line_cx, line_cy, fg, atlas, tr) {
+        return true;
+    }
+
+    match ch {
+        '─' => { tr.push_rect(x, rect_y, cell_w, t, fg, atlas); true }
+        '│' => { tr.push_rect(rect_x, y, t, cell_h, fg, atlas); true }
+        '┌' => {
+            tr.push_rect(line_cx, rect_y, x + cell_w - line_cx, t, fg, atlas);
+            tr.push_rect(rect_x, line_cy, t, y + cell_h - line_cy, fg, atlas);
+            true
+        }
+        '┐' => {
+            tr.push_rect(x, rect_y, line_cx - x, t, fg, atlas);
+            tr.push_rect(rect_x, line_cy, t, y + cell_h - line_cy, fg, atlas);
+            true
+        }
+        '└' => {
+            tr.push_rect(line_cx, rect_y, x + cell_w - line_cx, t, fg, atlas);
+            tr.push_rect(rect_x, y, t, line_cy - y, fg, atlas);
+            true
+        }
+        '┘' => {
+            tr.push_rect(x, rect_y, line_cx - x, t, fg, atlas);
+            tr.push_rect(rect_x, y, t, line_cy - y, fg, atlas);
+            true
+        }
+        '├' => {
+            tr.push_rect(line_cx, rect_y, x + cell_w - line_cx, t, fg, atlas);
+            tr.push_rect(rect_x, y, t, cell_h, fg, atlas);
+            true
+        }
+        '┤' => {
+            tr.push_rect(x, rect_y, line_cx - x, t, fg, atlas);
+            tr.push_rect(rect_x, y, t, cell_h, fg, atlas);
+            true
+        }
+        '┬' => {
+            tr.push_rect(x, rect_y, cell_w, t, fg, atlas);
+            tr.push_rect(rect_x, line_cy, t, y + cell_h - line_cy, fg, atlas);
+            true
+        }
+        '┴' => {
+            tr.push_rect(x, rect_y, cell_w, t, fg, atlas);
+            tr.push_rect(rect_x, y, t, line_cy - y, fg, atlas);
+            true
+        }
+        '┼' => {
+            tr.push_rect(x, rect_y, cell_w, t, fg, atlas);
+            tr.push_rect(rect_x, y, t, cell_h, fg, atlas);
+            true
+        }
+        _ => false
+    }
+}
+
+/// Draw rounded corner with anti-aliased arc aligned to line centers
+fn draw_rounded_corner(
+    ch: char,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    t: f32,
+    line_cx: f32,
+    line_cy: f32,
+    fg: [f32; 4],
+    atlas: &crate::font::lcd_atlas::LcdGlyphAtlas,
+    tr: &mut crate::gpu::LcdTextRendererInstanced,
+) -> bool {
+    let half_t = t * 0.5;
+    let aa = 0.75_f32.max(half_t);
+
+    // Cell boundaries
+    let left = x;
+    let right = x + w;
+    let top = y;
+    let bottom = y + h;
+    let rect_x = (x + (w - t) * 0.5).round();
+    let rect_y = (y + (h - t) * 0.5).round();
+
+    // Arc center at correct corner, radius = distance from line center to corner
+    // ╭: top-left corner, lines go right & down
+    // ╮: top-right corner, lines go left & down
+    // ╯: bottom-right corner, lines go left & up
+    // ╰: bottom-left corner, lines go right & up
+    let (arc_cx, arc_cy, r, qx, qy) = match ch {
+        '╭' => {
+            let r = (line_cx - left).min(line_cy - top) - half_t;
+            (left + half_t, top + half_t, r.max(1.0), 1.0f32, 1.0f32)
+        }
+        '╮' => {
+            let r = (right - line_cx).min(line_cy - top) - half_t;
+            (right - half_t, top + half_t, r.max(1.0), -1.0f32, 1.0f32)
+        }
+        '╯' => {
+            let r = (right - line_cx).min(bottom - line_cy) - half_t;
+            (right - half_t, bottom - half_t, r.max(1.0), -1.0f32, -1.0f32)
+        }
+        '╰' => {
+            let r = (line_cx - left).min(bottom - line_cy) - half_t;
+            (left + half_t, bottom - half_t, r.max(1.0), 1.0f32, -1.0f32)
+        }
+        _ => return false,
+    };
+
+    let ww = w.ceil() as i32;
+    let hh = h.ceil() as i32;
+
+    // Draw anti-aliased arc
+    for py in 0..hh {
+        for px in 0..ww {
+            let px_f = x + px as f32 + 0.5;
+            let py_f = y + py as f32 + 0.5;
+
+            let dx = px_f - arc_cx;
+            let dy = py_f - arc_cy;
+
+            // Quadrant constraint: only draw in the correct quadrant from arc center
+            if dx * qx < 0.0 || dy * qy < 0.0 {
+                continue;
+            }
+            // Clip to interior side of the line centers to avoid outside artifacts
+            let inside = match ch {
+                '╭' => px_f >= line_cx && py_f >= line_cy,
+                '╮' => px_f <= line_cx && py_f >= line_cy,
+                '╯' => px_f <= line_cx && py_f <= line_cy,
+                '╰' => px_f >= line_cx && py_f <= line_cy,
+                _ => true,
+            };
+            if !inside {
+                continue;
+            }
+            let dist = (dx * dx + dy * dy).sqrt();
+            let d = (dist - r).abs();
+            if d > half_t + aa {
+                continue;
+            }
+            let alpha = if d <= half_t {
+                1.0
+            } else {
+                1.0 - (d - half_t) / aa
+            }
+            .powf(1.5);
+            if alpha > 0.02 {
+                tr.push_rect(
+                    x + px as f32,
+                    y + py as f32,
+                    1.0,
+                    1.0,
+                    [fg[0], fg[1], fg[2], fg[3] * alpha],
+                    atlas,
+                );
+            }
+        }
+    }
+
+    // Connection stubs to ensure no gaps with adjacent cells
+    match ch {
+        '╭' => {
+            // Horizontal stub: from line_cx to right edge
+            tr.push_rect(line_cx, rect_y, right - line_cx, t, fg, atlas);
+            // Vertical stub: from line_cy to bottom edge
+            tr.push_rect(rect_x, line_cy, t, bottom - line_cy, fg, atlas);
+        }
+        '╮' => {
+            // Horizontal stub: from left edge to line_cx
+            tr.push_rect(left, rect_y, line_cx - left, t, fg, atlas);
+            // Vertical stub: from line_cy to bottom edge
+            tr.push_rect(rect_x, line_cy, t, bottom - line_cy, fg, atlas);
+        }
+        '╯' => {
+            // Horizontal stub: from left edge to line_cx
+            tr.push_rect(left, rect_y, line_cx - left, t, fg, atlas);
+            // Vertical stub: from top edge to line_cy
+            tr.push_rect(rect_x, top, t, line_cy - top, fg, atlas);
+        }
+        '╰' => {
+            // Horizontal stub: from line_cx to right edge
+            tr.push_rect(line_cx, rect_y, right - line_cx, t, fg, atlas);
+            // Vertical stub: from top edge to line_cy
+            tr.push_rect(rect_x, top, t, line_cy - top, fg, atlas);
+        }
+        _ => {}
+    }
+
+    true
+}
+
 /// Auto-detect DRM device
 fn find_drm_device() -> Result<String> {
     for i in 0..8 {
@@ -723,6 +950,9 @@ fn main() -> Result<()> {
 
     // Set clipboard path
     term.set_clipboard_path(&cfg.paths.clipboard_file);
+
+    // Set custom ANSI 16 colors palette from config
+    term.grid.set_ansi_palette(cfg.colors.to_palette());
 
     // Display /etc/issue (like getty does) if running as root
     // Note: When using libseat (seatd feature), we don't run as root
@@ -1756,16 +1986,30 @@ fn main() -> Result<()> {
             [config_fg.0, config_fg.1, config_fg.2, 1.0]
         };
 
+        // Effective background color: OSC 11 > config > hardcoded black
+        let default_bg = [bg_color.0, bg_color.1, bg_color.2, 1.0];
+
+        let grid = &term.grid;
+
         // Helper to get foreground color, using default_fg for Color::Default
+        // Uses grid.color_to_rgba for custom ANSI palette support
         let effective_fg = |color: &terminal::grid::Color| -> [f32; 4] {
             if matches!(color, terminal::grid::Color::Default) {
                 default_fg
             } else {
-                color.to_rgba(true)
+                grid.color_to_rgba(color, true)
             }
         };
 
-        let grid = &term.grid;
+        // Helper to get background color, using default_bg for Color::Default
+        // Uses grid.color_to_rgba for custom ANSI palette support
+        let effective_bg = |color: &terminal::grid::Color| -> [f32; 4] {
+            if matches!(color, terminal::grid::Color::Default) {
+                default_bg
+            } else {
+                grid.color_to_rgba(color, false)
+            }
+        };
         let ascent = glyph_atlas.ascent;
 
         // Determine if partial rendering is possible (no overlays active)
@@ -1773,6 +2017,11 @@ fn main() -> Result<()> {
         let partial_render = !has_overlays && !grid.is_all_dirty();
 
         // === Pass 1: Background color (run-length encoded) ===
+        // Selection is blended into background here (not in separate pass)
+        // This ensures LCD compositing uses exact same color as rendered background
+        let selection_color = [config_selection.0, config_selection.1, config_selection.2];
+        let selection_alpha = 0.35_f32;
+
         // Combine consecutive cells with same background into single rectangles
         for row in 0..grid.rows() {
             // Skip non-dirty rows when partial rendering is enabled
@@ -1782,6 +2031,11 @@ fn main() -> Result<()> {
             let y = margin_y + row as f32 * cell_h;
             let mut run_start: Option<(usize, [f32; 4])> = None;
 
+            // Get selection range for this row
+            let row_selection = term.selection.as_ref().and_then(|sel| {
+                sel.cols_for_row(row, grid.cols())
+            });
+
             for col in 0..grid.cols() {
                 let cell = term.display_cell(row, col);
 
@@ -1790,12 +2044,45 @@ fn main() -> Result<()> {
                     continue;
                 }
 
+                // Check if this cell contains a transition character (Powerline, rounded corners, etc.)
+                // These characters have transparent/curved regions where rectangular backgrounds
+                // would show through, causing visual artifacts (vertical lines)
+                let first_ch = cell.grapheme.chars().next().unwrap_or(' ');
+                let is_transition = is_transition_char(first_ch);
+
+                // For transition characters: flush current run and skip this cell
+                // The background will be handled specially in Pass 2
+                // Use floor() for x2 to avoid overlap with transition cell
+                if is_transition {
+                    if let Some((start, run_color)) = run_start.take() {
+                        if run_color[3] > 0.0 {
+                            let x1 = (margin_x + start as f32 * cell_w).floor();
+                            let x2 = (margin_x + col as f32 * cell_w).floor();
+                            if x2 > x1 {
+                                text_renderer.push_rect(x1, y, x2 - x1, cell_h, run_color, &glyph_atlas);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 // Handle INVERSE attribute (SGR 7): swap fg and bg
-                let bg = if cell.attrs.contains(terminal::grid::CellAttrs::INVERSE) {
+                let mut bg = if cell.attrs.contains(terminal::grid::CellAttrs::INVERSE) {
                     effective_fg(&cell.fg)
                 } else {
-                    cell.bg.to_rgba(false)
+                    effective_bg(&cell.bg)
                 };
+
+                // Blend selection color into background if cell is selected
+                if let Some((sel_start, sel_end)) = row_selection {
+                    if col >= sel_start && col < sel_end {
+                        let a = selection_alpha;
+                        bg[0] = selection_color[0] * a + bg[0] * (1.0 - a);
+                        bg[1] = selection_color[1] * a + bg[1] * (1.0 - a);
+                        bg[2] = selection_color[2] * a + bg[2] * (1.0 - a);
+                        bg[3] = 1.0; // Ensure opaque after blending
+                    }
+                }
 
                 if let Some((start, run_color)) = run_start {
                     if bg == run_color {
@@ -1804,9 +2091,10 @@ fn main() -> Result<()> {
                     } else {
                         // Flush previous run
                         if run_color[3] > 0.0 {
-                            let x = margin_x + start as f32 * cell_w;
-                            let w = (col - start) as f32 * cell_w;
-                            text_renderer.push_rect(x, y, w, cell_h, run_color, &glyph_atlas);
+                            // Use floor/ceil to ensure pixel-aligned rectangles without gaps
+                            let x1 = (margin_x + start as f32 * cell_w).floor();
+                            let x2 = (margin_x + col as f32 * cell_w).ceil();
+                            text_renderer.push_rect(x1, y, x2 - x1, cell_h, run_color, &glyph_atlas);
                         }
                         // Start new run
                         run_start = Some((col, bg));
@@ -1820,24 +2108,9 @@ fn main() -> Result<()> {
             // Flush final run
             if let Some((start, run_color)) = run_start {
                 if run_color[3] > 0.0 {
-                    let x = margin_x + start as f32 * cell_w;
-                    let w = (grid.cols() - start) as f32 * cell_w;
-                    text_renderer.push_rect(x, y, w, cell_h, run_color, &glyph_atlas);
-                }
-            }
-        }
-
-        // === Pass 1.5: Selection highlight (one rect per row) ===
-        let selection_color = [config_selection.0, config_selection.1, config_selection.2, 0.35];
-        if let Some(ref sel) = term.selection {
-            let max_cols = grid.cols();
-            for row in 0..grid.rows() {
-                // Get column range for this row
-                if let Some((start_col, end_col)) = sel.cols_for_row(row, max_cols) {
-                    let x = margin_x + start_col as f32 * cell_w;
-                    let y = margin_y + row as f32 * cell_h;
-                    let w = (end_col - start_col) as f32 * cell_w;
-                    text_renderer.push_rect(x, y, w, cell_h, selection_color, &glyph_atlas);
+                    let x1 = (margin_x + start as f32 * cell_w).floor();
+                    let x2 = (margin_x + grid.cols() as f32 * cell_w).ceil();
+                    text_renderer.push_rect(x1, y, x2 - x1, cell_h, run_color, &glyph_atlas);
                 }
             }
         }
@@ -1915,7 +2188,7 @@ fn main() -> Result<()> {
                 let run_style = cell.underline_style;
                 let run_color = cell
                     .underline_color
-                    .map(|c| c.to_rgba(true))
+                    .map(|c| grid.color_to_rgba(&c, true))
                     .unwrap_or_else(|| effective_fg(&cell.fg));
                 let run_has_hyperlink = cell.hyperlink.is_some();
 
@@ -1934,7 +2207,7 @@ fn main() -> Result<()> {
                     let next_style = next_cell.underline_style;
                     let next_color = next_cell
                         .underline_color
-                        .map(|c| c.to_rgba(true))
+                        .map(|c| grid.color_to_rgba(&c, true))
                         .unwrap_or_else(|| effective_fg(&next_cell.fg));
                     let next_has_hyperlink = next_cell.hyperlink.is_some();
 
@@ -2081,22 +2354,31 @@ fn main() -> Result<()> {
 
                 // Overline rendering (CSI 53 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
-                    let fg = if is_inverse { cell.bg.to_rgba(true) } else { effective_fg(&cell.fg) };
+                    let fg = if is_inverse { effective_bg(&cell.bg) } else { effective_fg(&cell.fg) };
                     text_renderer.push_rect(x, y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
                 // Strikethrough rendering (CSI 9 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
-                    let fg = if is_inverse { cell.bg.to_rgba(true) } else { effective_fg(&cell.fg) };
+                    let fg = if is_inverse { effective_bg(&cell.bg) } else { effective_fg(&cell.fg) };
                     let strike_y = y + cell_h / 2.0;
                     text_renderer.push_rect(x, strike_y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
                 let grapheme = &cell.grapheme;
+                let first_ch = grapheme.chars().next().unwrap_or(' ');
+
+                // Box-drawing characters: draw programmatically for pixel-perfect alignment
+                {
+                    let fg = if is_inverse { effective_bg(&cell.bg) } else { effective_fg(&cell.fg) };
+                    if draw_box_drawing(first_ch, x, y, cell_w, cell_h, fg, &glyph_atlas, &mut text_renderer) {
+                        continue;
+                    }
+                }
                 if !grapheme.is_empty() && grapheme != " " {
                     // Handle INVERSE attribute (SGR 7): swap fg and bg (is_inverse defined above)
                     let fg = if is_inverse {
-                        cell.bg.to_rgba(true)
+                        effective_bg(&cell.bg)
                     } else {
                         effective_fg(&cell.fg)
                     };
@@ -2107,38 +2389,20 @@ fn main() -> Result<()> {
                     let mut bg_rgba = if is_inverse {
                         effective_fg(&cell.fg)
                     } else {
-                        cell.bg.to_rgba(false)
+                        effective_bg(&cell.bg)
                     };
 
-                    // Selection highlight - blend in linear space
+                    // Selection highlight - LCD compositing uses same blend as Pass 1
                     if let Some((sel_start, sel_end)) = row_selection {
                         if col >= sel_start && col < sel_end {
-                            let a = selection_color[3];
-                            // sRGB -> linear
-                            let bg_lin = [
-                                srgb_to_linear(bg_rgba[0]),
-                                srgb_to_linear(bg_rgba[1]),
-                                srgb_to_linear(bg_rgba[2]),
-                            ];
-                            let sel_lin = [
-                                srgb_to_linear(selection_color[0]),
-                                srgb_to_linear(selection_color[1]),
-                                srgb_to_linear(selection_color[2]),
-                            ];
-                            // Blend in linear space
-                            let blended_lin = [
-                                sel_lin[0] * a + bg_lin[0] * (1.0 - a),
-                                sel_lin[1] * a + bg_lin[1] * (1.0 - a),
-                                sel_lin[2] * a + bg_lin[2] * (1.0 - a),
-                            ];
-                            // Linear -> sRGB
-                            bg_rgba[0] = linear_to_srgb(blended_lin[0]);
-                            bg_rgba[1] = linear_to_srgb(blended_lin[1]);
-                            bg_rgba[2] = linear_to_srgb(blended_lin[2]);
+                            let a = selection_alpha;
+                            bg_rgba[0] = selection_color[0] * a + bg_rgba[0] * (1.0 - a);
+                            bg_rgba[1] = selection_color[1] * a + bg_rgba[1] * (1.0 - a);
+                            bg_rgba[2] = selection_color[2] * a + bg_rgba[2] * (1.0 - a);
                         }
                     }
 
-                    // Search highlight - blend in linear space (uses pre-computed matches)
+                    // Search highlight - blend in sRGB space to match GPU blending
                     if search_mode {
                         for &(start_col, end_col, match_idx) in row_search_matches {
                             if col >= start_col && col < end_col.min(grid.cols()) {
@@ -2149,27 +2413,10 @@ fn main() -> Result<()> {
                                     [1.0, 1.0, 0.0, 0.3] // Yellow
                                 };
                                 let a = hl_color[3];
-                                // sRGB -> linear
-                                let bg_lin = [
-                                    srgb_to_linear(bg_rgba[0]),
-                                    srgb_to_linear(bg_rgba[1]),
-                                    srgb_to_linear(bg_rgba[2]),
-                                ];
-                                let hl_lin = [
-                                    srgb_to_linear(hl_color[0]),
-                                    srgb_to_linear(hl_color[1]),
-                                    srgb_to_linear(hl_color[2]),
-                                ];
-                                // Blend in linear space
-                                let blended_lin = [
-                                    hl_lin[0] * a + bg_lin[0] * (1.0 - a),
-                                    hl_lin[1] * a + bg_lin[1] * (1.0 - a),
-                                    hl_lin[2] * a + bg_lin[2] * (1.0 - a),
-                                ];
-                                // Linear -> sRGB
-                                bg_rgba[0] = linear_to_srgb(blended_lin[0]);
-                                bg_rgba[1] = linear_to_srgb(blended_lin[1]);
-                                bg_rgba[2] = linear_to_srgb(blended_lin[2]);
+                                // Blend in sRGB space (matches GPU's default blend mode)
+                                bg_rgba[0] = hl_color[0] * a + bg_rgba[0] * (1.0 - a);
+                                bg_rgba[1] = hl_color[1] * a + bg_rgba[1] * (1.0 - a);
+                                bg_rgba[2] = hl_color[2] * a + bg_rgba[2] * (1.0 - a);
                                 break;
                             }
                         }
@@ -2177,6 +2424,174 @@ fn main() -> Result<()> {
 
                     let bg = [bg_rgba[0], bg_rgba[1], bg_rgba[2]];
                     let first_char = cell.ch();
+
+                    // Half-block and Powerline characters: draw as pixel-perfect rectangles
+                    // This prevents visible lines caused by font glyph antialiasing
+                    let cp = first_char as u32;
+                    if is_transition_char(first_char) {
+                        let cell_pixel_w = cell.width as f32 * cell_w;
+                        // For transition characters: use font glyph with proper background handling
+                        // Background was skipped in Pass 1, use default_bg for LCD compositing
+                        match cp {
+                            // === Half-block characters - draw as rectangles for pixel-perfect rendering ===
+                            0x2580 => {
+                                text_renderer.push_rect(x, y, cell_pixel_w, (cell_h / 2.0).ceil(), fg, &glyph_atlas);
+                            }
+                            0x2584 => {
+                                let half = (cell_h / 2.0).floor();
+                                text_renderer.push_rect(x, y + half, cell_pixel_w, cell_h - half, fg, &glyph_atlas);
+                            }
+                            0x258C => {
+                                text_renderer.push_rect(x, y, (cell_pixel_w / 2.0).ceil(), cell_h, fg, &glyph_atlas);
+                            }
+                            0x2590 => {
+                                let half = (cell_pixel_w / 2.0).floor();
+                                text_renderer.push_rect(x + half, y, cell_pixel_w - half, cell_h, fg, &glyph_atlas);
+                            }
+                            // Powerline: draw programmatically with wide smoothstep AA
+                            // AA_WIDTH=1.5 for wider gradient, smoothstep for natural curve
+                            // E0B0: right-pointing triangle (solid left)
+                            0xE0B0 => {
+                                let aa_w = 1.5f32;
+                                let steps = cell_h as i32;
+                                let half = cell_h / 2.0;
+                                for i in 0..steps {
+                                    let row_y = y + i as f32;
+                                    let dist = ((i as f32 + 0.5) - half).abs();
+                                    let edge = cell_w * (1.0 - dist / half * 0.5);
+
+                                    for px in 0..(cell_w as i32 + 1) {
+                                        let px_center = px as f32 + 0.5;
+                                        let d = edge - px_center;
+                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
+                                        let alpha = t * t * (3.0 - 2.0 * t); // smoothstep
+                                        if alpha > 0.01 {
+                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
+                                        }
+                                    }
+                                }
+                            }
+                            // E0B2: left-pointing triangle (solid right)
+                            0xE0B2 => {
+                                let aa_w = 1.5f32;
+                                let steps = cell_h as i32;
+                                let half = cell_h / 2.0;
+                                for i in 0..steps {
+                                    let row_y = y + i as f32;
+                                    let dist = ((i as f32 + 0.5) - half).abs();
+                                    let w = cell_w * (1.0 - dist / half * 0.5);
+                                    let edge = cell_w - w;
+
+                                    for px in 0..(cell_w as i32 + 1) {
+                                        let px_center = px as f32 + 0.5;
+                                        let d = px_center - edge;
+                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
+                                        let alpha = t * t * (3.0 - 2.0 * t);
+                                        if alpha > 0.01 {
+                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
+                                        }
+                                    }
+                                }
+                            }
+                            // E0B4: right-pointing semicircle (solid left) - using 2D SDF
+                            0xE0B4 => {
+                                let aa_w = 1.5f32;
+                                let steps = cell_h as i32;
+                                let cy = cell_h / 2.0;
+                                let rx = cell_w;
+                                let ry = cy;
+
+                                for i in 0..steps {
+                                    let row_y = y + i as f32;
+                                    let py = (i as f32 + 0.5) - cy; // y relative to center
+
+                                    for px in 0..(cell_w as i32 + 1) {
+                                        let px_f = px as f32 + 0.5;
+                                        // 2D ellipse SDF: normalize and compute distance
+                                        let nx = px_f / rx;
+                                        let ny = py / ry;
+                                        let len = (nx * nx + ny * ny).sqrt();
+                                        // signed distance (negative inside, positive outside)
+                                        let sdf = if len > 0.001 {
+                                            (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
+                                        } else {
+                                            -rx.min(ry)
+                                        };
+                                        let d = -sdf; // flip: positive inside
+                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
+                                        let alpha = t * t * (3.0 - 2.0 * t);
+                                        if alpha > 0.01 {
+                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
+                                        }
+                                    }
+                                }
+                            }
+                            // E0B6: left-pointing semicircle (solid right) - using 2D SDF
+                            0xE0B6 => {
+                                let aa_w = 1.5f32;
+                                let steps = cell_h as i32;
+                                let cy = cell_h / 2.0;
+                                let rx = cell_w;
+                                let ry = cy;
+
+                                for i in 0..steps {
+                                    let row_y = y + i as f32;
+                                    let py = (i as f32 + 0.5) - cy;
+
+                                    for px in 0..(cell_w as i32 + 1) {
+                                        let px_f = cell_w - (px as f32 + 0.5); // mirror for left-pointing
+                                        // 2D ellipse SDF
+                                        let nx = px_f / rx;
+                                        let ny = py / ry;
+                                        let len = (nx * nx + ny * ny).sqrt();
+                                        let sdf = if len > 0.001 {
+                                            (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
+                                        } else {
+                                            -rx.min(ry)
+                                        };
+                                        let d = -sdf;
+                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
+                                        let alpha = t * t * (3.0 - 2.0 * t);
+                                        if alpha > 0.01 {
+                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Quarter blocks (0x2596-0x259F) - use font glyph
+                                // Apply LCD compositing with actual cell background
+                                glyph_atlas.ensure_glyph(first_char);
+                                let baseline_y = (y + ascent).round();
+
+                                // Apply same lcd_mix logic as normal text
+                                let srgb_to_linear = |c: f32| -> f32 {
+                                    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                                };
+                                let bg_chroma = bg[0].max(bg[1]).max(bg[2]) - bg[0].min(bg[1]).min(bg[2]);
+                                let mut lcd_mix = ((bg_chroma - 0.06) / 0.14).clamp(0.0, 1.0);
+                                let fg_luma = 0.2126 * srgb_to_linear(fg[0])
+                                    + 0.7152 * srgb_to_linear(fg[1])
+                                    + 0.0722 * srgb_to_linear(fg[2]);
+                                let bg_luma = 0.2126 * srgb_to_linear(bg[0])
+                                    + 0.7152 * srgb_to_linear(bg[1])
+                                    + 0.0722 * srgb_to_linear(bg[2]);
+                                let contrast = (fg_luma - bg_luma).abs();
+                                let contrast_factor = 1.0 - ((contrast - 0.30) / 0.30).clamp(0.0, 1.0);
+                                lcd_mix = (lcd_mix * contrast_factor).clamp(0.0, 1.0);
+                                let bright = ((bg_luma - 0.70) / 0.20).clamp(0.0, 1.0);
+                                lcd_mix = lcd_mix.max(bright * 0.75);
+                                lcd_mix = lcd_mix.clamp(0.0, 0.85);
+
+                                text_renderer.push_text_with_bg_lcd(grapheme, x, baseline_y, fg, bg, lcd_mix, &glyph_atlas);
+                            }
+                        }
+                        continue;
+                    }
 
                     // Emoji check (use cached IS_EMOJI flag from Cell)
                     let is_emoji_grapheme = cell.attrs.contains(terminal::grid::CellAttrs::IS_EMOJI);
@@ -2217,8 +2632,37 @@ fn main() -> Result<()> {
                             glyph_atlas.ensure_glyph(ch);
                         }
                         let baseline_y = (y + ascent).round();
+
+                        // Calculate LCD mix factor for colored backgrounds
+                        // Uses gradual mixing (0.0-0.7) instead of binary on/off
+                        let bg_chroma = bg[0].max(bg[1]).max(bg[2]) - bg[0].min(bg[1]).min(bg[2]);
+
+                        // chroma <= 0.06: full LCD, chroma >= 0.20: max reduction
+                        let mut lcd_mix = ((bg_chroma - 0.06) / 0.14).clamp(0.0, 1.0);
+
+                        // Preserve LCD when fg/bg contrast is high (text remains sharp)
+                        let srgb_to_linear = |c: f32| -> f32 {
+                            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                        };
+                        let fg_luma = 0.2126 * srgb_to_linear(fg[0])
+                            + 0.7152 * srgb_to_linear(fg[1])
+                            + 0.0722 * srgb_to_linear(fg[2]);
+                        let bg_luma = 0.2126 * srgb_to_linear(bg[0])
+                            + 0.7152 * srgb_to_linear(bg[1])
+                            + 0.0722 * srgb_to_linear(bg[2]);
+                        let contrast = (fg_luma - bg_luma).abs();
+                        // High contrast (>0.60) -> reduce lcd_mix, low contrast -> keep lcd_mix
+                        let contrast_factor = 1.0 - ((contrast - 0.30) / 0.30).clamp(0.0, 1.0);
+
+                        lcd_mix = (lcd_mix * contrast_factor).clamp(0.0, 1.0);
+
+                        // 明るい背景は必ずLCD抑制を効かせる (contrast_factorが0でも無効化されない)
+                        let bright = ((bg_luma - 0.70) / 0.20).clamp(0.0, 1.0);
+                        lcd_mix = lcd_mix.max(bright * 0.75);
+                        lcd_mix = lcd_mix.clamp(0.0, 0.85);
+
                         // Render full grapheme (handles combining characters correctly)
-                        text_renderer.push_text_with_bg(grapheme, x, baseline_y, fg, bg, &glyph_atlas);
+                        text_renderer.push_text_with_bg_lcd(grapheme, x, baseline_y, fg, bg, lcd_mix, &glyph_atlas);
                     }
                 }
             }

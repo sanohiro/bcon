@@ -573,10 +573,13 @@ impl LcdGlyphAtlas {
             return (self.cell_width, self.cell_height);
         }
 
-        // Change FreeType font size
+        // Change FreeType font size for all fonts
         if self.font_main.set_size(new_size_u32).is_err() {
             warn!("FreeType size change failed");
             return (self.cell_width, self.cell_height);
+        }
+        if let Some(ref mut symbols) = self.font_symbols {
+            let _ = symbols.set_size(new_size_u32);
         }
         if let Some(ref mut cjk) = self.font_cjk {
             let _ = cjk.set_size(new_size_u32);

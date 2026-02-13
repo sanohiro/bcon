@@ -452,6 +452,8 @@ pub struct Grid {
     dirty_rows: Vec<bool>,
     /// All rows dirty flag (optimization for full screen updates)
     all_dirty: bool,
+    /// Custom ANSI 16 colors palette (from config)
+    ansi_palette: Option<[[f32; 4]; 16]>,
 }
 
 /// Mouse tracking mode
@@ -509,6 +511,36 @@ impl Grid {
             row_pool: Vec::new(),
             dirty_rows: vec![true; rows], // All rows dirty initially
             all_dirty: true,
+            ansi_palette: None,
+        }
+    }
+
+    /// Set custom ANSI 16 colors palette
+    pub fn set_ansi_palette(&mut self, palette: [[f32; 4]; 16]) {
+        self.ansi_palette = Some(palette);
+    }
+
+    /// Convert Color to RGBA using custom palette for indexed colors 0-15
+    pub fn color_to_rgba(&self, color: &Color, is_foreground: bool) -> [f32; 4] {
+        match color {
+            Color::Default => {
+                if is_foreground {
+                    [1.0, 1.0, 1.0, 1.0] // white
+                } else {
+                    [0.0, 0.0, 0.0, 0.0] // transparent
+                }
+            }
+            Color::Indexed(idx) => {
+                // Use custom palette for colors 0-15
+                if *idx < 16 {
+                    if let Some(ref palette) = self.ansi_palette {
+                        return palette[*idx as usize];
+                    }
+                }
+                // Fallback to default palette
+                PALETTE_256[*idx as usize]
+            }
+            Color::Rgb(r, g, b) => [*r as f32 / 255.0, *g as f32 / 255.0, *b as f32 / 255.0, 1.0],
         }
     }
 
@@ -925,6 +957,9 @@ impl Grid {
             }
         }
 
+        // Remove images overlapping with written cells
+        self.remove_images_at_cell(self.cursor_row, self.cursor_col, char_width);
+
         self.cursor_col += char_width;
         self.last_char = ch;
 
@@ -1054,6 +1089,22 @@ impl Grid {
             let img_end = p.row + p.height_cells.saturating_sub(1);
             // Keep if row is outside this range
             row < p.row || row > img_end
+        });
+    }
+
+    /// Delete images overlapping specified cell range
+    fn remove_images_at_cell(&mut self, row: usize, col: usize, width: usize) {
+        if self.image_placements.is_empty() {
+            return;
+        }
+        let col_end = col + width;
+        self.image_placements.retain(|p| {
+            // Image row range
+            let img_row_end = p.row + p.height_cells;
+            // Image col range
+            let img_col_end = p.col + p.width_cells;
+            // Keep if no overlap
+            row >= img_row_end || row < p.row || col >= img_col_end || col_end <= p.col
         });
     }
 
