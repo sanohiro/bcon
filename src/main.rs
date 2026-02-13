@@ -143,6 +143,251 @@ fn draw_box_drawing(
     }
 }
 
+/// Draw powerline triangle (E0B0/E0B1/E0B2/E0B3)
+/// right = true => right-pointing (solid left), false => left-pointing (solid right)
+/// width_scale: 1.0 = full width, 0.5 = thin variant
+fn draw_powerline_triangle(
+    x: f32,
+    y: f32,
+    cell_w: f32,
+    cell_h: f32,
+    fg: [f32; 4],
+    bg: [f32; 3],
+    atlas: &crate::font::lcd_atlas::LcdGlyphAtlas,
+    tr: &mut crate::gpu::LcdTextRendererInstanced,
+    right: bool,
+    width_scale: f32,
+) {
+    let aa_w = 1.5f32;
+    let steps = cell_h as i32;
+    let half = cell_h / 2.0;
+    let max_w_px = (cell_w * width_scale - 1.0).max(1.0);
+    let draw_w = max_w_px.floor() + 1.0;
+    let start_x = if right && width_scale < 0.999 {
+        x + (cell_w - draw_w)
+    } else {
+        x
+    };
+    let max_w_i = max_w_px.floor() as i32;
+    let inv_half = if half > 0.0 { 1.0 / half } else { 0.0 };
+
+    for i in 0..steps {
+        let row_y = y + i as f32;
+        let dist = ((i as f32 + 0.5) - half).abs();
+        let edge = (max_w_px * (1.0 - dist * inv_half) + 0.5)
+            .clamp(0.5, max_w_px + 0.5);
+
+        for px in 0..=max_w_i {
+            let px_center = px as f32 + 0.5;
+            let d = if right {
+                // right-pointing: fill [0 .. edge]
+                edge - px_center
+            } else {
+                // left-pointing: fill [max_w - edge .. max_w]
+                px_center - ((max_w_px + 0.5) - edge)
+            };
+            let alpha = if d >= 0.0 {
+                1.0
+            } else {
+                let t = (d / aa_w + 1.0).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t) // smoothstep
+            };
+            if alpha > 0.01 {
+                let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                tr.push_rect_with_bg(start_x + px as f32, row_y, 1.0, 1.0, aa_fg, bg, atlas);
+            }
+        }
+    }
+}
+
+/// Draw powerline triangle outline (E0B1/E0B3)
+fn draw_powerline_triangle_outline(
+    x: f32,
+    y: f32,
+    cell_w: f32,
+    cell_h: f32,
+    fg: [f32; 4],
+    bg: [f32; 3],
+    atlas: &crate::font::lcd_atlas::LcdGlyphAtlas,
+    tr: &mut crate::gpu::LcdTextRendererInstanced,
+    right: bool,
+) {
+    let aa = 0.7f32;
+    let line_half = 0.35f32;
+    let w_px = (cell_w - 1.0).max(1.0);
+    let h_px = (cell_h - 1.0).max(1.0);
+    let half = h_px * 0.5;
+
+    let (x0, y0, x1, y1, x2, y2) = if right {
+        // right-pointing: two edges to the tip at (w, half)
+        (0.5, 0.5, w_px + 0.5, half + 0.5, 0.5, h_px + 0.5)
+    } else {
+        // left-pointing: two edges to the tip at (0, half)
+        (w_px + 0.5, 0.5, 0.5, half + 0.5, w_px + 0.5, h_px + 0.5)
+    };
+
+    let dist_to_segment = |px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32| -> f32 {
+        let vx = bx - ax;
+        let vy = by - ay;
+        let wx = px - ax;
+        let wy = py - ay;
+        let c1 = vx * wx + vy * wy;
+        if c1 <= 0.0 {
+            return ((px - ax).powi(2) + (py - ay).powi(2)).sqrt();
+        }
+        let c2 = vx * vx + vy * vy;
+        if c2 <= c1 {
+            return ((px - bx).powi(2) + (py - by).powi(2)).sqrt();
+        }
+        let b = c1 / c2;
+        let bx = ax + b * vx;
+        let by = ay + b * vy;
+        ((px - bx).powi(2) + (py - by).powi(2)).sqrt()
+    };
+
+    let ww = w_px as i32 + 1;
+    let hh = h_px as i32 + 1;
+
+    for py in 0..hh {
+        for px in 0..ww {
+            let px_f = px as f32 + 0.5;
+            let py_f = py as f32 + 0.5;
+
+            let d1 = dist_to_segment(px_f, py_f, x0, y0, x1, y1);
+            let d2 = dist_to_segment(px_f, py_f, x2, y2, x1, y1);
+            let d = d1.min(d2);
+            if d > line_half + aa {
+                continue;
+            }
+            let alpha = if d <= line_half {
+                1.0
+            } else {
+                1.0 - (d - line_half) / aa
+            };
+            if alpha > 0.02 {
+                let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                tr.push_rect_with_bg(x + px as f32, y + py as f32, 1.0, 1.0, aa_fg, bg, atlas);
+            }
+        }
+    }
+}
+
+/// Draw powerline semicircle (E0B4/E0B5/E0B6/E0B7)
+/// right = true => right-pointing, false => left-pointing
+/// width_scale: 1.0 = full width, 0.5 = thin variant
+fn draw_powerline_semicircle(
+    x: f32,
+    y: f32,
+    cell_w: f32,
+    cell_h: f32,
+    fg: [f32; 4],
+    bg: [f32; 3],
+    atlas: &crate::font::lcd_atlas::LcdGlyphAtlas,
+    tr: &mut crate::gpu::LcdTextRendererInstanced,
+    right: bool,
+    width_scale: f32,
+) {
+    let aa_w = 1.5f32;
+    let steps = cell_h as i32;
+    let h_px = (cell_h - 1.0).max(1.0);
+    let cy = h_px * 0.5 + 0.5;
+    let ry = (h_px * 0.5).max(1.0);
+    let max_w_px = (cell_w * width_scale - 1.0).max(1.0);
+    let rx = max_w_px + 0.5;
+    let draw_w = max_w_px.floor() + 1.0;
+    let start_x = if right && width_scale < 0.999 {
+        x + (cell_w - draw_w)
+    } else {
+        x
+    };
+    let rx_i = max_w_px.floor() as i32;
+
+    for i in 0..steps {
+        let row_y = y + i as f32;
+        let py = (i as f32 + 0.5) - cy;
+
+        for px in 0..=rx_i {
+            let px_rel = px as f32 + 0.5;
+            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
+
+            let nx = px_f / rx;
+            let ny = py / ry;
+            let len = (nx * nx + ny * ny).sqrt();
+            let sdf = if len > 0.001 {
+                (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
+            } else {
+                -rx.min(ry)
+            };
+            let d = -sdf;
+            let alpha = if d >= 0.0 {
+                1.0
+            } else {
+                let t = (d / aa_w + 1.0).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            };
+            if alpha > 0.01 {
+                let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                tr.push_rect_with_bg(start_x + px as f32, row_y, 1.0, 1.0, aa_fg, bg, atlas);
+            }
+        }
+    }
+}
+
+/// Draw powerline semicircle outline (E0B5/E0B7)
+fn draw_powerline_semicircle_outline(
+    x: f32,
+    y: f32,
+    cell_w: f32,
+    cell_h: f32,
+    fg: [f32; 4],
+    bg: [f32; 3],
+    atlas: &crate::font::lcd_atlas::LcdGlyphAtlas,
+    tr: &mut crate::gpu::LcdTextRendererInstanced,
+    right: bool,
+) {
+    let aa = 0.7f32;
+    let line_half = 0.35f32;
+    let steps = cell_h as i32;
+    let ry = (cell_h - 1.0).max(1.0) * 0.5;
+    let cy = ry + 0.5;
+    let max_w_px = (cell_w - 1.0).max(1.0);
+    let rx = max_w_px + 0.5;
+    let start_x = x;
+    let rx_i = max_w_px.floor() as i32;
+
+    for i in 0..steps {
+        let row_y = y + i as f32;
+        let py = (i as f32 + 0.5) - cy;
+
+        for px in 0..=rx_i {
+            let px_rel = px as f32 + 0.5;
+            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
+
+            let nx = px_f / rx;
+            let ny = py / ry;
+            let len = (nx * nx + ny * ny).sqrt();
+            let sdf = if len > 0.001 {
+                (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
+            } else {
+                -rx.min(ry)
+            };
+            let d = sdf.abs();
+            if d > line_half + aa {
+                continue;
+            }
+            let alpha = if d <= line_half {
+                1.0
+            } else {
+                1.0 - (d - line_half) / aa
+            };
+            if alpha > 0.02 {
+                let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
+                tr.push_rect_with_bg(start_x + px as f32, row_y, 1.0, 1.0, aa_fg, bg, atlas);
+            }
+        }
+    }
+}
+
 /// Draw rounded corner with anti-aliased arc aligned to line centers
 fn draw_rounded_corner(
     ch: char,
@@ -2430,8 +2675,19 @@ fn main() -> Result<()> {
                     let cp = first_char as u32;
                     if is_transition_char(first_char) {
                         let cell_pixel_w = cell.width as f32 * cell_w;
-                        // For transition characters: use font glyph with proper background handling
-                        // Background was skipped in Pass 1, use default_bg for LCD compositing
+                        let is_powerline = (0xE0B0..=0xE0D4).contains(&cp);
+                        if is_powerline {
+                            // Draw per-cell background (Pass1 skipped), keeps powerline opaque and stable
+                            text_renderer.push_rect(
+                                x,
+                                y,
+                                cell_pixel_w,
+                                cell_h,
+                                [bg[0], bg[1], bg[2], 1.0],
+                                &glyph_atlas,
+                            );
+                        }
+                        // For transition characters: use programmatic draw or glyph fallback
                         match cp {
                             // === Half-block characters - draw as rectangles for pixel-perfect rendering ===
                             0x2580 => {
@@ -2448,122 +2704,21 @@ fn main() -> Result<()> {
                                 let half = (cell_pixel_w / 2.0).floor();
                                 text_renderer.push_rect(x + half, y, cell_pixel_w - half, cell_h, fg, &glyph_atlas);
                             }
-                            // Powerline: draw programmatically with wide smoothstep AA
-                            // AA_WIDTH=1.5 for wider gradient, smoothstep for natural curve
-                            // E0B0: right-pointing triangle (solid left)
-                            0xE0B0 => {
-                                let aa_w = 1.5f32;
-                                let steps = cell_h as i32;
-                                let half = cell_h / 2.0;
-                                for i in 0..steps {
-                                    let row_y = y + i as f32;
-                                    let dist = ((i as f32 + 0.5) - half).abs();
-                                    let edge = cell_w * (1.0 - dist / half * 0.5);
-
-                                    for px in 0..(cell_w as i32 + 1) {
-                                        let px_center = px as f32 + 0.5;
-                                        let d = edge - px_center;
-                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
-                                        let alpha = t * t * (3.0 - 2.0 * t); // smoothstep
-                                        if alpha > 0.01 {
-                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
-                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
-                                        }
-                                    }
-                                }
-                            }
-                            // E0B2: left-pointing triangle (solid right)
-                            0xE0B2 => {
-                                let aa_w = 1.5f32;
-                                let steps = cell_h as i32;
-                                let half = cell_h / 2.0;
-                                for i in 0..steps {
-                                    let row_y = y + i as f32;
-                                    let dist = ((i as f32 + 0.5) - half).abs();
-                                    let w = cell_w * (1.0 - dist / half * 0.5);
-                                    let edge = cell_w - w;
-
-                                    for px in 0..(cell_w as i32 + 1) {
-                                        let px_center = px as f32 + 0.5;
-                                        let d = px_center - edge;
-                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
-                                        let alpha = t * t * (3.0 - 2.0 * t);
-                                        if alpha > 0.01 {
-                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
-                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
-                                        }
-                                    }
-                                }
-                            }
-                            // E0B4: right-pointing semicircle (solid left) - using 2D SDF
-                            0xE0B4 => {
-                                let aa_w = 1.5f32;
-                                let steps = cell_h as i32;
-                                let cy = cell_h / 2.0;
-                                let rx = cell_w;
-                                let ry = cy;
-
-                                for i in 0..steps {
-                                    let row_y = y + i as f32;
-                                    let py = (i as f32 + 0.5) - cy; // y relative to center
-
-                                    for px in 0..(cell_w as i32 + 1) {
-                                        let px_f = px as f32 + 0.5;
-                                        // 2D ellipse SDF: normalize and compute distance
-                                        let nx = px_f / rx;
-                                        let ny = py / ry;
-                                        let len = (nx * nx + ny * ny).sqrt();
-                                        // signed distance (negative inside, positive outside)
-                                        let sdf = if len > 0.001 {
-                                            (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
-                                        } else {
-                                            -rx.min(ry)
-                                        };
-                                        let d = -sdf; // flip: positive inside
-                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
-                                        let alpha = t * t * (3.0 - 2.0 * t);
-                                        if alpha > 0.01 {
-                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
-                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
-                                        }
-                                    }
-                                }
-                            }
-                            // E0B6: left-pointing semicircle (solid right) - using 2D SDF
-                            0xE0B6 => {
-                                let aa_w = 1.5f32;
-                                let steps = cell_h as i32;
-                                let cy = cell_h / 2.0;
-                                let rx = cell_w;
-                                let ry = cy;
-
-                                for i in 0..steps {
-                                    let row_y = y + i as f32;
-                                    let py = (i as f32 + 0.5) - cy;
-
-                                    for px in 0..(cell_w as i32 + 1) {
-                                        let px_f = cell_w - (px as f32 + 0.5); // mirror for left-pointing
-                                        // 2D ellipse SDF
-                                        let nx = px_f / rx;
-                                        let ny = py / ry;
-                                        let len = (nx * nx + ny * ny).sqrt();
-                                        let sdf = if len > 0.001 {
-                                            (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
-                                        } else {
-                                            -rx.min(ry)
-                                        };
-                                        let d = -sdf;
-                                        let t = (d / aa_w + 0.5).clamp(0.0, 1.0);
-                                        let alpha = t * t * (3.0 - 2.0 * t);
-                                        if alpha > 0.01 {
-                                            let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
-                                            text_renderer.push_rect(x + px as f32, row_y, 1.0, 1.0, aa_fg, &glyph_atlas);
-                                        }
-                                    }
-                                }
-                            }
+                            // Powerline: draw programmatically with smoothstep AA
+                            // E0B0/E0B2: solid separators
+                            0xE0B0 => draw_powerline_triangle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true, 1.0),
+                            0xE0B2 => draw_powerline_triangle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false, 1.0),
+                            // E0B1/E0B3: thin separators (outline only)
+                            0xE0B1 => draw_powerline_triangle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true),
+                            0xE0B3 => draw_powerline_triangle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false),
+                            // E0B4/E0B6: solid semicircles
+                            0xE0B4 => draw_powerline_semicircle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true, 1.0),
+                            0xE0B6 => draw_powerline_semicircle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false, 1.0),
+                            // E0B5/E0B7: thin semicircles (outline only)
+                            0xE0B5 => draw_powerline_semicircle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true),
+                            0xE0B7 => draw_powerline_semicircle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false),
                             _ => {
-                                // Quarter blocks (0x2596-0x259F) - use font glyph
+                                // Fallback for unhandled transition chars (quarter blocks, powerline variants, etc.)
                                 // Apply LCD compositing with actual cell background
                                 glyph_atlas.ensure_glyph(first_char);
                                 let baseline_y = (y + ascent).round();
