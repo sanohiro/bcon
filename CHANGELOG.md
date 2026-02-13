@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-02-13
+
+### Fixed
+- LCD subpixel rendering on colored backgrounds (yazi highlight text smearing)
+- Box-drawing characters (─│┌┐└┘├┤┬┴┼) now pixel-perfect aligned
+- Rounded corners (╭╮╯╰) properly connect with adjacent lines
+
+### Added
+- Per-instance LCD disable for grayscale AA on high-chroma backgrounds
+- Anti-aliased programmatic rendering for box-drawing characters
+- Terminal feature stubs: cursor style (DECSCUSR), focus events, OSC 7/10/11
+
 ## [0.1.0] - 2026-02-09
 
 ### Added
