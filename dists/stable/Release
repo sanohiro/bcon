@@ -1,0 +1,18 @@
+Origin: bcon
+Label: bcon
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: bcon apt repository
+Date: Sat, 14 Feb 2026 14:30:51 +0000
+MD5Sum:
+ 64dc33c290da63c9a17fddd8a688b160 731 main/binary-amd64/Packages
+ c420a04a04fbb3aa54c8a7150da91a09 513 main/binary-amd64/Packages.gz
+ a1b283586c7dde91cbfea81346d09c6a 731 main/binary-arm64/Packages
+ 2f3157cc2aa6b0e6047cae67f7a3381a 513 main/binary-arm64/Packages.gz
+SHA256:
+ 229b502f20605b5f4f22843b44ea4f979ea66ea8ab4f86c898c76ae329f429d8 731 main/binary-amd64/Packages
+ bf48a28bd1d6fc10d0080e0e2b75734f67ddf560f11e31bf5b45660f02cb2a99 513 main/binary-amd64/Packages.gz
+ 067fc019da495ed4c68056bb401b68cd1c9d8ed6e0b661c0776e2760cf247227 731 main/binary-arm64/Packages
+ 7ae05c5f9688668814b28e779cfd0a1065d31fa29e8465339bbd78f2f0d91007 513 main/binary-arm64/Packages.gz
