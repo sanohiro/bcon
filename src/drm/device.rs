@@ -15,7 +15,7 @@ use log::{debug, info, warn};
 use nix::sys::signal::{SigSet, Signal};
 use nix::sys::signalfd::{SfdFlags, SignalFd};
 use std::fs::{File, OpenOptions};
-use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -8,4 +8,5 @@
 mod seatd;
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
+#[allow(unused_imports)]
 pub use seatd::{SeatDevice, SeatSession, SessionEvent};

@@ -50,15 +50,13 @@ const MAX_SCROLLBACK: usize = 10000;
 fn is_emoji_codepoint(cp: u32) -> bool {
     matches!(cp,
         // Main emoji blocks
+        // Note: 0x1F300..=0x1F5FF includes Fitzpatrick skin tone modifiers (0x1F3FB..=0x1F3FF)
         0x1F300..=0x1F5FF |  // Miscellaneous Symbols and Pictographs
         0x1F600..=0x1F64F |  // Emoticons
         0x1F680..=0x1F6FF |  // Transport and Map Symbols
         0x1F900..=0x1F9FF |  // Supplemental Symbols and Pictographs
         0x1FA00..=0x1FAFF |  // Symbols and Pictographs Extended
         0x1F1E0..=0x1F1FF |  // Regional Indicator Symbols (flags)
-
-        // Fitzpatrick skin tone modifiers
-        0x1F3FB..=0x1F3FF |  // 🏻🏼🏽🏾🏿
 
         // Symbol blocks (used in ZWJ sequences)
         0x2600..=0x26FF   |  // Miscellaneous Symbols (♀♂⚕⚖ etc)

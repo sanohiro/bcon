@@ -19,6 +19,7 @@ pub use context::{EglContext, GbmDevice, GbmSurface, GlRenderer};
 pub use emoji_renderer::EmojiRenderer;
 pub use fbo::Fbo;
 pub use image_renderer::ImageRenderer;
+#[allow(unused_imports)]
 pub use lcd_renderer::LcdTextRenderer;
 #[allow(unused_imports)]
 pub use lcd_renderer_instanced::LcdTextRendererInstanced;

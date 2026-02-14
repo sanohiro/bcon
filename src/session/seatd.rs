@@ -54,6 +54,8 @@ pub struct SeatSession {
     event_rx: mpsc::Receiver<SessionEvent>,
     /// Opened devices (path -> device_id)
     devices: HashMap<String, i32>,
+    /// Device ID counter
+    next_device_id: i32,
 }
 
 impl SeatSession {
@@ -68,7 +70,7 @@ impl SeatSession {
 
         let state_clone = state.clone();
 
-        let seat = Seat::open(move |seat_ref: &mut SeatRef, event: SeatEvent| {
+        let mut seat = Seat::open(move |seat_ref: &mut SeatRef, event: SeatEvent| {
             let mut state = state_clone.borrow_mut();
             match event {
                 SeatEvent::Enable => {
@@ -96,6 +98,7 @@ impl SeatSession {
             state,
             event_rx,
             devices: HashMap::new(),
+            next_device_id: 1,
         })
     }
 
@@ -130,7 +133,7 @@ impl SeatSession {
 
     /// Open a device (DRM or evdev)
     ///
-    /// Returns the device with its fd and libseat device_id.
+    /// Returns the device with its fd and internal device_id.
     /// The fd is valid only while the session is active.
     pub fn open_device<P: AsRef<Path>>(&mut self, path: P) -> Result<SeatDevice> {
         let path_str = path.as_ref().to_string_lossy().to_string();
@@ -140,8 +143,9 @@ impl SeatSession {
             .open_device(&path)
             .with_context(|| format!("Failed to open device: {}", path_str))?;
 
-        let device_id = device.device_id();
-        let raw_fd = device.fd();
+        let device_id = self.next_device_id;
+        self.next_device_id += 1;
+        let raw_fd = device.as_raw_fd();
 
         debug!("libseat: opened device {} (id={}, fd={})", path_str, device_id, raw_fd);
 

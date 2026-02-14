@@ -6,6 +6,7 @@ pub mod hdr;
 #[cfg(target_os = "linux")]
 pub mod hotplug;
 
+#[allow(unused_imports)]
 pub use device::{setup_sigterm_handler, sigterm_received, Device, VtEvent, VtSwitcher};
 pub use display::{set_crtc, DisplayConfig, DrmFramebuffer, SavedCrtc};
 // HDR types exported for public API (future use)
