@@ -1214,7 +1214,23 @@ fn main() -> Result<()> {
     }
 
     // Phase 4: Keyboard input initialization
-    let keyboard = input::Keyboard::new().context("Failed to initialize keyboard")?;
+    // TTY keyboard (may fail when running from GDM without a TTY)
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    let keyboard: Option<input::Keyboard> = match input::Keyboard::new() {
+        Ok(kb) => {
+            info!("TTY keyboard initialized");
+            Some(kb)
+        }
+        Err(e) => {
+            info!("TTY keyboard unavailable (libseat mode): {}", e);
+            None
+        }
+    };
+
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+    let keyboard: Option<input::Keyboard> = Some(
+        input::Keyboard::new().context("Failed to initialize keyboard")?
+    );
 
     // evdev input (keyboard + mouse, continue with SSH stdin if unavailable)
     #[cfg(all(target_os = "linux", feature = "seatd"))]
@@ -1247,6 +1263,11 @@ fn main() -> Result<()> {
                 None
             }
         };
+
+    // Require at least one input method
+    if keyboard.is_none() && evdev_keyboard.is_none() {
+        anyhow::bail!("No input method available (both TTY keyboard and evdev failed)");
+    }
 
     info!("Phase 4 initialization complete");
 
@@ -1548,13 +1569,15 @@ fn main() -> Result<()> {
         // Read TTY stdin keyboard input and forward to PTY
         // Skip if evdev keyboard is available (prevent double input)
         if evdev_keyboard.is_none() {
-            match keyboard.read(&mut key_buf) {
-                Ok(0) => {}
-                Ok(n) => {
-                    let _ = term.write_to_pty(&key_buf[..n]);
-                }
-                Err(e) => {
-                    log::warn!("Keyboard read error: {}", e);
+            if let Some(ref kb) = keyboard {
+                match kb.read(&mut key_buf) {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        let _ = term.write_to_pty(&key_buf[..n]);
+                    }
+                    Err(e) => {
+                        log::warn!("Keyboard read error: {}", e);
+                    }
                 }
             }
         }
