@@ -4,7 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc;
