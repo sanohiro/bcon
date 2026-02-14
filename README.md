@@ -40,6 +40,7 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 - **True Color**: Full 24-bit color support
 - **Ligatures**: Font ligature support (FiraCode, JetBrains Mono, etc.)
 - **Emoji**: Color emoji rendering (Noto Color Emoji)
+- **Powerline**: Pixel-perfect Powerline/Nerd Font glyphs
 - **HiDPI Scaling**: Configurable display scale (1.0x - 2.0x)
 - **HDR Detection**: Automatic HDR capability detection from EDID
 

@@ -36,6 +36,7 @@ Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく�
 - **True Color**: 24bit フルカラーサポート
 - **リガチャ**: フォントリガチャ対応 (FiraCode, JetBrains Mono など)
 - **絵文字**: カラー絵文字レンダリング (Noto Color Emoji)
+- **Powerline**: ピクセル精度の Powerline/Nerd Font グリフ
 - **LCD サブピクセル**: LCD モニター向け最適化
 - **HiDPI スケーリング**: 設定可能な表示倍率 (1.0x - 2.0x)
 - **HDR 検出**: EDID から HDR 対応を自動検出
