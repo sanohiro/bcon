@@ -145,7 +145,7 @@ impl SeatSession {
 
         let device_id = self.next_device_id;
         self.next_device_id += 1;
-        let raw_fd = device.as_raw_fd();
+        let raw_fd = device.as_fd().as_raw_fd();
 
         debug!("libseat: opened device {} (id={}, fd={})", path_str, device_id, raw_fd);
 
