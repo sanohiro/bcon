@@ -253,3 +253,14 @@ When implementing, prefer:
 - Test each component in isolation before integration
 - Add debug logging liberally during development
 - Check Ghostty source for reference when stuck on specific problems
+
+### 「リリースして」と言われたら
+
+**必ず push まで完了させること。** ローカルコミット・タグだけで「完了」と言うな。
+
+1. CHANGELOG 更新
+2. Cargo.toml バージョン更新
+3. コミット
+4. タグ作成 (`git tag vX.Y.Z`)
+5. **push (`git push origin main && git push origin vX.Y.Z`)**
+6. push 完了を確認してから「リリース完了」と報告
