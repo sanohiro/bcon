@@ -139,10 +139,15 @@ Start directly from GDM/SDDM login screen:
 curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 sudo apt install bcon
 
-# 2. Generate user config
+# 2. Install session files
+sudo cp /usr/share/bcon/bcon-session /usr/local/bin/
+sudo chmod +x /usr/local/bin/bcon-session
+sudo cp /usr/share/bcon/bcon.desktop /usr/share/xsessions/
+
+# 3. Generate user config
 bcon --init-config=vim,jp    # saves to ~/.config/bcon/config.toml
 
-# 3. Select "bcon" session from login screen
+# 4. Select "bcon" session from login screen
 ```
 
 Log in directly to bcon without starting a desktop environment. Saves memory and boot time.
@@ -237,6 +242,7 @@ sudo apt install \
     libxkbcommon-dev libinput-dev libudev-dev \
     libdbus-1-dev libwayland-dev \
     libfontconfig1-dev libfreetype-dev \
+    libseat-dev \
     pkg-config cmake clang
 
 # Rust toolchain (1.82+) required
@@ -263,23 +269,13 @@ Ctrl+Alt+F1  # or F7
 
 ### Rootless Mode
 
-Run without root privileges using libseat:
-
-```bash
-# Additional package
-sudo apt install libseat-dev
-
-# Rootless build
-cargo build --release --features seatd
-
-# Run without root
-./target/release/bcon
-```
-
-Benefits:
-- No root required
+bcon includes libseat support by default, enabling:
+- Running without root privileges
 - Proper session tracking (`loginctl list-sessions`)
 - Integration with screen lock, power management
+- Login session from GDM/SDDM
+
+The same binary works both with `sudo` and as a user session.
 
 ## Limitations
 

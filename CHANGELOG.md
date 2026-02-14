@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-02-14
+
+### Changed
+- libseat (seatd) now enabled by default
+- Single binary works for both root and GDM/SDDM login sessions
+
+### Added
+- bcon-session wrapper script for login session support
+- GDM/SDDM login session documentation
+
+### Fixed
+- bcon.desktop now correctly configured for xsessions
+
 ## [0.2.10] - 2026-02-14
 
 ### Added

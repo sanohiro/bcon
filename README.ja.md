@@ -132,14 +132,19 @@ sudo systemctl start bcon@tty2
 GDM/SDDM などのログインマネージャーから直接起動:
 
 ```bash
-# 1. bcon をインストール (rootless ビルド版)
+# 1. bcon をインストール
 curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 sudo apt install bcon
 
-# 2. ユーザー設定ファイルを生成
+# 2. セッションファイルをインストール
+sudo cp /usr/share/bcon/bcon-session /usr/local/bin/
+sudo chmod +x /usr/local/bin/bcon-session
+sudo cp /usr/share/bcon/bcon.desktop /usr/share/xsessions/
+
+# 3. ユーザー設定ファイルを生成
 bcon --init-config=vim,jp    # ~/.config/bcon/config.toml に保存
 
-# 3. ログイン画面で「bcon」セッションを選択
+# 4. ログイン画面で「bcon」セッションを選択
 ```
 
 デスクトップ環境なしで直接 bcon にログイン。メモリ節約・起動時間短縮に効果的。
@@ -234,6 +239,7 @@ sudo apt install \
     libxkbcommon-dev libinput-dev libudev-dev \
     libdbus-1-dev libwayland-dev \
     libfontconfig1-dev libfreetype-dev \
+    libseat-dev \
     pkg-config cmake clang
 
 # Rust ツールチェイン (1.82+) が必要
@@ -271,23 +277,13 @@ sudo cp bcon.desktop /usr/share/wayland-sessions/
 
 ### rootless モード
 
-root 権限なしで実行するには libseat を使用:
-
-```bash
-# 追加パッケージ
-sudo apt install libseat-dev
-
-# rootless ビルド
-cargo build --release --features seatd
-
-# root なしで実行可能
-./target/release/bcon
-```
-
-メリット:
-- root 権限不要
+bcon はデフォルトで libseat 対応。以下が可能:
+- root 権限なしで実行
 - セッション追跡 (`loginctl list-sessions`)
 - スクリーンロック、電源管理との連携
+- GDM/SDDM ログインセッション
+
+同じバイナリが `sudo` でもユーザーセッションでも動作する。
 
 ## 制限事項
 

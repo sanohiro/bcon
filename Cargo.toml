@@ -1,6 +1,6 @@
 [package]
 name = "bcon"
-version = "0.2.10"
+version = "0.2.11"
 edition = "2021"
 authors = ["Hironobu Sano"]
 description = "GPU-accelerated terminal emulator for Linux console"
@@ -77,7 +77,7 @@ libseat = { version = "0.2", optional = true }
 udev = "0.8"
 
 [features]
-default = []
+default = ["seatd"]
 seatd = ["libseat"]
 
 # [dev-dependencies]

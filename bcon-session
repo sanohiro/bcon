@@ -1,0 +1,26 @@
+#!/bin/bash
+# bcon-session - Wrapper script for starting bcon as a login session
+#
+# This script is invoked by GDM/SDDM when user selects "bcon" session.
+# It ensures proper session setup and cleanup.
+
+set -e
+
+# Log to journal
+exec > >(systemd-cat -t bcon-session) 2>&1
+
+echo "Starting bcon session for user $USER"
+
+# Ensure we have a valid XDG_RUNTIME_DIR
+if [ -z "$XDG_RUNTIME_DIR" ]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+
+# Start fcitx5 for Japanese input (if available)
+if command -v fcitx5 &> /dev/null; then
+    fcitx5 -d &
+fi
+
+# Execute bcon
+# bcon must be built with --features seatd for this to work
+exec /usr/local/bin/bcon

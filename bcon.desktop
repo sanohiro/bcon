@@ -2,6 +2,8 @@
 Name=bcon
 Comment=GPU-accelerated console terminal
 Comment[ja]=GPU アクセラレーション対応コンソールターミナル
-Exec=/usr/local/bin/bcon
+Exec=/usr/local/bin/bcon-session
+TryExec=/usr/local/bin/bcon
 Type=Application
 DesktopNames=bcon
+X-GDM-SessionRegisters=true
