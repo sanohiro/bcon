@@ -254,13 +254,13 @@ When implementing, prefer:
 - Add debug logging liberally during development
 - Check Ghostty source for reference when stuck on specific problems
 
-### 「リリースして」と言われたら
+### When asked to "release"
 
-**必ず push まで完了させること。** ローカルコミット・タグだけで「完了」と言うな。
+**Always push to remote.** Never say "done" after just local commit/tag.
 
-1. CHANGELOG 更新
-2. Cargo.toml バージョン更新
-3. コミット
-4. タグ作成 (`git tag vX.Y.Z`)
-5. **push (`git push origin main && git push origin vX.Y.Z`)**
-6. push 完了を確認してから「リリース完了」と報告
+1. Update CHANGELOG
+2. Update version in Cargo.toml
+3. Commit
+4. Create tag (`git tag vX.Y.Z`)
+5. **Push (`git push origin main && git push origin vX.Y.Z`)**
+6. Confirm push succeeded before reporting "release complete"
