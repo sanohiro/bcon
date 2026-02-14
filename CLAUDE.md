@@ -264,3 +264,11 @@ When implementing, prefer:
 4. Create tag (`git tag vX.Y.Z`)
 5. **Push (`git push origin main && git push origin vX.Y.Z`)**
 6. Confirm push succeeded before reporting "release complete"
+
+### Before pushing any code changes
+
+**Always build locally first** to verify no compile errors:
+```bash
+cargo build --release
+```
+Do NOT push until the build succeeds. Fix errors locally, then push.
