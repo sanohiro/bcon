@@ -10,7 +10,7 @@ pub mod ime;
 pub mod keyboard;
 
 pub use evdev::{
-    EvdevKeyboard, KeyboardConfig, MouseEvent, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT,
-    keysym_to_bytes_with_mods,
+    keysym_to_bytes_with_mods, EvdevKeyboard, KeyAction, KeyboardConfig, MouseEvent, BTN_LEFT,
+    BTN_MIDDLE, BTN_RIGHT,
 };
 pub use keyboard::Keyboard;

@@ -144,8 +144,7 @@ impl FontFinder {
 
 /// Load font file
 pub fn load_font_file(path: &std::path::Path) -> Result<Vec<u8>> {
-    std::fs::read(path)
-        .map_err(|e| anyhow!("Failed to read font file: {} ({})", path.display(), e))
+    std::fs::read(path).map_err(|e| anyhow!("Failed to read font file: {} ({})", path.display(), e))
 }
 
 /// Search and load system font using fontconfig

@@ -328,7 +328,9 @@ impl LcdTextRenderer {
 
             gl.bind_vertex_array(None);
 
-            info!("LCD text renderer initialized (contrast boost + fringe reduction + dynamic gamma)");
+            info!(
+                "LCD text renderer initialized (contrast boost + fringe reduction + dynamic gamma)"
+            );
 
             Ok(Self {
                 shader,
@@ -339,10 +341,10 @@ impl LcdTextRenderer {
                 glyph_count: 0,
                 default_bg: [0.0, 0.0, 0.0],
                 subpixel_bgr: false,
-                gamma: 1.15,            // Default: thinner/tighter appearance
-                stem_darkening: 0.0,    // Default: disabled (prioritize sharpness)
-                contrast: 1.15,         // Default: contrast boost
-                fringe_reduction: 0.1,  // Default: light fringe reduction
+                gamma: 1.15,           // Default: thinner/tighter appearance
+                stem_darkening: 0.0,   // Default: disabled (prioritize sharpness)
+                contrast: 1.15,        // Default: contrast boost
+                fringe_reduction: 0.1, // Default: light fringe reduction
             })
         }
     }
@@ -383,14 +385,7 @@ impl LcdTextRenderer {
     }
 
     /// Add a character to draw buffer (using default background color)
-    pub fn push_char(
-        &mut self,
-        ch: char,
-        x: f32,
-        y: f32,
-        fg: [f32; 4],
-        atlas: &LcdGlyphAtlas,
-    ) {
+    pub fn push_char(&mut self, ch: char, x: f32, y: f32, fg: [f32; 4], atlas: &LcdGlyphAtlas) {
         self.push_char_with_bg(ch, x, y, fg, self.default_bg, atlas);
     }
 
@@ -423,14 +418,7 @@ impl LcdTextRenderer {
     }
 
     /// Add text string to draw buffer (using default background color)
-    pub fn push_text(
-        &mut self,
-        text: &str,
-        x: f32,
-        y: f32,
-        fg: [f32; 4],
-        atlas: &LcdGlyphAtlas,
-    ) {
+    pub fn push_text(&mut self, text: &str, x: f32, y: f32, fg: [f32; 4], atlas: &LcdGlyphAtlas) {
         self.push_text_with_bg(text, x, y, fg, self.default_bg, atlas);
     }
 

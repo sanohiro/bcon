@@ -13,7 +13,7 @@ const MAX_XTGETTCAP_BUFFER: usize = 64 * 1024;
 
 use super::grid::{CellAttrs, Color, CursorStyle, Grid, Hyperlink, UnderlineStyle};
 use super::sixel::SixelDecoder;
-use super::{DcsHandler, ImageRegistry, TerminalImage};
+use super::{AnimationState, DcsHandler, ImageRegistry, TerminalImage};
 
 /// Parse OSC color value
 /// Supports formats:
@@ -257,13 +257,14 @@ impl<'a> Perform for Performer<'a> {
                 match param0 {
                     5 => {
                         // Status report: report normal operation
-                        *self.pty_response = b"\x1b[0n".to_vec();
+                        self.pty_response.extend_from_slice(b"\x1b[0n");
                     }
                     6 => {
                         // Cursor position report: ESC [ row ; col R
                         let row = self.grid.cursor_row + 1;
                         let col = self.grid.cursor_col + 1;
-                        *self.pty_response = format!("\x1b[{};{}R", row, col).into_bytes();
+                        self.pty_response
+                            .extend_from_slice(format!("\x1b[{};{}R", row, col).as_bytes());
                     }
                     _ => {}
                 }
@@ -272,23 +273,26 @@ impl<'a> Perform for Performer<'a> {
                 // DA1 - Primary Device Attributes
                 // Report VT220 compatible + feature flags
                 // 62: VT220, 1: 132 columns, 4: Sixel, 22: ANSI color, 29: ANSI text locator (mouse)
-                *self.pty_response = b"\x1b[?62;1;4;22;29c".to_vec();
+                log::debug!("DA1 query: responding with device attributes");
+                self.pty_response.extend_from_slice(b"\x1b[?62;1;4;22;29c");
             }
             ('c', [b'>']) => {
                 // DA2 - Secondary Device Attributes
                 // >Pp;Pv;Pc c (Pp=terminal type, Pv=firmware version, Pc=ROM number)
                 // 1: VT220, 100: bcon version 0.1.0 (encoded as 100), 0: ROM
-                *self.pty_response = b"\x1b[>1;100;0c".to_vec();
+                self.pty_response.extend_from_slice(b"\x1b[>1;100;0c");
             }
             ('c', [b'=']) => {
                 // DA3 - Tertiary Device Attributes (Unit ID)
                 // =XXXXXXXX ST (hex unit id)
-                *self.pty_response = b"\x1bP!|00000000\x1b\\".to_vec();
+                self.pty_response
+                    .extend_from_slice(b"\x1bP!|00000000\x1b\\");
             }
             ('q', [b'>']) => {
                 // XTVERSION - Terminal version query
                 // DCS > | Pt ST
-                *self.pty_response = b"\x1bP>|bcon 0.1.0\x1b\\".to_vec();
+                self.pty_response
+                    .extend_from_slice(b"\x1bP>|bcon 0.1.0\x1b\\");
             }
             ('b', []) => {
                 // REP - Repeat preceding character
@@ -340,7 +344,13 @@ impl<'a> Perform for Performer<'a> {
                 // Kitty keyboard: Query mode
                 // Response: CSI ? flags u
                 let flags = self.grid.keyboard.kitty_flags;
-                *self.pty_response = format!("\x1b[?{}u", flags).into_bytes();
+                let response = format!("\x1b[?{}u", flags);
+                log::debug!(
+                    "Kitty keyboard query: responding with flags={} ({:?})",
+                    flags,
+                    response
+                );
+                self.pty_response.extend_from_slice(response.as_bytes());
             }
             ('u', [b'=']) => {
                 // Kitty keyboard: Set mode
@@ -422,8 +432,9 @@ impl<'a> Perform for Performer<'a> {
                         let width_px = self.grid.cols() as u32 * self.cell_width;
                         let height_px = self.grid.rows() as u32 * self.cell_height;
                         trace!("CSI 14 t: responding {}x{} pixels", width_px, height_px);
-                        *self.pty_response =
-                            format!("\x1b[4;{};{}t", height_px, width_px).into_bytes();
+                        self.pty_response.extend_from_slice(
+                            format!("\x1b[4;{};{}t", height_px, width_px).as_bytes(),
+                        );
                     }
                     16 => {
                         // Report cell size in pixels
@@ -433,9 +444,9 @@ impl<'a> Perform for Performer<'a> {
                             self.cell_width,
                             self.cell_height
                         );
-                        *self.pty_response =
-                            format!("\x1b[6;{};{}t", self.cell_height, self.cell_width)
-                                .into_bytes();
+                        self.pty_response.extend_from_slice(
+                            format!("\x1b[6;{};{}t", self.cell_height, self.cell_width).as_bytes(),
+                        );
                     }
                     18 => {
                         // Report window size in characters
@@ -445,9 +456,9 @@ impl<'a> Perform for Performer<'a> {
                             self.grid.cols(),
                             self.grid.rows()
                         );
-                        *self.pty_response =
-                            format!("\x1b[8;{};{}t", self.grid.rows(), self.grid.cols())
-                                .into_bytes();
+                        self.pty_response.extend_from_slice(
+                            format!("\x1b[8;{};{}t", self.grid.rows(), self.grid.cols()).as_bytes(),
+                        );
                     }
                     _ => {
                         trace!("XTWINOPS: unsupported operation {}", param0);
@@ -559,6 +570,11 @@ impl<'a> Perform for Performer<'a> {
                             width: sixel_img.width,
                             height: sixel_img.height,
                             data: sixel_img.data,
+                            frames: Vec::new(),
+                            animation_state: AnimationState::Stopped,
+                            current_frame: 0,
+                            loop_count: 0,
+                            current_loop: 0,
                         };
                         let img_id = self.images.insert(term_img);
                         // Place image on grid
@@ -888,7 +904,7 @@ impl<'a> Performer<'a> {
             let encoded = base64_encode(self.clipboard.as_bytes());
             let mut response = String::new();
             write!(&mut response, "\x1b]52;c;{}\x1b\\", encoded).ok();
-            *self.pty_response = response.into_bytes();
+            self.pty_response.extend_from_slice(response.as_bytes());
         } else {
             // Set: decode base64 and store in clipboard
             if let Some(decoded) = base64_decode(data) {
@@ -969,7 +985,7 @@ impl<'a> Performer<'a> {
                 "\x1b]10;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
                 r, r, g, g, b, b
             );
-            *self.pty_response = response.into_bytes();
+            self.pty_response.extend_from_slice(response.as_bytes());
         } else {
             // Set: parse color value
             if let Some(rgb) = parse_osc_color(param) {
@@ -998,7 +1014,7 @@ impl<'a> Performer<'a> {
                 "\x1b]11;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
                 r, r, g, g, b, b
             );
-            *self.pty_response = response.into_bytes();
+            self.pty_response.extend_from_slice(response.as_bytes());
         } else {
             // Set: parse color value
             if let Some(rgb) = parse_osc_color(param) {
@@ -1092,7 +1108,7 @@ impl<'a> Performer<'a> {
 
         if !response.is_empty() {
             trace!("XTGETTCAP: sending {} bytes response", response.len());
-            *self.pty_response = response;
+            self.pty_response.extend_from_slice(&response);
         }
     }
 

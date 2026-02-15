@@ -223,13 +223,51 @@ pub enum DcsHandler {
     XtGetTcap(Vec<u8>),
 }
 
+/// Animation state for animated images
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum AnimationState {
+    #[default]
+    Stopped,
+    Loading,
+    Running,
+}
+
+/// Single animation frame
+#[derive(Debug, Clone)]
+pub struct ImageFrame {
+    /// Frame number (1-based)
+    pub number: u32,
+    /// Frame width (can be smaller than image)
+    pub width: u32,
+    /// Frame height
+    pub height: u32,
+    /// X offset within image
+    pub x: u32,
+    /// Y offset within image
+    pub y: u32,
+    /// Gap to next frame (milliseconds)
+    pub gap: u32,
+    /// Frame data (RGBA)
+    pub data: Vec<u8>,
+}
+
 /// Generic image data (shared by Sixel, Kitty)
 #[derive(Debug)]
 pub struct TerminalImage {
     pub id: u32,
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>, // RGBA
+    pub data: Vec<u8>, // RGBA - root frame (frame 1)
+    /// Additional frames for animation (frame 2+)
+    pub frames: Vec<ImageFrame>,
+    /// Animation state
+    pub animation_state: AnimationState,
+    /// Current frame index (0 = root frame)
+    pub current_frame: u32,
+    /// Loop count (0 = infinite)
+    pub loop_count: u32,
+    /// Current loop iteration
+    pub current_loop: u32,
 }
 
 /// Image registry (manages Sixel, Kitty, etc. images)
@@ -262,6 +300,11 @@ impl ImageRegistry {
     /// Get image by ID
     pub fn get(&self, id: u32) -> Option<&TerminalImage> {
         self.images.get(&id)
+    }
+
+    /// Get mutable image by ID
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut TerminalImage> {
+        self.images.get_mut(&id)
     }
 
     /// Remove image by ID
@@ -609,6 +652,7 @@ impl Terminal {
         }
 
         let payload = &self.apc_buffer[1..];
+        log::debug!("Kitty APC received: {} bytes payload", payload.len());
 
         // Create new decoder if none exists
         if self.kitty_decoder.is_none() {
@@ -631,7 +675,7 @@ impl Terminal {
 
     /// Finish Kitty decode processing
     fn finish_kitty_decode(&mut self) {
-        use kitty::{make_response, KittyAction};
+        use kitty::{make_response, KittyAction, KittyDecodeResult};
 
         if let Some(decoder) = self.kitty_decoder.take() {
             let params = decoder.params();
@@ -642,6 +686,15 @@ impl Terminal {
             } else {
                 self.images.next_id
             };
+
+            log::debug!(
+                "Kitty finish_decode: action={:?}, id={}, quiet={}, size={}x{}",
+                action,
+                id,
+                quiet,
+                params.width,
+                params.height
+            );
 
             match action {
                 KittyAction::Delete => {
@@ -659,48 +712,6 @@ impl Terminal {
                         }
                     }
                 }
-                KittyAction::Transmit | KittyAction::TransmitAndDisplay => {
-                    match decoder.finish(self.images.next_id) {
-                        Ok(kitty_img) => {
-                            info!(
-                                "Kitty image decode complete: {}x{} (id={})",
-                                kitty_img.width, kitty_img.height, kitty_img.id
-                            );
-                            let term_img = TerminalImage {
-                                id: kitty_img.id,
-                                width: kitty_img.width,
-                                height: kitty_img.height,
-                                data: kitty_img.data,
-                            };
-                            let img_id = term_img.id;
-                            let width = term_img.width;
-                            let height = term_img.height;
-                            self.images.insert(term_img);
-
-                            if action == KittyAction::TransmitAndDisplay {
-                                self.grid.place_image(
-                                    img_id,
-                                    width,
-                                    height,
-                                    self.cell_width,
-                                    self.cell_height,
-                                );
-                            }
-
-                            if quiet < 2 {
-                                let resp = make_response(img_id, true, "");
-                                let _ = self.pty.write(&resp);
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Kitty decode error: {}", e);
-                            if quiet < 2 {
-                                let resp = make_response(id, false, &e);
-                                let _ = self.pty.write(&resp);
-                            }
-                        }
-                    }
-                }
                 KittyAction::Display => {
                     if let Some(image) = self.images.get(id) {
                         self.grid.place_image(
@@ -714,17 +725,319 @@ impl Terminal {
                 }
                 KittyAction::Query => {
                     // a=q is for protocol support detection - always return OK
-                    // (kitty protocol spec: "The response should always be OK
-                    // if the terminal supports this specification")
                     if quiet < 2 {
                         let resp = make_response(id, true, "");
+                        let _ = self.pty.write(&resp);
+                    }
+                }
+                // Actions that produce decode results
+                KittyAction::Transmit
+                | KittyAction::TransmitAndDisplay
+                | KittyAction::Frame
+                | KittyAction::Compose
+                | KittyAction::Animation => match decoder.finish(self.images.next_id) {
+                    Ok(result) => {
+                        self.handle_kitty_result(result, action, quiet);
+                    }
+                    Err(e) => {
+                        log::warn!("Kitty decode error: {}", e);
+                        if quiet < 2 {
+                            let resp = make_response(id, false, &e);
+                            let _ = self.pty.write(&resp);
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    /// Handle Kitty decode result
+    fn handle_kitty_result(
+        &mut self,
+        result: kitty::KittyDecodeResult,
+        action: kitty::KittyAction,
+        quiet: u8,
+    ) {
+        use kitty::{make_response, KittyAction, KittyDecodeResult};
+
+        match result {
+            KittyDecodeResult::Image(kitty_img) => {
+                info!(
+                    "Kitty image decode complete: {}x{} (id={})",
+                    kitty_img.width, kitty_img.height, kitty_img.id
+                );
+                let term_img = TerminalImage {
+                    id: kitty_img.id,
+                    width: kitty_img.width,
+                    height: kitty_img.height,
+                    data: kitty_img.data,
+                    frames: Vec::new(),
+                    animation_state: AnimationState::Stopped,
+                    current_frame: 0,
+                    loop_count: 0,
+                    current_loop: 0,
+                };
+                let img_id = term_img.id;
+                let width = term_img.width;
+                let height = term_img.height;
+                self.images.insert(term_img);
+
+                if action == KittyAction::TransmitAndDisplay {
+                    self.grid
+                        .place_image(img_id, width, height, self.cell_width, self.cell_height);
+                }
+
+                if quiet < 2 {
+                    let resp = make_response(img_id, true, "");
+                    log::info!(
+                        "Kitty graphics: sending OK response for id={} ({} bytes)",
+                        img_id,
+                        resp.len()
+                    );
+                    let _ = self.pty.write(&resp);
+                }
+            }
+            KittyDecodeResult::Frame(frame_data) => {
+                info!(
+                    "Kitty frame decode: image_id={}, frame={}, size={}x{}",
+                    frame_data.image_id,
+                    frame_data.frame_number,
+                    frame_data.width,
+                    frame_data.height
+                );
+
+                // Find the image and add the frame
+                if let Some(image) = self.images.get_mut(frame_data.image_id) {
+                    let frame = ImageFrame {
+                        number: frame_data.frame_number,
+                        width: frame_data.width,
+                        height: frame_data.height,
+                        x: frame_data.x,
+                        y: frame_data.y,
+                        gap: frame_data.gap,
+                        data: frame_data.data,
+                    };
+
+                    // Frame numbering: 1 = root frame (stored in image.data)
+                    // 2+ = extra frames (stored in image.frames)
+                    if frame_data.frame_number == 1 {
+                        // Replace root frame
+                        image.data = frame.data;
+                    } else {
+                        // Add or replace extra frame
+                        let frame_idx = (frame_data.frame_number - 2) as usize;
+                        if frame_idx < image.frames.len() {
+                            image.frames[frame_idx] = frame;
+                        } else {
+                            // Extend frames array
+                            while image.frames.len() < frame_idx {
+                                // Fill gaps with empty frames
+                                image.frames.push(ImageFrame {
+                                    number: image.frames.len() as u32 + 2,
+                                    width: image.width,
+                                    height: image.height,
+                                    x: 0,
+                                    y: 0,
+                                    gap: 40,
+                                    data: vec![0u8; (image.width * image.height * 4) as usize],
+                                });
+                            }
+                            image.frames.push(frame);
+                        }
+                    }
+
+                    if quiet < 2 {
+                        let resp = make_response(frame_data.image_id, true, "");
+                        let _ = self.pty.write(&resp);
+                    }
+                } else {
+                    log::warn!("Kitty frame: image {} not found", frame_data.image_id);
+                    if quiet < 2 {
+                        let resp =
+                            make_response(frame_data.image_id, false, "ENOENT:image not found");
+                        let _ = self.pty.write(&resp);
+                    }
+                }
+            }
+            KittyDecodeResult::Compose(cmd) => {
+                info!(
+                    "Kitty compose: image_id={}, src_frame={} -> dst_frame={}",
+                    cmd.image_id, cmd.src_frame, cmd.dst_frame
+                );
+
+                if let Some(image) = self.images.get_mut(cmd.image_id) {
+                    // Get source and destination frame data
+                    let result = compose_frames(
+                        image,
+                        cmd.src_frame,
+                        cmd.dst_frame,
+                        cmd.src_x,
+                        cmd.src_y,
+                        cmd.dst_x,
+                        cmd.dst_y,
+                        cmd.width,
+                        cmd.height,
+                        cmd.compose_mode,
+                    );
+
+                    if quiet < 2 {
+                        let resp = if result.is_ok() {
+                            make_response(cmd.image_id, true, "")
+                        } else {
+                            make_response(cmd.image_id, false, &result.unwrap_err())
+                        };
+                        let _ = self.pty.write(&resp);
+                    }
+                } else {
+                    if quiet < 2 {
+                        let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
+                        let _ = self.pty.write(&resp);
+                    }
+                }
+            }
+            KittyDecodeResult::Animation(cmd) => {
+                info!(
+                    "Kitty animation: image_id={}, state={}, frame={}, current={}",
+                    cmd.image_id, cmd.state, cmd.frame_number, cmd.current_frame
+                );
+
+                if let Some(image) = self.images.get_mut(cmd.image_id) {
+                    // Update animation state
+                    if cmd.state > 0 {
+                        image.animation_state = match cmd.state {
+                            1 => AnimationState::Stopped,
+                            2 => AnimationState::Loading,
+                            3 => AnimationState::Running,
+                            _ => image.animation_state,
+                        };
+                    }
+
+                    // Update current frame
+                    if cmd.current_frame > 0 {
+                        image.current_frame = cmd.current_frame - 1; // Convert to 0-based
+                    }
+
+                    // Update loop count
+                    if cmd.loop_count > 0 {
+                        image.loop_count = cmd.loop_count;
+                    }
+
+                    // Update gap for specific frame
+                    if cmd.frame_number > 0 && cmd.gap >= 0 {
+                        if cmd.frame_number == 1 {
+                            // Root frame gap would need separate storage
+                            // For now, skip
+                        } else {
+                            let frame_idx = (cmd.frame_number - 2) as usize;
+                            if frame_idx < image.frames.len() {
+                                image.frames[frame_idx].gap = cmd.gap as u32;
+                            }
+                        }
+                    }
+
+                    if quiet < 2 {
+                        let resp = make_response(cmd.image_id, true, "");
+                        let _ = self.pty.write(&resp);
+                    }
+                } else {
+                    if quiet < 2 {
+                        let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
                         let _ = self.pty.write(&resp);
                     }
                 }
             }
         }
     }
+}
 
+/// Compose (copy) rectangle from one frame to another
+fn compose_frames(
+    image: &mut TerminalImage,
+    src_frame: u32,
+    dst_frame: u32,
+    src_x: u32,
+    src_y: u32,
+    dst_x: u32,
+    dst_y: u32,
+    width: u32,
+    height: u32,
+    compose_mode: u8,
+) -> Result<(), String> {
+    // Get source data
+    let src_data = if src_frame == 1 {
+        &image.data
+    } else {
+        let idx = (src_frame - 2) as usize;
+        if idx >= image.frames.len() {
+            return Err(format!("ENOENT:source frame {} not found", src_frame));
+        }
+        &image.frames[idx].data
+    };
+
+    // Copy source rectangle
+    let img_width = image.width as usize;
+    let copy_width = width.min(image.width - src_x).min(image.width - dst_x) as usize;
+    let copy_height = height.min(image.height - src_y).min(image.height - dst_y) as usize;
+
+    let mut copied_data = vec![0u8; copy_width * copy_height * 4];
+    for row in 0..copy_height {
+        let src_row_start = ((src_y as usize + row) * img_width + src_x as usize) * 4;
+        let dst_row_start = row * copy_width * 4;
+        copied_data[dst_row_start..dst_row_start + copy_width * 4]
+            .copy_from_slice(&src_data[src_row_start..src_row_start + copy_width * 4]);
+    }
+
+    // Get destination data and apply
+    let dst_data = if dst_frame == 1 {
+        &mut image.data
+    } else {
+        let idx = (dst_frame - 2) as usize;
+        if idx >= image.frames.len() {
+            return Err(format!("ENOENT:destination frame {} not found", dst_frame));
+        }
+        &mut image.frames[idx].data
+    };
+
+    // Compose: 0 = alpha blend, 1 = overwrite
+    for row in 0..copy_height {
+        let src_row_start = row * copy_width * 4;
+        let dst_row_start = ((dst_y as usize + row) * img_width + dst_x as usize) * 4;
+
+        for col in 0..copy_width {
+            let src_idx = src_row_start + col * 4;
+            let dst_idx = dst_row_start + col * 4;
+
+            if compose_mode == 1 {
+                // Overwrite
+                dst_data[dst_idx..dst_idx + 4].copy_from_slice(&copied_data[src_idx..src_idx + 4]);
+            } else {
+                // Alpha blend
+                let src_a = copied_data[src_idx + 3] as u32;
+                if src_a == 255 {
+                    dst_data[dst_idx..dst_idx + 4]
+                        .copy_from_slice(&copied_data[src_idx..src_idx + 4]);
+                } else if src_a > 0 {
+                    let dst_a = dst_data[dst_idx + 3] as u32;
+                    let out_a = src_a + dst_a * (255 - src_a) / 255;
+                    if out_a > 0 {
+                        for c in 0..3 {
+                            let src_c = copied_data[src_idx + c] as u32;
+                            let dst_c = dst_data[dst_idx + c] as u32;
+                            dst_data[dst_idx + c] = ((src_c * src_a
+                                + dst_c * dst_a * (255 - src_a) / 255)
+                                / out_a) as u8;
+                        }
+                        dst_data[dst_idx + 3] = out_a as u8;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+impl Terminal {
     /// Write data to PTY (for keyboard input forwarding)
     pub fn write_to_pty(&self, data: &[u8]) -> Result<usize> {
         self.pty.write(data)
@@ -738,6 +1051,11 @@ impl Terminal {
     /// Get foreground process name
     pub fn foreground_process_name(&self) -> Option<String> {
         self.pty.foreground_process_name()
+    }
+
+    /// Reset enhanced input modes (called by user via Ctrl+Shift+Escape)
+    pub fn reset_enhanced_modes(&mut self) {
+        self.grid.reset_enhanced_modes();
     }
 
     // ========== Scrollback control ==========

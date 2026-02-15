@@ -254,7 +254,10 @@ async fn ime_async_main(
     let connection = match zbus::Connection::session().await {
         Ok(c) => c,
         Err(e) => {
-            let _ = ready_tx.send(Err(anyhow!("Failed to connect to D-Bus session bus: {}", e)));
+            let _ = ready_tx.send(Err(anyhow!(
+                "Failed to connect to D-Bus session bus: {}",
+                e
+            )));
             return Ok(());
         }
     };
@@ -263,7 +266,10 @@ async fn ime_async_main(
     let controller = match FcitxInputMethodProxy::new(&connection).await {
         Ok(c) => c,
         Err(e) => {
-            let _ = ready_tx.send(Err(anyhow!("Failed to connect to fcitx5 InputMethod: {}", e)));
+            let _ = ready_tx.send(Err(anyhow!(
+                "Failed to connect to fcitx5 InputMethod: {}",
+                e
+            )));
             return Ok(());
         }
     };

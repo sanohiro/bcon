@@ -8,13 +8,120 @@ use log::{info, trace, warn};
 /// Allows 8K RGBA images (7680x4320x4 = 132MB raw)
 const MAX_IMAGE_DATA_SIZE: usize = 256 * 1024 * 1024;
 
-/// Kitty graphics image
+/// Animation frame
+#[derive(Debug, Clone)]
+pub struct KittyFrame {
+    /// Frame ID (1 = root frame)
+    pub id: u32,
+    /// Frame width
+    pub width: u32,
+    /// Frame height
+    pub height: u32,
+    /// X offset within image
+    pub x: u32,
+    /// Y offset within image
+    pub y: u32,
+    /// Gap to next frame in milliseconds
+    pub gap: u32,
+    /// Frame data (RGBA)
+    pub data: Vec<u8>,
+    /// Base frame ID (for delta frames, 0 = none)
+    pub base_frame_id: u32,
+    /// Background color for composition
+    pub bgcolor: u32,
+    /// Alpha blend mode (false = overwrite)
+    pub alpha_blend: bool,
+}
+
+/// Kitty graphics image (with animation support)
 #[derive(Debug)]
 pub struct KittyImage {
     pub id: u32,
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>, // RGBA
+    pub data: Vec<u8>, // RGBA - root frame data (frame 1)
+}
+
+/// Frame data result from a=f action
+#[derive(Debug)]
+pub struct KittyFrameData {
+    /// Image ID
+    pub image_id: u32,
+    /// Frame number (1-based)
+    pub frame_number: u32,
+    /// Frame width
+    pub width: u32,
+    /// Frame height
+    pub height: u32,
+    /// X offset
+    pub x: u32,
+    /// Y offset
+    pub y: u32,
+    /// Gap to next frame (ms)
+    pub gap: u32,
+    /// Frame data (RGBA)
+    pub data: Vec<u8>,
+    /// Base frame to copy from
+    pub base_frame: u32,
+    /// Compose mode (0=blend, 1=overwrite)
+    pub compose_mode: u8,
+    /// Background color
+    pub bgcolor: u32,
+}
+
+/// Compose command parameters
+#[derive(Debug)]
+pub struct KittyComposeCmd {
+    /// Image ID
+    pub image_id: u32,
+    /// Source frame number
+    pub src_frame: u32,
+    /// Destination frame number
+    pub dst_frame: u32,
+    /// Source X offset
+    pub src_x: u32,
+    /// Source Y offset
+    pub src_y: u32,
+    /// Destination X offset
+    pub dst_x: u32,
+    /// Destination Y offset
+    pub dst_y: u32,
+    /// Width to copy
+    pub width: u32,
+    /// Height to copy
+    pub height: u32,
+    /// Compose mode (0=blend, 1=overwrite)
+    pub compose_mode: u8,
+}
+
+/// Animation control command
+#[derive(Debug)]
+pub struct KittyAnimationCmd {
+    /// Image ID
+    pub image_id: u32,
+    /// Frame number to modify (0 = none)
+    pub frame_number: u32,
+    /// Frame to display (0 = no change)
+    pub current_frame: u32,
+    /// Animation state (0=no change, 1=stop, 2=loading, 3=running)
+    pub state: u8,
+    /// Loop count (0 = no change)
+    pub loop_count: u32,
+    /// Gap for frame_number (negative = no change)
+    pub gap: i32,
+}
+
+/// Result of decoding a Kitty command
+#[derive(Debug)]
+pub enum KittyDecodeResult {
+    /// New image (a=t, a=T)
+    Image(KittyImage),
+    /// Frame data (a=f)
+    Frame(KittyFrameData),
+    /// Compose command (a=c) - no data, just parameters
+    Compose(KittyComposeCmd),
+    /// Animation control (a=a) - no data, just parameters
+    Animation(KittyAnimationCmd),
 }
 
 /// Kitty command action
@@ -30,6 +137,12 @@ pub enum KittyAction {
     Delete,
     /// Query (a=q)
     Query,
+    /// Frame load (a=f) - load frame data for animation
+    Frame,
+    /// Compose (a=c) - copy rectangle from one frame to another
+    Compose,
+    /// Animation control (a=a) - start/stop/control animation
+    Animation,
 }
 
 impl Default for KittyAction {
@@ -109,6 +222,28 @@ pub struct KittyParams {
     pub z_index: i32,
     /// Delete target (d): a=all, i=id, etc.
     pub delete_target: Option<char>,
+
+    // Animation parameters
+    /// Frame number (r) - 1-based frame index
+    pub frame_number: u32,
+    /// Other frame number (x) - for compose: destination frame
+    pub other_frame_number: u32,
+    /// Frame gap (z) - milliseconds between frames
+    pub gap: i32,
+    /// Compose mode (C) - 0=alpha blend, 1=overwrite
+    pub compose_mode: u8,
+    /// Animation state (s) - 1=stop, 2=loading, 3=running
+    pub animation_state: u8,
+    /// Loop count (v) - 0=infinite, n=loop n times
+    pub loop_count: u32,
+    /// Base frame (c) - frame to copy from for new frames
+    pub base_frame: u32,
+    /// Frame X offset (X) - where to place frame data
+    pub frame_x: u32,
+    /// Frame Y offset (Y) - where to place frame data
+    pub frame_y: u32,
+    /// Background color (Y) - for frame composition
+    pub bgcolor: u32,
 }
 
 /// Kitty decoder
@@ -206,6 +341,9 @@ impl KittyDecoder {
                             "p" => KittyAction::Display,
                             "d" => KittyAction::Delete,
                             "q" => KittyAction::Query,
+                            "f" => KittyAction::Frame,
+                            "c" => KittyAction::Compose,
+                            "a" => KittyAction::Animation,
                             _ => KittyAction::TransmitAndDisplay,
                         };
                     }
@@ -233,10 +371,16 @@ impl KittyDecoder {
                         self.params.number = value.parse().unwrap_or(0);
                     }
                     "s" => {
-                        self.params.width = value.parse().unwrap_or(0);
+                        // s = width for images, animation_state for a=a
+                        let v = value.parse().unwrap_or(0);
+                        self.params.width = v;
+                        self.params.animation_state = v as u8;
                     }
                     "v" => {
-                        self.params.height = value.parse().unwrap_or(0);
+                        // v = height for images, loop_count for animation
+                        let v = value.parse().unwrap_or(0);
+                        self.params.height = v;
+                        self.params.loop_count = v;
                     }
                     "m" => {
                         self.params.more = value == "1";
@@ -257,117 +401,204 @@ impl KittyDecoder {
                         self.params.cols = value.parse().unwrap_or(0);
                     }
                     "r" => {
-                        self.params.rows = value.parse().unwrap_or(0);
+                        // r = rows for placement, frame_number for animation
+                        let v = value.parse().unwrap_or(0);
+                        self.params.rows = v;
+                        self.params.frame_number = v;
                     }
                     "z" => {
-                        self.params.z_index = value.parse().unwrap_or(0);
+                        // z = z_index for placement, gap for animation
+                        let v: i32 = value.parse().unwrap_or(0);
+                        self.params.z_index = v;
+                        self.params.gap = v;
                     }
                     "d" => {
                         self.params.delete_target = value.chars().next();
                     }
+                    // Animation-specific parameters (uppercase)
+                    "X" => {
+                        self.params.frame_x = value.parse().unwrap_or(0);
+                    }
+                    "Y" => {
+                        // Y = frame_y for animation, bgcolor for certain commands
+                        let v = value.parse().unwrap_or(0);
+                        self.params.frame_y = v;
+                        self.params.bgcolor = v;
+                    }
+                    "C" => {
+                        self.params.compose_mode = value.parse().unwrap_or(0);
+                    }
                     _ => {
-                        trace!("Kitty: unknown param {}={}", key, value);
+                        // For animation, 'c' also means other_frame_number
+                        if key == "c" {
+                            let v = value.parse().unwrap_or(0);
+                            self.params.cols = v;
+                            self.params.base_frame = v;
+                            self.params.other_frame_number = v;
+                        } else if key == "v" {
+                            let v = value.parse().unwrap_or(0);
+                            self.params.height = v;
+                            self.params.loop_count = v;
+                        } else {
+                            trace!("Kitty: unknown param {}={}", key, value);
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Decode complete, generate image
-    pub fn finish(self, next_id: u32) -> Result<KittyImage, String> {
+    /// Decode complete, generate result based on action
+    pub fn finish(self, next_id: u32) -> Result<KittyDecodeResult, String> {
         let params = self.params;
         let raw_data = self.data_buffer;
+        let id = if params.id != 0 { params.id } else { next_id };
 
-        // No image for delete action
-        if params.action == KittyAction::Delete {
-            return Err("delete action".to_string());
+        // Handle non-data actions first
+        match params.action {
+            KittyAction::Delete => {
+                return Err("delete action".to_string());
+            }
+            KittyAction::Compose => {
+                // Compose command - no data payload needed
+                return Ok(KittyDecodeResult::Compose(KittyComposeCmd {
+                    image_id: id,
+                    src_frame: params.frame_number,
+                    dst_frame: params.other_frame_number,
+                    src_x: params.frame_x,
+                    src_y: params.frame_y,
+                    dst_x: params.x,
+                    dst_y: params.y,
+                    width: params.width,
+                    height: params.height,
+                    compose_mode: params.compose_mode,
+                }));
+            }
+            KittyAction::Animation => {
+                // Animation control - no data payload needed
+                return Ok(KittyDecodeResult::Animation(KittyAnimationCmd {
+                    image_id: id,
+                    frame_number: params.frame_number,
+                    current_frame: params.other_frame_number,
+                    state: params.animation_state,
+                    loop_count: params.loop_count,
+                    gap: params.gap,
+                }));
+            }
+            _ => {}
         }
 
-        // Get data according to transmission medium
-        let mut data = match params.transmission {
-            KittyTransmission::Direct => {
-                // Direct transmission: data_buffer is the payload
-                raw_data
-            }
-            KittyTransmission::File => {
-                // File path: data_buffer is path string
-                let path = String::from_utf8(raw_data).map_err(|_| "invalid file path encoding")?;
-                let path = path.trim();
-                info!("Kitty: reading image from file: {}", path);
-                std::fs::read(path).map_err(|e| format!("failed to read file '{}': {}", path, e))?
-            }
-            KittyTransmission::TempFile => {
-                // Temporary file: data_buffer is path string, delete after reading
-                let path =
-                    String::from_utf8(raw_data).map_err(|_| "invalid temp file path encoding")?;
-                let path = path.trim();
-                info!("Kitty: reading image from temp file: {}", path);
-                let data = std::fs::read(path)
-                    .map_err(|e| format!("failed to read temp file '{}': {}", path, e))?;
-                // Delete temporary file
-                if let Err(e) = std::fs::remove_file(path) {
-                    warn!("Kitty: failed to remove temp file '{}': {}", path, e);
-                }
-                data
-            }
-            KittyTransmission::SharedMemory => {
-                // Shared memory: POSIX shm_open
-                let name = String::from_utf8(raw_data).map_err(|_| "invalid shm name encoding")?;
-                let name = name.trim();
-                info!("Kitty: reading image from shared memory: {}", name);
-                read_shared_memory(name)?
-            }
-        };
+        // Actions that need data (Transmit, TransmitAndDisplay, Display, Frame, Query)
+        let mut data = load_data_from_transmission(params.transmission, raw_data)?;
 
         // zlib decompression
         if params.compression == Some('z') {
             data = decompress_zlib(&data)?;
         }
 
-        // Decode according to format
-        let (width, height, rgba) = match params.format {
-            KittyFormat::Png => decode_png(&data)?,
-            KittyFormat::Rgb => {
-                let w = params.width;
-                let h = params.height;
-                if w == 0 || h == 0 {
-                    return Err("missing width/height for RGB".to_string());
-                }
-                let rgba = rgb_to_rgba(&data, w, h)?;
-                (w, h, rgba)
-            }
-            KittyFormat::Rgba => {
-                let w = params.width;
-                let h = params.height;
-                if w == 0 || h == 0 {
-                    return Err("missing width/height for RGBA".to_string());
-                }
-                if data.len() != (w * h * 4) as usize {
-                    return Err(format!(
-                        "RGBA size mismatch: expected {}, got {}",
-                        w * h * 4,
-                        data.len()
-                    ));
-                }
-                (w, h, data)
-            }
-        };
+        // For Frame action, return frame data
+        if params.action == KittyAction::Frame {
+            let (width, height, rgba) = decode_image_data(&params, data)?;
+            return Ok(KittyDecodeResult::Frame(KittyFrameData {
+                image_id: id,
+                frame_number: params.frame_number,
+                width,
+                height,
+                x: params.frame_x,
+                y: params.frame_y,
+                gap: if params.gap > 0 {
+                    params.gap as u32
+                } else {
+                    40
+                }, // default 40ms
+                data: rgba,
+                base_frame: params.base_frame,
+                compose_mode: params.compose_mode,
+                bgcolor: params.bgcolor,
+            }));
+        }
 
-        let id = if params.id != 0 { params.id } else { next_id };
+        // For image actions (Transmit, TransmitAndDisplay, Query)
+        let (width, height, rgba) = decode_image_data(&params, data)?;
 
         info!("Kitty: decoded image {}x{} (id={})", width, height, id);
 
-        Ok(KittyImage {
+        Ok(KittyDecodeResult::Image(KittyImage {
             id,
             width,
             height,
             data: rgba,
-        })
+        }))
     }
 
     /// Get parameters
     pub fn params(&self) -> &KittyParams {
         &self.params
+    }
+}
+
+/// Load data from transmission medium
+fn load_data_from_transmission(
+    transmission: KittyTransmission,
+    raw_data: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    match transmission {
+        KittyTransmission::Direct => Ok(raw_data),
+        KittyTransmission::File => {
+            let path = String::from_utf8(raw_data).map_err(|_| "invalid file path encoding")?;
+            let path = path.trim();
+            info!("Kitty: reading image from file: {}", path);
+            std::fs::read(path).map_err(|e| format!("failed to read file '{}': {}", path, e))
+        }
+        KittyTransmission::TempFile => {
+            let path =
+                String::from_utf8(raw_data).map_err(|_| "invalid temp file path encoding")?;
+            let path = path.trim();
+            info!("Kitty: reading image from temp file: {}", path);
+            let data = std::fs::read(path)
+                .map_err(|e| format!("failed to read temp file '{}': {}", path, e))?;
+            if let Err(e) = std::fs::remove_file(path) {
+                warn!("Kitty: failed to remove temp file '{}': {}", path, e);
+            }
+            Ok(data)
+        }
+        KittyTransmission::SharedMemory => {
+            let name = String::from_utf8(raw_data).map_err(|_| "invalid shm name encoding")?;
+            let name = name.trim();
+            info!("Kitty: reading image from shared memory: {}", name);
+            read_shared_memory(name)
+        }
+    }
+}
+
+/// Decode image data according to format
+fn decode_image_data(params: &KittyParams, data: Vec<u8>) -> Result<(u32, u32, Vec<u8>), String> {
+    match params.format {
+        KittyFormat::Png => decode_png(&data),
+        KittyFormat::Rgb => {
+            let w = params.width;
+            let h = params.height;
+            if w == 0 || h == 0 {
+                return Err("missing width/height for RGB".to_string());
+            }
+            let rgba = rgb_to_rgba(&data, w, h)?;
+            Ok((w, h, rgba))
+        }
+        KittyFormat::Rgba => {
+            let w = params.width;
+            let h = params.height;
+            if w == 0 || h == 0 {
+                return Err("missing width/height for RGBA".to_string());
+            }
+            if data.len() != (w * h * 4) as usize {
+                return Err(format!(
+                    "RGBA size mismatch: expected {}, got {}",
+                    w * h * 4,
+                    data.len()
+                ));
+            }
+            Ok((w, h, data))
+        }
     }
 }
 

@@ -269,7 +269,8 @@ impl FtFont {
         lcd_weights: Option<[u8; 5]>,
         hinting_mode: HintingMode,
     ) -> Result<Self> {
-        let library = Library::init().map_err(|e| anyhow!("FreeType initialization failed: {:?}", e))?;
+        let library =
+            Library::init().map_err(|e| anyhow!("FreeType initialization failed: {:?}", e))?;
 
         // Enable filter for LCD mode
         if lcd_mode != LcdMode::Grayscale {
@@ -277,10 +278,7 @@ impl FtFont {
                 // Use custom weights
                 if let Some(weights) = lcd_weights {
                     unsafe {
-                        FT_Library_SetLcdFilterWeights(
-                            library.raw(),
-                            weights.as_ptr(),
-                        );
+                        FT_Library_SetLcdFilterWeights(library.raw(), weights.as_ptr());
                     }
                     info!("FreeType LCD filter: Custom {:?}", weights);
                 } else {
@@ -305,9 +303,7 @@ impl FtFont {
         face.set_pixel_sizes(0, size_px)
             .map_err(|e| anyhow!("FreeType size setting failed: {:?}", e))?;
 
-        let family = face
-            .family_name()
-            .unwrap_or_else(|| "unknown".to_string());
+        let family = face.family_name().unwrap_or_else(|| "unknown".to_string());
 
         info!(
             "FreeType font loaded: {} ({}px, {:?}, hinting={:?})",
@@ -468,7 +464,11 @@ impl FtFont {
         if self.face.load_char(ch as usize, load_flags).is_err() {
             // Reset transform
             unsafe {
-                FT_Set_Transform(self.face.raw_mut() as *mut _, std::ptr::null(), std::ptr::null());
+                FT_Set_Transform(
+                    self.face.raw_mut() as *mut _,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                );
             }
             return None;
         }
@@ -483,7 +483,11 @@ impl FtFont {
 
         if glyph.render_glyph(render_mode).is_err() {
             unsafe {
-                FT_Set_Transform(self.face.raw_mut() as *mut _, std::ptr::null(), std::ptr::null());
+                FT_Set_Transform(
+                    self.face.raw_mut() as *mut _,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                );
             }
             return None;
         }
@@ -508,7 +512,11 @@ impl FtFont {
 
         // Reset transform
         unsafe {
-            FT_Set_Transform(self.face.raw_mut() as *mut _, std::ptr::null(), std::ptr::null());
+            FT_Set_Transform(
+                self.face.raw_mut() as *mut _,
+                std::ptr::null(),
+                std::ptr::null(),
+            );
         }
 
         if width == 0 || height == 0 {

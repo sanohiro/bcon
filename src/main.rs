@@ -23,8 +23,8 @@ mod session;
 mod terminal;
 
 use anyhow::{anyhow, Context, Result};
-use log::{info, trace};
 use glow::HasContext;
+use log::{info, trace};
 use std::time::Duration;
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
@@ -89,8 +89,14 @@ fn draw_box_drawing(
     }
 
     match ch {
-        '─' => { tr.push_rect(x, rect_y, cell_w, t, fg, atlas); true }
-        '│' => { tr.push_rect(rect_x, y, t, cell_h, fg, atlas); true }
+        '─' => {
+            tr.push_rect(x, rect_y, cell_w, t, fg, atlas);
+            true
+        }
+        '│' => {
+            tr.push_rect(rect_x, y, t, cell_h, fg, atlas);
+            true
+        }
         '┌' => {
             tr.push_rect(line_cx, rect_y, x + cell_w - line_cx, t, fg, atlas);
             tr.push_rect(rect_x, line_cy, t, y + cell_h - line_cy, fg, atlas);
@@ -136,7 +142,7 @@ fn draw_box_drawing(
             tr.push_rect(rect_x, y, t, cell_h, fg, atlas);
             true
         }
-        _ => false
+        _ => false,
     }
 }
 
@@ -171,8 +177,7 @@ fn draw_powerline_triangle(
     for i in 0..steps {
         let row_y = y + i as f32;
         let dist = ((i as f32 + 0.5) - half).abs();
-        let edge = (max_w_px * (1.0 - dist * inv_half) + 0.5)
-            .clamp(0.5, max_w_px + 0.5);
+        let edge = (max_w_px * (1.0 - dist * inv_half) + 0.5).clamp(0.5, max_w_px + 0.5);
 
         for px in 0..=max_w_i {
             let px_center = px as f32 + 0.5;
@@ -305,7 +310,11 @@ fn draw_powerline_semicircle(
 
         for px in 0..=rx_i {
             let px_rel = px as f32 + 0.5;
-            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
+            let px_f = if right {
+                px_rel
+            } else {
+                (max_w_px + 0.5) - px_rel
+            };
 
             let nx = px_f / rx;
             let ny = py / ry;
@@ -358,7 +367,11 @@ fn draw_powerline_semicircle_outline(
 
         for px in 0..=rx_i {
             let px_rel = px as f32 + 0.5;
-            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
+            let px_f = if right {
+                px_rel
+            } else {
+                (max_w_px + 0.5) - px_rel
+            };
 
             let nx = px_f / rx;
             let ny = py / ry;
@@ -426,7 +439,13 @@ fn draw_rounded_corner(
         }
         '╯' => {
             let r = (right - line_cx).min(bottom - line_cy) - half_t;
-            (right - half_t, bottom - half_t, r.max(1.0), -1.0f32, -1.0f32)
+            (
+                right - half_t,
+                bottom - half_t,
+                r.max(1.0),
+                -1.0f32,
+                -1.0f32,
+            )
         }
         '╰' => {
             let r = (line_cx - left).min(bottom - line_cy) - half_t;
@@ -912,7 +931,7 @@ fn main() -> Result<()> {
     let mut kb_font_reset = config::ParsedKeybinds::parse(&cfg.keybinds.font_reset);
     let mut kb_scroll_up = config::ParsedKeybinds::parse(&cfg.keybinds.scroll_up);
     let mut kb_scroll_down = config::ParsedKeybinds::parse(&cfg.keybinds.scroll_down);
-    // kb_ime_toggle removed - use fcitx5's Ctrl+Space instead
+    let mut kb_reset_terminal = config::ParsedKeybinds::parse(&cfg.keybinds.reset_terminal);
 
     // Config file change watcher (Linux only)
     #[cfg(target_os = "linux")]
@@ -945,7 +964,7 @@ fn main() -> Result<()> {
     let seat_session = {
         info!("Opening libseat session...");
         Rc::new(RefCell::new(
-            session::SeatSession::open().context("Failed to open libseat session")?
+            session::SeatSession::open().context("Failed to open libseat session")?,
         ))
     };
 
@@ -981,7 +1000,8 @@ fn main() -> Result<()> {
 
     info!(
         "Display: {}x{} (external: {})",
-        display_config.width, display_config.height,
+        display_config.width,
+        display_config.height,
         display_config.is_external(&drm_device)
     );
 
@@ -995,8 +1015,8 @@ fn main() -> Result<()> {
         }
     };
     #[cfg(target_os = "linux")]
-    let mut last_connector_snapshot = drm::hotplug::snapshot_connectors(&drm_device)
-        .unwrap_or_default();
+    let mut last_connector_snapshot =
+        drm::hotplug::snapshot_connectors(&drm_device).unwrap_or_default();
 
     // Create GBM device (shares fd with DRM)
     let gbm_file = drm_device.dup_fd()?;
@@ -1057,7 +1077,10 @@ fn main() -> Result<()> {
     let scale_factor = cfg.appearance.scale.max(0.5).min(4.0);
     let font_size = (cfg.font.size * scale_factor) as u32;
     if (scale_factor - 1.0).abs() > 0.01 {
-        info!("Display scale: {}x (font size: {}pt → {}px)", scale_factor, cfg.font.size, font_size);
+        info!(
+            "Display scale: {}x (font size: {}pt → {}px)",
+            scale_factor, cfg.font.size, font_size
+        );
     }
 
     // Load CJK font (continue on failure)
@@ -1104,7 +1127,8 @@ fn main() -> Result<()> {
 
     info!(
         "FreeType LCD atlas initialized: cell={}x{:.0}, subpixel_pos={}, hinting={:?}",
-        glyph_atlas.cell_width, glyph_atlas.cell_height,
+        glyph_atlas.cell_width,
+        glyph_atlas.cell_height,
         glyph_atlas.is_subpixel_positioning_enabled(),
         hinting_mode
     );
@@ -1135,14 +1159,19 @@ fn main() -> Result<()> {
 
     info!(
         "LCD subpixel settings: {:?} (BGR={}, gamma={:.2}, contrast={:.2}, fringe={:.2})",
-        lcd_subpixel, subpixel_bgr, cfg.font.lcd_gamma, cfg.font.lcd_contrast, cfg.font.lcd_fringe_reduction
+        lcd_subpixel,
+        subpixel_bgr,
+        cfg.font.lcd_gamma,
+        cfg.font.lcd_contrast,
+        cfg.font.lcd_fringe_reduction
     );
 
     // Create UI renderer (rounded rectangles for candidate window, etc.)
     let mut ui_renderer = gpu::UiRenderer::new(gl).context("Failed to initialize UI renderer")?;
 
     // Create image renderer (Sixel image rendering, etc.)
-    let mut image_renderer = gpu::ImageRenderer::new(gl).context("Failed to initialize image renderer")?;
+    let mut image_renderer =
+        gpu::ImageRenderer::new(gl).context("Failed to initialize image renderer")?;
 
     // Create emoji renderer (color emoji rendering)
     let mut emoji_renderer =
@@ -1225,32 +1254,31 @@ fn main() -> Result<()> {
     };
 
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-    let keyboard: Option<input::Keyboard> = Some(
-        input::Keyboard::new().context("Failed to initialize keyboard")?
-    );
+    let keyboard: Option<input::Keyboard> =
+        Some(input::Keyboard::new().context("Failed to initialize keyboard")?);
 
     // evdev input (keyboard + mouse, continue with SSH stdin if unavailable)
     #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let mut evdev_keyboard =
-        match input::EvdevKeyboard::new_with_seat(
-            display_config.width,
-            display_config.height,
-            seat_session.clone(),
-            &cfg.keyboard,
-        ) {
-            Ok(kb) => {
-                info!("evdev input initialized via libseat (keyboard + mouse)");
-                Some(kb)
-            }
-            Err(e) => {
-                info!("evdev input unavailable (continuing with SSH stdin): {}", e);
-                None
-            }
-        };
+    let mut evdev_keyboard = match input::EvdevKeyboard::new_with_seat(
+        display_config.width,
+        display_config.height,
+        seat_session.clone(),
+        &cfg.keyboard,
+    ) {
+        Ok(kb) => {
+            info!("evdev input initialized via libseat (keyboard + mouse)");
+            Some(kb)
+        }
+        Err(e) => {
+            info!("evdev input unavailable (continuing with SSH stdin): {}", e);
+            None
+        }
+    };
 
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let mut evdev_keyboard =
-        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard) {
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard)
+        {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");
                 Some(kb)
@@ -1275,7 +1303,10 @@ fn main() -> Result<()> {
             Some(c)
         }
         Err(e) => {
-            info!("fcitx5 IME unavailable (continuing with direct input): {}", e);
+            info!(
+                "fcitx5 IME unavailable (continuing with direct input): {}",
+                e
+            );
             None
         }
     };
@@ -1492,7 +1523,7 @@ fn main() -> Result<()> {
                 kb_font_reset = config::ParsedKeybinds::parse(&new_cfg.keybinds.font_reset);
                 kb_scroll_up = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_up);
                 kb_scroll_down = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_down);
-                // kb_ime_toggle removed
+                kb_reset_terminal = config::ParsedKeybinds::parse(&new_cfg.keybinds.reset_terminal);
 
                 // Update IME disable app list
                 cfg = new_cfg;
@@ -1508,27 +1539,31 @@ fn main() -> Result<()> {
             if monitor.poll().is_some() {
                 // Hotplug event detected - re-enumerate connectors
                 if let Ok(new_snapshot) = drm::hotplug::snapshot_connectors(&drm_device) {
-                    let changes = drm::hotplug::detect_changes(
-                        &last_connector_snapshot,
-                        &new_snapshot,
-                    );
+                    let changes =
+                        drm::hotplug::detect_changes(&last_connector_snapshot, &new_snapshot);
 
                     if changes.has_changes() {
                         changes.log();
 
                         // Check if we should switch displays
-                        let should_switch = cfg.display.auto_switch && (
-                            // External monitor connected
-                            (cfg.display.prefer_external && changes.external_connected()) ||
+                        let should_switch = cfg.display.auto_switch
+                            && (
+                                // External monitor connected
+                                (cfg.display.prefer_external && changes.external_connected()) ||
                             // Current display disconnected
                             changes.disconnected.iter().any(|s| s.handle == display_config.connector_handle)
-                        );
+                            );
 
                         if should_switch {
                             // Try to switch to preferred display
-                            match drm::DisplayConfig::detect_with_preference(&drm_device, cfg.display.prefer_external) {
+                            match drm::DisplayConfig::detect_with_preference(
+                                &drm_device,
+                                cfg.display.prefer_external,
+                            ) {
                                 Ok(new_config) => {
-                                    if new_config.connector_handle != display_config.connector_handle {
+                                    if new_config.connector_handle
+                                        != display_config.connector_handle
+                                    {
                                         // Check if resolution changed
                                         if new_config.width == display_config.width
                                             && new_config.height == display_config.height
@@ -1610,7 +1645,6 @@ fn main() -> Result<()> {
                 let alt = raw.mods_alt;
                 let keysym = raw.keysym;
 
-
                 // Scroll up (configurable)
                 if kb_scroll_up.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     term.scroll_back(grid_rows / 2);
@@ -1642,6 +1676,14 @@ fn main() -> Result<()> {
                 if kb_screenshot.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     // Set screenshot flag (execute after rendering)
                     take_screenshot = true;
+                    needs_redraw = true;
+                    continue;
+                }
+
+                // Reset terminal modes (configurable)
+                if kb_reset_terminal.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    term.reset_enhanced_modes();
+                    info!("Terminal modes reset by user");
                     needs_redraw = true;
                     continue;
                 }
@@ -1812,7 +1854,9 @@ fn main() -> Result<()> {
                 // Font size increase (configurable)
                 if kb_font_increase.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     font_size_delta += 2;
-                    let new_size = (base_font_size as f32 + font_size_delta as f32).max(8.0).min(72.0);
+                    let new_size = (base_font_size as f32 + font_size_delta as f32)
+                        .max(8.0)
+                        .min(72.0);
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
                     cell_w = new_cell_w;
                     cell_h = new_cell_h;
@@ -1828,7 +1872,9 @@ fn main() -> Result<()> {
                 // Font size decrease (configurable)
                 if kb_font_decrease.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     font_size_delta -= 2;
-                    let new_size = (base_font_size as f32 + font_size_delta as f32).max(8.0).min(72.0);
+                    let new_size = (base_font_size as f32 + font_size_delta as f32)
+                        .max(8.0)
+                        .min(72.0);
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
                     cell_w = new_cell_w;
                     cell_h = new_cell_h;
@@ -1884,6 +1930,7 @@ fn main() -> Result<()> {
                         application_cursor_keys: term.grid.modes.application_cursor_keys,
                         modify_other_keys: term.grid.keyboard.modify_other_keys,
                         kitty_flags: term.grid.keyboard.kitty_flags,
+                        key_action: raw.action,
                     };
                     let bytes = input::keysym_to_bytes_with_mods(
                         sym,
@@ -2095,7 +2142,9 @@ fn main() -> Result<()> {
                         let formats: Vec<i32> = segments.iter().map(|s| s.format).collect();
                         trace!(
                             "IME Preedit: {:?} formats={:?} cursor={}",
-                            pe_text, formats, cursor
+                            pe_text,
+                            formats,
+                            cursor
                         );
                         preedit.segments = segments;
                         preedit.cursor = cursor;
@@ -2109,12 +2158,14 @@ fn main() -> Result<()> {
                         needs_redraw = true;
                     }
                     input::ime::ImeEvent::ForwardKey {
-                        keysym, state, is_release,
+                        keysym,
+                        state,
+                        is_release,
                     } => {
                         if !is_release {
                             // Extract modifiers from xkb state
-                            let mods_ctrl = (state & 0x4) != 0;  // Control
-                            let mods_alt = (state & 0x8) != 0;   // Mod1 (Alt)
+                            let mods_ctrl = (state & 0x4) != 0; // Control
+                            let mods_alt = (state & 0x8) != 0; // Mod1 (Alt)
                             let mods_shift = (state & 0x1) != 0; // Shift
 
                             let sym = xkbcommon::xkb::Keysym::new(keysym);
@@ -2125,14 +2176,10 @@ fn main() -> Result<()> {
                                 application_cursor_keys: term.grid.modes.application_cursor_keys,
                                 modify_other_keys: term.grid.keyboard.modify_other_keys,
                                 kitty_flags: term.grid.keyboard.kitty_flags,
+                                key_action: input::KeyAction::Press, // IME passthrough is always press
                             };
                             let bytes = input::keysym_to_bytes_with_mods(
-                                sym,
-                                &utf8,
-                                mods_ctrl,
-                                mods_alt,
-                                mods_shift,
-                                &kb_config,
+                                sym, &utf8, mods_ctrl, mods_alt, mods_shift, &kb_config,
                             );
                             // Filter NUL bytes from result as well
                             let bytes: Vec<u8> = bytes.into_iter().filter(|&b| b != 0).collect();
@@ -2230,7 +2277,7 @@ fn main() -> Result<()> {
             || search_mode
             || term.copy_mode.is_some()
             || !preedit.is_empty()  // IME preedit changes without dirty tracking
-            || candidate_state.is_some();  // IME candidate window
+            || candidate_state.is_some(); // IME candidate window
 
         // Clear FBO: full clear when overlays active or all dirty, otherwise only dirty rows
         if term.grid.is_all_dirty() || has_overlays {
@@ -2238,7 +2285,9 @@ fn main() -> Result<()> {
         } else if term.has_dirty_rows() {
             for row in 0..term.grid.rows() {
                 if term.grid.is_row_dirty(row) {
-                    fbo.clear_rows(gl, row, row, cell_h, margin_y, bg_color.0, bg_color.1, bg_color.2);
+                    fbo.clear_rows(
+                        gl, row, row, cell_h, margin_y, bg_color.0, bg_color.1, bg_color.2,
+                    );
                 }
             }
         }
@@ -2301,9 +2350,10 @@ fn main() -> Result<()> {
             let mut run_start: Option<(usize, [f32; 4])> = None;
 
             // Get selection range for this row
-            let row_selection = term.selection.as_ref().and_then(|sel| {
-                sel.cols_for_row(row, grid.cols())
-            });
+            let row_selection = term
+                .selection
+                .as_ref()
+                .and_then(|sel| sel.cols_for_row(row, grid.cols()));
 
             for col in 0..grid.cols() {
                 let cell = term.display_cell(row, col);
@@ -2328,7 +2378,14 @@ fn main() -> Result<()> {
                             let x1 = (margin_x + start as f32 * cell_w).floor();
                             let x2 = (margin_x + col as f32 * cell_w).floor();
                             if x2 > x1 {
-                                text_renderer.push_rect(x1, y, x2 - x1, cell_h, run_color, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x1,
+                                    y,
+                                    x2 - x1,
+                                    cell_h,
+                                    run_color,
+                                    &glyph_atlas,
+                                );
                             }
                         }
                     }
@@ -2363,7 +2420,14 @@ fn main() -> Result<()> {
                             // Use floor/ceil to ensure pixel-aligned rectangles without gaps
                             let x1 = (margin_x + start as f32 * cell_w).floor();
                             let x2 = (margin_x + col as f32 * cell_w).ceil();
-                            text_renderer.push_rect(x1, y, x2 - x1, cell_h, run_color, &glyph_atlas);
+                            text_renderer.push_rect(
+                                x1,
+                                y,
+                                x2 - x1,
+                                cell_h,
+                                run_color,
+                                &glyph_atlas,
+                            );
                         }
                         // Start new run
                         run_start = Some((col, bg));
@@ -2418,7 +2482,10 @@ fn main() -> Result<()> {
             }
 
             // Pre-compute selection range for this row (avoids per-cell normalized() call)
-            let row_selection = term.selection.as_ref().and_then(|s| s.cols_for_row(row, max_cols));
+            let row_selection = term
+                .selection
+                .as_ref()
+                .and_then(|s| s.cols_for_row(row, max_cols));
 
             // Pre-compute search matches for this row (avoids per-cell function call)
             // Returns slice reference - no allocation needed
@@ -2505,21 +2572,41 @@ fn main() -> Result<()> {
                         // Single line for hyperlinks
                         if run_has_hyperlink {
                             text_renderer.push_rect(
-                                run_x, underline_y, run_w, 1.0, run_color, &glyph_atlas,
+                                run_x,
+                                underline_y,
+                                run_w,
+                                1.0,
+                                run_color,
+                                &glyph_atlas,
                             );
                         }
                     }
                     terminal::grid::UnderlineStyle::Single => {
                         text_renderer.push_rect(
-                            run_x, underline_y, run_w, 1.0, run_color, &glyph_atlas,
+                            run_x,
+                            underline_y,
+                            run_w,
+                            1.0,
+                            run_color,
+                            &glyph_atlas,
                         );
                     }
                     terminal::grid::UnderlineStyle::Double => {
                         text_renderer.push_rect(
-                            run_x, underline_y - 2.0, run_w, 1.0, run_color, &glyph_atlas,
+                            run_x,
+                            underline_y - 2.0,
+                            run_w,
+                            1.0,
+                            run_color,
+                            &glyph_atlas,
                         );
                         text_renderer.push_rect(
-                            run_x, underline_y, run_w, 1.0, run_color, &glyph_atlas,
+                            run_x,
+                            underline_y,
+                            run_w,
+                            1.0,
+                            run_color,
+                            &glyph_atlas,
                         );
                     }
                     terminal::grid::UnderlineStyle::Curly => {
@@ -2580,7 +2667,12 @@ fn main() -> Result<()> {
                         let mut dx = run_x;
                         while dx < run_x + run_w {
                             text_renderer.push_rect(
-                                dx, underline_y, dot_size, 1.0, run_color, &glyph_atlas,
+                                dx,
+                                underline_y,
+                                dot_size,
+                                1.0,
+                                run_color,
+                                &glyph_atlas,
                             );
                             dx += dot_size + gap;
                         }
@@ -2623,13 +2715,21 @@ fn main() -> Result<()> {
 
                 // Overline rendering (CSI 53 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
-                    let fg = if is_inverse { effective_bg(&cell.bg) } else { effective_fg(&cell.fg) };
+                    let fg = if is_inverse {
+                        effective_bg(&cell.bg)
+                    } else {
+                        effective_fg(&cell.fg)
+                    };
                     text_renderer.push_rect(x, y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
                 // Strikethrough rendering (CSI 9 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
-                    let fg = if is_inverse { effective_bg(&cell.bg) } else { effective_fg(&cell.fg) };
+                    let fg = if is_inverse {
+                        effective_bg(&cell.bg)
+                    } else {
+                        effective_fg(&cell.fg)
+                    };
                     let strike_y = y + cell_h / 2.0;
                     text_renderer.push_rect(x, strike_y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
@@ -2639,8 +2739,21 @@ fn main() -> Result<()> {
 
                 // Box-drawing characters: draw programmatically for pixel-perfect alignment
                 {
-                    let fg = if is_inverse { effective_bg(&cell.bg) } else { effective_fg(&cell.fg) };
-                    if draw_box_drawing(first_ch, x, y, cell_w, cell_h, fg, &glyph_atlas, &mut text_renderer) {
+                    let fg = if is_inverse {
+                        effective_bg(&cell.bg)
+                    } else {
+                        effective_fg(&cell.fg)
+                    };
+                    if draw_box_drawing(
+                        first_ch,
+                        x,
+                        y,
+                        cell_w,
+                        cell_h,
+                        fg,
+                        &glyph_atlas,
+                        &mut text_renderer,
+                    ) {
                         continue;
                     }
                 }
@@ -2726,46 +2839,109 @@ fn main() -> Result<()> {
                             // Upper/Lower eighth blocks (vertical divisions)
                             0x2580 => {
                                 // ▀ Upper half block (4/8 from top)
-                                text_renderer.push_rect(x, y, cell_pixel_w, (4.0 * eighth_h).ceil(), fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y,
+                                    cell_pixel_w,
+                                    (4.0 * eighth_h).ceil(),
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2581 => {
                                 // ▁ Lower one eighth block
                                 let h = eighth_h.ceil();
-                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - h,
+                                    cell_pixel_w,
+                                    h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2582 => {
                                 // ▂ Lower one quarter block (2/8)
                                 let h = (2.0 * eighth_h).ceil();
-                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - h,
+                                    cell_pixel_w,
+                                    h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2583 => {
                                 // ▃ Lower three eighths block
                                 let h = (3.0 * eighth_h).ceil();
-                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - h,
+                                    cell_pixel_w,
+                                    h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2584 => {
                                 // ▄ Lower half block (4/8)
                                 let h = (4.0 * eighth_h).ceil();
-                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - h,
+                                    cell_pixel_w,
+                                    h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2585 => {
                                 // ▅ Lower five eighths block
                                 let h = (5.0 * eighth_h).ceil();
-                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - h,
+                                    cell_pixel_w,
+                                    h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2586 => {
                                 // ▆ Lower three quarters block (6/8)
                                 let h = (6.0 * eighth_h).ceil();
-                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - h,
+                                    cell_pixel_w,
+                                    h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2587 => {
                                 // ▇ Lower seven eighths block
                                 let h = (7.0 * eighth_h).ceil();
-                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - h,
+                                    cell_pixel_w,
+                                    h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2588 => {
                                 // █ Full block (8/8)
-                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y,
+                                    cell_pixel_w,
+                                    cell_h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
 
                             // Left/Right eighth blocks (horizontal divisions)
@@ -2807,24 +2983,52 @@ fn main() -> Result<()> {
                             0x2590 => {
                                 // ▐ Right half block (4/8 from right)
                                 let w = (4.0 * eighth_w).floor();
-                                text_renderer.push_rect(x + cell_pixel_w - w, y, w, cell_h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - w,
+                                    y,
+                                    w,
+                                    cell_h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
 
                             // Shade blocks
                             0x2591 => {
                                 // ░ Light shade (25%) - draw with reduced alpha
                                 let shade_fg = [fg[0], fg[1], fg[2], 0.25];
-                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, shade_fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y,
+                                    cell_pixel_w,
+                                    cell_h,
+                                    shade_fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2592 => {
                                 // ▒ Medium shade (50%)
                                 let shade_fg = [fg[0], fg[1], fg[2], 0.50];
-                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, shade_fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y,
+                                    cell_pixel_w,
+                                    cell_h,
+                                    shade_fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2593 => {
                                 // ▓ Dark shade (75%)
                                 let shade_fg = [fg[0], fg[1], fg[2], 0.75];
-                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, shade_fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y,
+                                    cell_pixel_w,
+                                    cell_h,
+                                    shade_fg,
+                                    &glyph_atlas,
+                                );
                             }
 
                             // Upper and right one eighth blocks
@@ -2836,7 +3040,14 @@ fn main() -> Result<()> {
                             0x2595 => {
                                 // ▕ Right one eighth block
                                 let w = eighth_w.ceil();
-                                text_renderer.push_rect(x + cell_pixel_w - w, y, w, cell_h, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - w,
+                                    y,
+                                    w,
+                                    cell_h,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
 
                             // Quarter blocks (quadrants)
@@ -2844,13 +3055,27 @@ fn main() -> Result<()> {
                                 // ▖ Quadrant lower left
                                 let hw = (cell_pixel_w / 2.0).ceil();
                                 let hh = (cell_h / 2.0).ceil();
-                                text_renderer.push_rect(x, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - hh,
+                                    hw,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2597 => {
                                 // ▗ Quadrant lower right
                                 let hw = (cell_pixel_w / 2.0).floor();
                                 let hh = (cell_h / 2.0).ceil();
-                                text_renderer.push_rect(x + cell_pixel_w - hw, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - hw,
+                                    y + cell_h - hh,
+                                    hw,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x2598 => {
                                 // ▘ Quadrant upper left
@@ -2865,7 +3090,14 @@ fn main() -> Result<()> {
                                 // Upper left
                                 text_renderer.push_rect(x, y, hw, hh, fg, &glyph_atlas);
                                 // Lower half
-                                text_renderer.push_rect(x, y + cell_h - hh, cell_pixel_w, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - hh,
+                                    cell_pixel_w,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x259A => {
                                 // ▚ Quadrant upper left and lower right (diagonal)
@@ -2874,7 +3106,14 @@ fn main() -> Result<()> {
                                 // Upper left
                                 text_renderer.push_rect(x, y, hw, hh, fg, &glyph_atlas);
                                 // Lower right
-                                text_renderer.push_rect(x + cell_pixel_w - (cell_pixel_w / 2.0).floor(), y + cell_h - hh, (cell_pixel_w / 2.0).floor(), hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - (cell_pixel_w / 2.0).floor(),
+                                    y + cell_h - hh,
+                                    (cell_pixel_w / 2.0).floor(),
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x259B => {
                                 // ▛ Quadrant upper left and upper right and lower left
@@ -2883,7 +3122,14 @@ fn main() -> Result<()> {
                                 // Upper half
                                 text_renderer.push_rect(x, y, cell_pixel_w, hh, fg, &glyph_atlas);
                                 // Lower left
-                                text_renderer.push_rect(x, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - hh,
+                                    hw,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x259C => {
                                 // ▜ Quadrant upper left and upper right and lower right
@@ -2892,13 +3138,27 @@ fn main() -> Result<()> {
                                 // Upper half
                                 text_renderer.push_rect(x, y, cell_pixel_w, hh, fg, &glyph_atlas);
                                 // Lower right
-                                text_renderer.push_rect(x + cell_pixel_w - hw, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - hw,
+                                    y + cell_h - hh,
+                                    hw,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x259D => {
                                 // ▝ Quadrant upper right
                                 let hw = (cell_pixel_w / 2.0).floor();
                                 let hh = (cell_h / 2.0).ceil();
-                                text_renderer.push_rect(x + cell_pixel_w - hw, y, hw, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - hw,
+                                    y,
+                                    hw,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x259E => {
                                 // ▞ Quadrant upper right and lower left (diagonal)
@@ -2906,32 +3166,144 @@ fn main() -> Result<()> {
                                 let hw_floor = (cell_pixel_w / 2.0).floor();
                                 let hh = (cell_h / 2.0).ceil();
                                 // Upper right
-                                text_renderer.push_rect(x + cell_pixel_w - hw_floor, y, hw_floor, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - hw_floor,
+                                    y,
+                                    hw_floor,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                                 // Lower left
-                                text_renderer.push_rect(x, y + cell_h - hh, hw_ceil, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - hh,
+                                    hw_ceil,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             0x259F => {
                                 // ▟ Quadrant upper right and lower left and lower right
                                 let hw = (cell_pixel_w / 2.0).floor();
                                 let hh = (cell_h / 2.0).ceil();
                                 // Upper right
-                                text_renderer.push_rect(x + cell_pixel_w - hw, y, hw, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x + cell_pixel_w - hw,
+                                    y,
+                                    hw,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                                 // Lower half
-                                text_renderer.push_rect(x, y + cell_h - hh, cell_pixel_w, hh, fg, &glyph_atlas);
+                                text_renderer.push_rect(
+                                    x,
+                                    y + cell_h - hh,
+                                    cell_pixel_w,
+                                    hh,
+                                    fg,
+                                    &glyph_atlas,
+                                );
                             }
                             // Powerline: draw programmatically with smoothstep AA
                             // E0B0/E0B2: solid separators
-                            0xE0B0 => draw_powerline_triangle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true, 1.0),
-                            0xE0B2 => draw_powerline_triangle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false, 1.0),
+                            0xE0B0 => draw_powerline_triangle(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                true,
+                                1.0,
+                            ),
+                            0xE0B2 => draw_powerline_triangle(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                false,
+                                1.0,
+                            ),
                             // E0B1/E0B3: thin separators (outline only)
-                            0xE0B1 => draw_powerline_triangle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true),
-                            0xE0B3 => draw_powerline_triangle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false),
+                            0xE0B1 => draw_powerline_triangle_outline(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                true,
+                            ),
+                            0xE0B3 => draw_powerline_triangle_outline(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                false,
+                            ),
                             // E0B4/E0B6: solid semicircles
-                            0xE0B4 => draw_powerline_semicircle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true, 1.0),
-                            0xE0B6 => draw_powerline_semicircle(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false, 1.0),
+                            0xE0B4 => draw_powerline_semicircle(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                true,
+                                1.0,
+                            ),
+                            0xE0B6 => draw_powerline_semicircle(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                false,
+                                1.0,
+                            ),
                             // E0B5/E0B7: thin semicircles (outline only)
-                            0xE0B5 => draw_powerline_semicircle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true),
-                            0xE0B7 => draw_powerline_semicircle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false),
+                            0xE0B5 => draw_powerline_semicircle_outline(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                true,
+                            ),
+                            0xE0B7 => draw_powerline_semicircle_outline(
+                                x,
+                                y,
+                                cell_w,
+                                cell_h,
+                                fg,
+                                bg,
+                                &glyph_atlas,
+                                &mut text_renderer,
+                                false,
+                            ),
                             _ => {
                                 // Fallback for unhandled transition chars (powerline variants, etc.)
                                 // Apply LCD compositing with actual cell background
@@ -2940,9 +3312,14 @@ fn main() -> Result<()> {
 
                                 // Apply same lcd_mix logic as normal text
                                 let srgb_to_linear = |c: f32| -> f32 {
-                                    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                                    if c <= 0.04045 {
+                                        c / 12.92
+                                    } else {
+                                        ((c + 0.055) / 1.055).powf(2.4)
+                                    }
                                 };
-                                let bg_chroma = bg[0].max(bg[1]).max(bg[2]) - bg[0].min(bg[1]).min(bg[2]);
+                                let bg_chroma =
+                                    bg[0].max(bg[1]).max(bg[2]) - bg[0].min(bg[1]).min(bg[2]);
                                 let mut lcd_mix = ((bg_chroma - 0.06) / 0.14).clamp(0.0, 1.0);
                                 let fg_luma = 0.2126 * srgb_to_linear(fg[0])
                                     + 0.7152 * srgb_to_linear(fg[1])
@@ -2951,25 +3328,34 @@ fn main() -> Result<()> {
                                     + 0.7152 * srgb_to_linear(bg[1])
                                     + 0.0722 * srgb_to_linear(bg[2]);
                                 let contrast = (fg_luma - bg_luma).abs();
-                                let contrast_factor = 1.0 - ((contrast - 0.30) / 0.30).clamp(0.0, 1.0);
+                                let contrast_factor =
+                                    1.0 - ((contrast - 0.30) / 0.30).clamp(0.0, 1.0);
                                 lcd_mix = (lcd_mix * contrast_factor).clamp(0.0, 1.0);
                                 let bright = ((bg_luma - 0.70) / 0.20).clamp(0.0, 1.0);
                                 lcd_mix = lcd_mix.max(bright * 0.75);
                                 lcd_mix = lcd_mix.clamp(0.0, 0.85);
 
-                                text_renderer.push_text_with_bg_lcd(grapheme, x, baseline_y, fg, bg, lcd_mix, &glyph_atlas);
+                                text_renderer.push_text_with_bg_lcd(
+                                    grapheme,
+                                    x,
+                                    baseline_y,
+                                    fg,
+                                    bg,
+                                    lcd_mix,
+                                    &glyph_atlas,
+                                );
                             }
                         }
                         continue;
                     }
 
                     // Emoji check (use cached IS_EMOJI flag from Cell)
-                    let is_emoji_grapheme = cell.attrs.contains(terminal::grid::CellAttrs::IS_EMOJI);
+                    let is_emoji_grapheme =
+                        cell.attrs.contains(terminal::grid::CellAttrs::IS_EMOJI);
                     let mut emoji_drawn = false;
                     if is_emoji_grapheme && emoji_atlas.is_available() {
                         // Search by entire grapheme (supports flags and ZWJ sequences)
-                        if let Some(info) =
-                            emoji_atlas.ensure_grapheme(gl, grapheme, cell_h as u32)
+                        if let Some(info) = emoji_atlas.ensure_grapheme(gl, grapheme, cell_h as u32)
                         {
                             let emoji_size = cell_h;
                             let cell_span_w = cell_w * 2.0;
@@ -3012,7 +3398,11 @@ fn main() -> Result<()> {
 
                         // Preserve LCD when fg/bg contrast is high (text remains sharp)
                         let srgb_to_linear = |c: f32| -> f32 {
-                            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                            if c <= 0.04045 {
+                                c / 12.92
+                            } else {
+                                ((c + 0.055) / 1.055).powf(2.4)
+                            }
                         };
                         let fg_luma = 0.2126 * srgb_to_linear(fg[0])
                             + 0.7152 * srgb_to_linear(fg[1])
@@ -3032,7 +3422,15 @@ fn main() -> Result<()> {
                         lcd_mix = lcd_mix.clamp(0.0, 0.85);
 
                         // Render full grapheme (handles combining characters correctly)
-                        text_renderer.push_text_with_bg_lcd(grapheme, x, baseline_y, fg, bg, lcd_mix, &glyph_atlas);
+                        text_renderer.push_text_with_bg_lcd(
+                            grapheme,
+                            x,
+                            baseline_y,
+                            fg,
+                            bg,
+                            lcd_mix,
+                            &glyph_atlas,
+                        );
                     }
                 }
             }
@@ -3261,8 +3659,8 @@ fn main() -> Result<()> {
                 text_renderer.begin();
 
                 // Background colors for LCD subpixel compositing
-                let win_bg = [0.15, 0.15, 0.18];        // Window background (matches ui_renderer)
-                let sel_bg = [0.3, 0.45, 0.7];          // Selection highlight background
+                let win_bg = [0.15, 0.15, 0.18]; // Window background (matches ui_renderer)
+                let sel_bg = [0.3, 0.45, 0.7]; // Selection highlight background
 
                 for (i, (label, text)) in cands.candidates.iter().enumerate() {
                     let is_selected = i as i32 == cands.selected_index;
@@ -3290,14 +3688,28 @@ fn main() -> Result<()> {
                     for ch in label.chars() {
                         glyph_atlas.ensure_glyph(ch);
                     }
-                    text_renderer.push_text_with_bg(label, label_x, baseline_y, label_color, item_bg, &glyph_atlas);
+                    text_renderer.push_text_with_bg(
+                        label,
+                        label_x,
+                        baseline_y,
+                        label_color,
+                        item_bg,
+                        &glyph_atlas,
+                    );
 
                     // Text rendering
                     let text_x = win_x + padding + max_label_w + label_text_gap;
                     for ch in text.chars() {
                         glyph_atlas.ensure_glyph(ch);
                     }
-                    text_renderer.push_text_with_bg(text, text_x, baseline_y, text_color, item_bg, &glyph_atlas);
+                    text_renderer.push_text_with_bg(
+                        text,
+                        text_x,
+                        baseline_y,
+                        text_color,
+                        item_bg,
+                        &glyph_atlas,
+                    );
                 }
 
                 // Page indicator
@@ -3325,7 +3737,7 @@ fn main() -> Result<()> {
                             ind_x,
                             baseline_y,
                             [0.5, 0.55, 0.6, 1.0],
-                            win_bg,  // Use window background for LCD compositing
+                            win_bg, // Use window background for LCD compositing
                             &glyph_atlas,
                         );
                     }
@@ -3489,7 +3901,13 @@ fn main() -> Result<()> {
         if take_screenshot {
             take_screenshot = false;
             let user_home = term.user_home_dir();
-            if let Err(e) = save_screenshot(gl, screen_w, screen_h, &cfg.paths.screenshot_dir, user_home.as_deref()) {
+            if let Err(e) = save_screenshot(
+                gl,
+                screen_w,
+                screen_h,
+                &cfg.paths.screenshot_dir,
+                user_home.as_deref(),
+            ) {
                 log::warn!("Screenshot save failed: {}", e);
             } else {
                 // Flash on success
@@ -3555,7 +3973,8 @@ fn main() -> Result<()> {
 
                 if should_draw {
                     // Display at end of preedit when composing
-                    let cursor_x = margin_x + (grid.cursor_col + preedit_total_cols) as f32 * cell_w;
+                    let cursor_x =
+                        margin_x + (grid.cursor_col + preedit_total_cols) as f32 * cell_w;
                     let cursor_y = margin_y + grid.cursor_row as f32 * cell_h;
                     let mut cursor_rgb = [config_cursor.0, config_cursor.1, config_cursor.2];
                     let cursor_row = grid.cursor_row;
@@ -3571,8 +3990,10 @@ fn main() -> Result<()> {
                         effective_bg(&cell.bg)
                     };
 
-                    if let Some((sel_start, sel_end)) =
-                        term.selection.as_ref().and_then(|s| s.cols_for_row(cursor_row, grid.cols()))
+                    if let Some((sel_start, sel_end)) = term
+                        .selection
+                        .as_ref()
+                        .and_then(|s| s.cols_for_row(cursor_row, grid.cols()))
                     {
                         if cursor_col >= sel_start && cursor_col < sel_end {
                             let a = selection_alpha;
@@ -3584,7 +4005,9 @@ fn main() -> Result<()> {
 
                     if search_mode {
                         let current_match_idx = term.current_search_match();
-                        for &(start_col, end_col, match_idx) in term.get_search_matches_for_display_row(cursor_row) {
+                        for &(start_col, end_col, match_idx) in
+                            term.get_search_matches_for_display_row(cursor_row)
+                        {
                             if cursor_col >= start_col && cursor_col < end_col.min(grid.cols()) {
                                 let is_current = current_match_idx == Some(match_idx);
                                 let hl_color = if is_current {
@@ -3605,19 +4028,32 @@ fn main() -> Result<()> {
 
                     // Ensure cursor is visible against light/dark backgrounds
                     let bg_luma = 0.2126 * cell_bg[0] + 0.7152 * cell_bg[1] + 0.0722 * cell_bg[2];
-                    let cur_luma = 0.2126 * cursor_rgb[0] + 0.7152 * cursor_rgb[1] + 0.0722 * cursor_rgb[2];
+                    let cur_luma =
+                        0.2126 * cursor_rgb[0] + 0.7152 * cursor_rgb[1] + 0.0722 * cursor_rgb[2];
                     if (cur_luma - bg_luma).abs() < 0.25 {
-                        cursor_rgb = if bg_luma > 0.5 { [0.0, 0.0, 0.0] } else { [1.0, 1.0, 1.0] };
+                        cursor_rgb = if bg_luma > 0.5 {
+                            [0.0, 0.0, 0.0]
+                        } else {
+                            [1.0, 1.0, 1.0]
+                        };
                     }
-                    let cursor_color = [cursor_rgb[0], cursor_rgb[1], cursor_rgb[2], config_cursor_opacity];
+                    let cursor_color = [
+                        cursor_rgb[0],
+                        cursor_rgb[1],
+                        cursor_rgb[2],
+                        config_cursor_opacity,
+                    ];
 
                     match grid.cursor.style {
                         terminal::grid::CursorStyle::Block => {
                             // First, draw cursor rectangle
                             let cursor_bg = [
-                                cursor_color[0] * cursor_color[3] + cell_bg[0] * (1.0 - cursor_color[3]),
-                                cursor_color[1] * cursor_color[3] + cell_bg[1] * (1.0 - cursor_color[3]),
-                                cursor_color[2] * cursor_color[3] + cell_bg[2] * (1.0 - cursor_color[3]),
+                                cursor_color[0] * cursor_color[3]
+                                    + cell_bg[0] * (1.0 - cursor_color[3]),
+                                cursor_color[1] * cursor_color[3]
+                                    + cell_bg[1] * (1.0 - cursor_color[3]),
+                                cursor_color[2] * cursor_color[3]
+                                    + cell_bg[2] * (1.0 - cursor_color[3]),
                             ];
                             text_renderer.push_rect(
                                 cursor_x,
@@ -3644,8 +4080,12 @@ fn main() -> Result<()> {
                                     } else {
                                         effective_fg(&cell.fg)
                                     };
-                                    let fg_luma = 0.2126 * cell_fg[0] + 0.7152 * cell_fg[1] + 0.0722 * cell_fg[2];
-                                    let bg_luma = 0.2126 * cursor_bg[0] + 0.7152 * cursor_bg[1] + 0.0722 * cursor_bg[2];
+                                    let fg_luma = 0.2126 * cell_fg[0]
+                                        + 0.7152 * cell_fg[1]
+                                        + 0.0722 * cell_fg[2];
+                                    let bg_luma = 0.2126 * cursor_bg[0]
+                                        + 0.7152 * cursor_bg[1]
+                                        + 0.0722 * cursor_bg[2];
                                     let contrast = (fg_luma - bg_luma).abs();
                                     let text_color = if contrast < 0.35 {
                                         [cell_bg[0], cell_bg[1], cell_bg[2], 1.0]
@@ -3655,7 +4095,15 @@ fn main() -> Result<()> {
                                     let baseline_y = (cursor_y + glyph_atlas.ascent).round();
                                     glyph_atlas.ensure_glyph(ch);
                                     // Use lcd_disable=1.0 to avoid LCD artifacts on cursor
-                                    text_renderer.push_char_with_bg(ch, cursor_x, baseline_y, text_color, cursor_bg, 1.0, &glyph_atlas);
+                                    text_renderer.push_char_with_bg(
+                                        ch,
+                                        cursor_x,
+                                        baseline_y,
+                                        text_color,
+                                        cursor_bg,
+                                        1.0,
+                                        &glyph_atlas,
+                                    );
 
                                     // Clip glyph to cursor cell to avoid bleeding outside the block
                                     unsafe {
@@ -3759,11 +4207,32 @@ fn main() -> Result<()> {
             // Top
             text_renderer.push_rect(0.0, 0.0, screen_w as f32, border, color, &glyph_atlas);
             // Bottom
-            text_renderer.push_rect(0.0, screen_h as f32 - border, screen_w as f32, border, color, &glyph_atlas);
+            text_renderer.push_rect(
+                0.0,
+                screen_h as f32 - border,
+                screen_w as f32,
+                border,
+                color,
+                &glyph_atlas,
+            );
             // Left
-            text_renderer.push_rect(0.0, border, border, screen_h as f32 - border * 2.0, color, &glyph_atlas);
+            text_renderer.push_rect(
+                0.0,
+                border,
+                border,
+                screen_h as f32 - border * 2.0,
+                color,
+                &glyph_atlas,
+            );
             // Right
-            text_renderer.push_rect(screen_w as f32 - border, border, border, screen_h as f32 - border * 2.0, color, &glyph_atlas);
+            text_renderer.push_rect(
+                screen_w as f32 - border,
+                border,
+                border,
+                screen_h as f32 - border * 2.0,
+                color,
+                &glyph_atlas,
+            );
             text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
         }
 

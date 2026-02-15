@@ -110,10 +110,7 @@ impl GlyphAtlas {
         let font_main = Font::from_bytes(font_data, FontSettings::default())
             .map_err(|e| anyhow!("Failed to load font: {}", e))?;
 
-        info!(
-            "Main font loaded ({}x supersampling)",
-            RENDER_SCALE
-        );
+        info!("Main font loaded ({}x supersampling)", RENDER_SCALE);
 
         // Load symbols/Nerd Font fallback
         let font_symbols = if let Some(symbols_data) = symbols_font_data {
@@ -442,7 +439,10 @@ impl GlyphAtlas {
                     return;
                 }
             } else {
-                debug!("Glyph not found (no CJK font): U+{:04X} '{}'", ch as u32, ch);
+                debug!(
+                    "Glyph not found (no CJK font): U+{:04X} '{}'",
+                    ch as u32, ch
+                );
                 return;
             }
         } else if let Some(ref cjk_font) = self.font_cjk {
@@ -527,10 +527,7 @@ impl GlyphAtlas {
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
 
-        debug!(
-            "Atlas texture re-uploaded: {} glyphs",
-            self.glyphs.len()
-        );
+        debug!("Atlas texture re-uploaded: {} glyphs", self.glyphs.len());
     }
 
     /// Return UV coordinates of opaque pixel for rectangle drawing

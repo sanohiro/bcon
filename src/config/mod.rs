@@ -264,6 +264,9 @@ pub struct KeybindConfig {
     /// IME toggle (default: "ctrl+shift+j") - enable/disable IME at bcon level
     #[serde(deserialize_with = "deserialize_keybind")]
     pub ime_toggle: Vec<String>,
+    /// Reset terminal modes (default: "ctrl+shift+escape") - reset enhanced input modes
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub reset_terminal: Vec<String>,
 }
 
 /// Keybind deserializer: accepts string or array
@@ -416,24 +419,24 @@ impl Default for ColorsConfig {
     fn default() -> Self {
         Self {
             // Normal colors (muted)
-            black: "282c34".to_string(),         // Soft black
-            red: "e06c75".to_string(),           // Muted red
-            green: "98c379".to_string(),         // Soft green
-            yellow: "e5c07b".to_string(),        // Warm yellow
-            blue: "61afef".to_string(),          // Soft blue
-            magenta: "c678dd".to_string(),       // Soft purple
-            cyan: "56b6c2".to_string(),          // Soft cyan
-            white: "abb2bf".to_string(),         // Light gray
+            black: "282c34".to_string(),   // Soft black
+            red: "e06c75".to_string(),     // Muted red
+            green: "98c379".to_string(),   // Soft green
+            yellow: "e5c07b".to_string(),  // Warm yellow
+            blue: "61afef".to_string(),    // Soft blue
+            magenta: "c678dd".to_string(), // Soft purple
+            cyan: "56b6c2".to_string(),    // Soft cyan
+            white: "abb2bf".to_string(),   // Light gray
 
             // Bright colors (slightly more vibrant)
-            bright_black: "5c6370".to_string(),  // Gray
-            bright_red: "e06c75".to_string(),    // Same red (already vibrant)
-            bright_green: "98c379".to_string(),  // Same green
-            bright_yellow: "e5c07b".to_string(), // Same yellow
-            bright_blue: "61afef".to_string(),   // Same blue
+            bright_black: "5c6370".to_string(),   // Gray
+            bright_red: "e06c75".to_string(),     // Same red (already vibrant)
+            bright_green: "98c379".to_string(),   // Same green
+            bright_yellow: "e5c07b".to_string(),  // Same yellow
+            bright_blue: "61afef".to_string(),    // Same blue
             bright_magenta: "c678dd".to_string(), // Same magenta
-            bright_cyan: "56b6c2".to_string(),   // Same cyan
-            bright_white: "ffffff".to_string(),  // Pure white
+            bright_cyan: "56b6c2".to_string(),    // Same cyan
+            bright_white: "ffffff".to_string(),   // Pure white
         }
     }
 }
@@ -510,6 +513,7 @@ impl KeybindConfig {
             scroll_up: vec!["shift+pageup".to_string()],
             scroll_down: vec!["shift+pagedown".to_string()],
             ime_toggle: vec!["ctrl+shift+j".to_string()],
+            reset_terminal: vec!["ctrl+shift+escape".to_string()],
         }
     }
 
@@ -529,6 +533,7 @@ impl KeybindConfig {
             scroll_up: vec!["alt+shift+v".to_string()], // M-S-v (safe Emacs-like)
             scroll_down: vec!["alt+shift+n".to_string()], // M-S-n (safe Emacs-like)
             ime_toggle: vec!["ctrl+shift+j".to_string()],
+            reset_terminal: vec!["ctrl+shift+escape".to_string()],
         }
     }
 
@@ -548,6 +553,7 @@ impl KeybindConfig {
             scroll_up: vec!["ctrl+shift+u".to_string()], // Ctrl+Shift+U (safe Vim-like)
             scroll_down: vec!["ctrl+shift+d".to_string()], // Ctrl+Shift+D (safe Vim-like)
             ime_toggle: vec!["ctrl+shift+j".to_string()],
+            reset_terminal: vec!["ctrl+shift+escape".to_string()],
         }
     }
 }
@@ -687,7 +693,9 @@ impl Config {
                 lines.push(format!("symbols = \"{}\"", nerd_path));
             }
             if include_japanese {
-                lines.push("cjk = \"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc\"".to_string());
+                lines.push(
+                    "cjk = \"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc\"".to_string(),
+                );
             }
             if !lines.is_empty() {
                 lines.join("\n") + "\n"
@@ -701,7 +709,8 @@ impl Config {
             r#"
 [terminal]
 ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "man", "htop", "top"]
-"#.to_string()
+"#
+            .to_string()
         } else {
             String::new()
         };

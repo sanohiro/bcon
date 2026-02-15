@@ -168,10 +168,7 @@ impl EmojiLoader {
                     return None;
                 }
                 let font_offset = read_u32(data, 12) as usize;
-                info!(
-                    "EmojiLoader: TTC first font offset = {}",
-                    font_offset
-                );
+                info!("EmojiLoader: TTC first font offset = {}", font_offset);
                 return Self::parse_font_at_offset(
                     data,
                     font_offset,
@@ -1127,7 +1124,8 @@ impl EmojiAtlas {
                 };
                 trace!(
                     "GSUB shaping succeeded (CBDT): {:?} -> glyph_id={}",
-                    grapheme, glyph_id
+                    grapheme,
+                    glyph_id
                 );
                 return self.add_glyph_data(grapheme_key, &glyph_data, cell_height);
             }
@@ -1137,7 +1135,8 @@ impl EmojiAtlas {
                 if let Some(glyph_data) = loader.get_colr_glyph(glyph_id, size) {
                     trace!(
                         "GSUB shaping succeeded (COLR): {:?} -> glyph_id={}",
-                        grapheme, glyph_id
+                        grapheme,
+                        glyph_id
                     );
                     return self.add_glyph_data(grapheme_key, &glyph_data, cell_height);
                 }

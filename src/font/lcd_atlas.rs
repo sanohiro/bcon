@@ -91,10 +91,24 @@ impl LcdGlyphAtlas {
         subpixel_positioning: bool,
         hinting_mode: HintingMode,
     ) -> Result<Self> {
-        let font_main = FtFont::from_bytes(font_data, font_size, lcd_mode, lcd_filter, lcd_weights, hinting_mode)?;
+        let font_main = FtFont::from_bytes(
+            font_data,
+            font_size,
+            lcd_mode,
+            lcd_filter,
+            lcd_weights,
+            hinting_mode,
+        )?;
 
         let font_symbols = if let Some(symbols_data) = symbols_font_data {
-            match FtFont::from_bytes(symbols_data, font_size, lcd_mode, lcd_filter, lcd_weights, hinting_mode) {
+            match FtFont::from_bytes(
+                symbols_data,
+                font_size,
+                lcd_mode,
+                lcd_filter,
+                lcd_weights,
+                hinting_mode,
+            ) {
                 Ok(f) => {
                     info!("Symbols font (Nerd Font) loaded (FreeType)");
                     Some(f)
@@ -109,7 +123,14 @@ impl LcdGlyphAtlas {
         };
 
         let font_cjk = if let Some(cjk_data) = cjk_font_data {
-            match FtFont::from_bytes(cjk_data, font_size, lcd_mode, lcd_filter, lcd_weights, hinting_mode) {
+            match FtFont::from_bytes(
+                cjk_data,
+                font_size,
+                lcd_mode,
+                lcd_filter,
+                lcd_weights,
+                hinting_mode,
+            ) {
                 Ok(f) => {
                     info!("CJK font loaded (FreeType)");
                     Some(f)
@@ -127,7 +148,7 @@ impl LcdGlyphAtlas {
         // descender is negative, so ascent - descender is actual height
         let (ascent, descender, line_height) = font_main.line_metrics();
         let min_height = ascent - descender; // Minimum height to fit characters
-        // +1.0 safety margin to prevent bottom clipping
+                                             // +1.0 safety margin to prevent bottom clipping
         let cell_height = line_height.max(min_height).ceil() + 1.0;
 
         // Determine cell width from 'M' (round to integer to prevent pixel misalignment)
@@ -352,7 +373,11 @@ impl LcdGlyphAtlas {
 
         // Cache all 3 phases if subpixel phase is enabled
         if self.subpixel_positioning {
-            for phase in [SubpixelPhase::Phase0, SubpixelPhase::Phase1, SubpixelPhase::Phase2] {
+            for phase in [
+                SubpixelPhase::Phase0,
+                SubpixelPhase::Phase1,
+                SubpixelPhase::Phase2,
+            ] {
                 let key = PhasedGlyphKey {
                     ch,
                     phase: phase as u8,
@@ -385,7 +410,9 @@ impl LcdGlyphAtlas {
                     continue;
                 };
 
-                if let Some(info) = self.pack_glyph(&ft_glyph, &format!("U+{:04X}@{}", ch as u32, phase as u8)) {
+                if let Some(info) =
+                    self.pack_glyph(&ft_glyph, &format!("U+{:04X}@{}", ch as u32, phase as u8))
+                {
                     self.phased_glyphs.insert(key, info);
                 }
             }
@@ -495,7 +522,9 @@ impl LcdGlyphAtlas {
             ch,
             phase: phase as u8,
         };
-        self.phased_glyphs.get(&key).or_else(|| self.glyphs.get(&ch))
+        self.phased_glyphs
+            .get(&key)
+            .or_else(|| self.glyphs.get(&ch))
     }
 
     /// Ensure glyph with subpixel phase
@@ -528,7 +557,9 @@ impl LcdGlyphAtlas {
             return;
         };
 
-        if let Some(info) = self.pack_glyph(&ft_glyph, &format!("U+{:04X}@{}", ch as u32, phase as u8)) {
+        if let Some(info) =
+            self.pack_glyph(&ft_glyph, &format!("U+{:04X}@{}", ch as u32, phase as u8))
+        {
             self.phased_glyphs.insert(key, info);
         }
     }
@@ -593,7 +624,8 @@ impl LcdGlyphAtlas {
         self.ascent = ascent;
 
         // Redetermine cell width from 'M' (round to integer)
-        self.cell_width = self.font_main
+        self.cell_width = self
+            .font_main
             .rasterize('M')
             .map(|g| g.advance.round())
             .unwrap_or((new_size * 0.6).round());

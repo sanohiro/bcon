@@ -122,7 +122,10 @@ impl SeatSession {
     ///
     /// Returns true if events were processed
     pub fn dispatch(&mut self) -> Result<bool> {
-        let count = self.seat.dispatch(0).context("Failed to dispatch seat events")?;
+        let count = self
+            .seat
+            .dispatch(0)
+            .context("Failed to dispatch seat events")?;
         Ok(count > 0)
     }
 
@@ -147,7 +150,10 @@ impl SeatSession {
         self.next_device_id += 1;
         let raw_fd = device.as_fd().as_raw_fd();
 
-        debug!("libseat: opened device {} (id={}, fd={})", path_str, device_id, raw_fd);
+        debug!(
+            "libseat: opened device {} (id={}, fd={})",
+            path_str, device_id, raw_fd
+        );
 
         // Store device id for later closing
         self.devices.insert(path_str, device_id);

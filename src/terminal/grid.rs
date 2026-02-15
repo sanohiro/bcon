@@ -705,6 +705,25 @@ impl Grid {
         self.keyboard.kitty_flags
     }
 
+    /// Reset enhanced input modes (Kitty keyboard, mouse capture, etc.)
+    /// Called by user via Ctrl+Shift+Escape when terminal is in a bad state
+    pub fn reset_enhanced_modes(&mut self) {
+        // Reset Kitty keyboard protocol
+        self.keyboard.kitty_flags = 0;
+        self.keyboard.kitty_stack.clear();
+        self.keyboard.modify_other_keys = 0;
+
+        // Reset mouse modes
+        self.modes.mouse_mode = MouseMode::None;
+        self.modes.mouse_sgr = false;
+
+        // Reset other enhanced modes
+        self.modes.bracketed_paste = false;
+        self.modes.send_focus_events = false;
+
+        log::trace!("Enhanced input modes reset");
+    }
+
     // DynamicColors
     #[inline]
     pub fn osc_fg_color(&self) -> Option<(u8, u8, u8)> {

@@ -162,7 +162,11 @@ fn parse_extended_data_block(data: &[u8], caps: &mut HdrCapabilities) {
             parse_colorimetry(payload, caps);
         }
         _ => {
-            trace!("Extended data block: tag={:#04x}, len={}", extended_tag, payload.len());
+            trace!(
+                "Extended data block: tag={:#04x}, len={}",
+                extended_tag,
+                payload.len()
+            );
         }
     }
 }

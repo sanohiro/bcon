@@ -86,8 +86,10 @@ pub struct RawKeyEvent {
     pub xkb_state: u32,
     /// xkbcommon UTF-8 output
     pub utf8: String,
-    /// true=press, false=release
+    /// true=press/repeat, false=release (for backward compatibility)
     pub is_press: bool,
+    /// Key action (Press, Repeat, Release)
+    pub action: KeyAction,
     /// Shift key pressed
     pub mods_shift: bool,
     /// Ctrl key pressed
@@ -505,12 +507,17 @@ impl EvdevKeyboard {
                         };
                         self.xkb_state.update_key(xkb_keycode, direction);
 
+                        let action = match key_state {
+                            KeyState::Pressed => KeyAction::Press,
+                            KeyState::Released => KeyAction::Release,
+                        };
                         let raw_event = RawKeyEvent {
                             keysym: sym.raw(),
                             keycode: evdev_code,
                             xkb_state: mods,
                             utf8,
                             is_press: key_state == KeyState::Pressed,
+                            action,
                             mods_shift: self.shift_pressed,
                             mods_ctrl: self.ctrl_pressed,
                             mods_alt: self.alt_pressed,
@@ -632,8 +639,9 @@ impl EvdevKeyboard {
             if now >= *next_repeat {
                 // Generate repeat event
                 let mut repeat_event = event.clone();
-                repeat_event.is_press = true; // Treat as press
-                                              // Reflect current modifier state
+                repeat_event.is_press = true; // Keep as true for backward compatibility
+                repeat_event.action = KeyAction::Repeat; // Set proper action
+                                                         // Reflect current modifier state
                 repeat_event.mods_shift = self.shift_pressed;
                 repeat_event.mods_ctrl = self.ctrl_pressed;
                 key_events.push(repeat_event);
@@ -769,6 +777,15 @@ pub fn keysym_to_bytes_from_sym(keysym: u32) -> Vec<u8> {
     result.into_iter().filter(|&b| b != 0).collect()
 }
 
+/// Key action (press, repeat, release)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyAction {
+    #[default]
+    Press,
+    Repeat,
+    Release,
+}
+
 /// Terminal keyboard configuration
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeyboardConfig {
@@ -777,7 +794,14 @@ pub struct KeyboardConfig {
     /// modifyOtherKeys level (0=off, 1=most, 2=all)
     pub modify_other_keys: u8,
     /// Kitty keyboard protocol flags
+    /// Bit 0: Disambiguate escape codes
+    /// Bit 1: Report event types (press/repeat/release)
+    /// Bit 2: Report alternate keys (shifted_key:alternate_key)
+    /// Bit 3: Report all keys as CSI u
+    /// Bit 4: Report associated text
     pub kitty_flags: u32,
+    /// Current key action (for event type reporting)
+    pub key_action: KeyAction,
 }
 
 /// Modifier key bitmask (xterm compatible)
@@ -814,11 +838,22 @@ pub fn keysym_to_bytes_with_mods(
 
     // Kitty keyboard protocol
     // flags & 1 = disambiguate escape codes
+    // flags & 2 = report event types
     // flags & 8 = report all keys as escape codes (CSI u for everything)
-    let kitty_all_keys = config.kitty_flags & 8 != 0;
     let kitty_disambiguate = config.kitty_flags & 1 != 0;
+    let kitty_report_events = config.kitty_flags & 2 != 0;
+    let kitty_all_keys = config.kitty_flags & 8 != 0;
     if kitty_disambiguate || kitty_all_keys {
-        if let Some(bytes) = encode_kitty_keyboard(raw, ctrl, alt, shift, kitty_all_keys, utf8) {
+        if let Some(bytes) = encode_kitty_keyboard(
+            raw,
+            ctrl,
+            alt,
+            shift,
+            kitty_all_keys,
+            kitty_report_events,
+            config.key_action,
+            utf8,
+        ) {
             return bytes;
         }
     }
@@ -952,11 +987,16 @@ fn encode_function_key(raw: u32, has_mods: bool, mod_code: u8) -> Option<Vec<u8>
 
 /// Kitty keyboard protocol encoding (CSI u format)
 /// all_keys: if true (flags & 8), report all keys including plain letters
+/// report_events: if true (flags & 2), include event type (press/repeat/release)
 ///
 /// Flag 1 (disambiguate) affects:
 /// - Escape key (always CSI u)
 /// - Ctrl+key, Alt+key, Ctrl+Alt+key, Shift+Alt+key combinations
 /// - Enter/Tab/Backspace only WITH modifiers (without modifiers, keep legacy for shell compat)
+///
+/// Flag 2 (report events) affects:
+/// - Adds event type after modifiers: CSI code ; mods:event_type u
+/// - Event types: 1=press, 2=repeat, 3=release
 ///
 /// Flag 8 (all keys) affects:
 /// - All keys including functional keys (arrows, F-keys) and plain text
@@ -966,6 +1006,8 @@ fn encode_kitty_keyboard(
     alt: bool,
     shift: bool,
     all_keys: bool,
+    report_events: bool,
+    action: KeyAction,
     utf8_input: &str,
 ) -> Option<Vec<u8>> {
     let mod_code = modifier_code(ctrl, alt, shift);
@@ -973,10 +1015,31 @@ fn encode_kitty_keyboard(
     // Disambiguate mode triggers on: Ctrl, Alt, or Ctrl+Alt (Shift alone doesn't count)
     let disambiguate_mods = ctrl || alt;
 
+    // Event type encoding: 1=press, 2=repeat, 3=release
+    let event_type = match action {
+        KeyAction::Press => 1,
+        KeyAction::Repeat => 2,
+        KeyAction::Release => 3,
+    };
+
+    // Helper to format the modifier+event part
+    // Format: mods or mods:event_type
+    let format_mods = |mods: u8| -> String {
+        if report_events && action != KeyAction::Press {
+            // Include event type for repeat/release
+            format!("{}:{}", mods, event_type)
+        } else {
+            format!("{}", mods)
+        }
+    };
+
+    // For release events with report_events flag, we need to send the key
+    let force_encode = report_events && action == KeyAction::Release;
+
     // === Escape key: always CSI u in disambiguate mode ===
     if raw == keysyms::KEY_Escape {
-        if has_mods {
-            return Some(format!("\x1b[27;{}u", mod_code).into_bytes());
+        if has_mods || report_events {
+            return Some(format!("\x1b[27;{}u", format_mods(mod_code)).into_bytes());
         } else {
             return Some(b"\x1b[27u".to_vec());
         }
@@ -984,6 +1047,7 @@ fn encode_kitty_keyboard(
 
     // === Enter, Tab, Backspace: CSI u only with modifiers ===
     // Without modifiers, return None to use legacy encoding (shell compatibility)
+    // Exception: if report_events is set and it's a release, encode it
     let legacy_key_code = match raw {
         _ if raw == keysyms::KEY_Return || raw == keysyms::KEY_KP_Enter => Some(13),
         _ if raw == keysyms::KEY_Tab => Some(9),
@@ -992,19 +1056,22 @@ fn encode_kitty_keyboard(
     };
 
     if let Some(code) = legacy_key_code {
-        if has_mods {
-            return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+        if has_mods || force_encode {
+            return Some(format!("\x1b[{};{}u", code, format_mods(mod_code)).into_bytes());
         } else if all_keys {
             // all_keys mode: encode everything
+            if report_events && action != KeyAction::Press {
+                return Some(format!("\x1b[{};{}u", code, format_mods(mod_code)).into_bytes());
+            }
             return Some(format!("\x1b[{}u", code).into_bytes());
         }
-        // No modifiers and not all_keys: use legacy encoding
+        // No modifiers and not all_keys and not release: use legacy encoding
         return None;
     }
 
     // === Ctrl+key, Alt+key combinations in disambiguate mode ===
     // This is the key fix: Ctrl+A should be CSI 97;5u, not 0x01
-    if disambiguate_mods {
+    if disambiguate_mods || force_encode {
         if let Some(ch) = utf8_input.chars().next() {
             if ch.is_ascii_alphanumeric() || ch.is_ascii_punctuation() || ch == ' ' {
                 // Use lowercase codepoint for letters
@@ -1013,14 +1080,14 @@ fn encode_kitty_keyboard(
                 } else {
                     ch as u32
                 };
-                return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+                return Some(format!("\x1b[{};{}u", code, format_mods(mod_code)).into_bytes());
             }
         }
     }
 
-    // === Functional keys (only in all_keys mode) ===
+    // === Functional keys (only in all_keys mode or for release events) ===
     // These have unambiguous legacy encodings (CSI A, CSI ~, etc.)
-    if all_keys {
+    if all_keys || force_encode {
         let functional_code = match raw {
             _ if raw == keysyms::KEY_Up => Some(57352), // KITTY_KEY_UP
             _ if raw == keysyms::KEY_Down => Some(57353), // KITTY_KEY_DOWN
@@ -1044,12 +1111,19 @@ fn encode_kitty_keyboard(
             _ if raw == keysyms::KEY_F10 => Some(57373),
             _ if raw == keysyms::KEY_F11 => Some(57374),
             _ if raw == keysyms::KEY_F12 => Some(57375),
+            // Modifier keys (for reporting modifier key presses)
+            _ if raw == keysyms::KEY_Shift_L || raw == keysyms::KEY_Shift_R => Some(57441),
+            _ if raw == keysyms::KEY_Control_L || raw == keysyms::KEY_Control_R => Some(57442),
+            _ if raw == keysyms::KEY_Alt_L || raw == keysyms::KEY_Alt_R => Some(57443),
+            _ if raw == keysyms::KEY_Super_L || raw == keysyms::KEY_Super_R => Some(57444),
+            _ if raw == keysyms::KEY_Caps_Lock => Some(57358),
+            _ if raw == keysyms::KEY_Num_Lock => Some(57360),
             _ => None,
         };
 
         if let Some(code) = functional_code {
-            if has_mods {
-                return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+            if has_mods || (report_events && action != KeyAction::Press) {
+                return Some(format!("\x1b[{};{}u", code, format_mods(mod_code)).into_bytes());
             } else {
                 return Some(format!("\x1b[{}u", code).into_bytes());
             }
@@ -1058,8 +1132,8 @@ fn encode_kitty_keyboard(
         // Normal printable characters in all_keys mode
         if let Some(ch) = utf8_input.chars().next() {
             let code = ch as u32;
-            if has_mods {
-                return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+            if has_mods || (report_events && action != KeyAction::Press) {
+                return Some(format!("\x1b[{};{}u", code, format_mods(mod_code)).into_bytes());
             } else {
                 return Some(format!("\x1b[{}u", code).into_bytes());
             }
