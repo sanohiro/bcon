@@ -45,39 +45,26 @@ pub struct Hyperlink {
 /// Maximum scrollback lines
 const MAX_SCROLLBACK: usize = 10000;
 
-/// Check if codepoint is emoji (for ZWJ sequences)
-/// Broadly covers characters used as components of ZWJ sequences
+/// Check if codepoint should be forced to width=2 (emoji)
+///
+/// This is conservative - only forcing width=2 for:
+/// 1. Main emoji blocks (SMP emoji that unicode-width returns 1 for)
+/// 2. Regional Indicator Symbols (flags)
+///
+/// Characters in BMP (U+0000-U+FFFF) use unicode-width's result directly.
+/// This matches Ghostty's behavior and avoids width mismatches with applications.
 fn is_emoji_codepoint(cp: u32) -> bool {
     matches!(cp,
-        // Main emoji blocks
-        // Note: 0x1F300..=0x1F5FF includes Fitzpatrick skin tone modifiers (0x1F3FB..=0x1F3FF)
+        // === SMP Emoji blocks (U+1F000+) ===
+        // These are actual emoji that need width=2 for proper rendering
         0x1F300..=0x1F5FF |  // Miscellaneous Symbols and Pictographs
-        0x1F600..=0x1F64F |  // Emoticons
+        0x1F600..=0x1F64F |  // Emoticons (😀😁...)
         0x1F680..=0x1F6FF |  // Transport and Map Symbols
         0x1F900..=0x1F9FF |  // Supplemental Symbols and Pictographs
         0x1FA00..=0x1FAFF |  // Symbols and Pictographs Extended
-        0x1F1E0..=0x1F1FF |  // Regional Indicator Symbols (flags)
-
-        // Symbol blocks (used in ZWJ sequences)
-        0x2600..=0x26FF   |  // Miscellaneous Symbols (♀♂⚕⚖ etc)
-        0x2700..=0x27BF   |  // Dingbats (✈✂ etc)
-        0x2300..=0x23FF   |  // Miscellaneous Technical (⌚⏰⏩ etc)
-
-        // Additional emoji-related
-        0x203C | 0x2049 |    // ‼ ⁉
-        0x2122 | 0x2139 |    // ™ ℹ
-        0x2194..=0x2199 |    // Arrows
-        0x21A9..=0x21AA |    // ↩ ↪
-        0x24C2 |             // Ⓜ
-        0x25AA..=0x25AB |    // ▪ ▫
-        0x25B6 | 0x25C0 |    // ▶ ◀
-        0x25FB..=0x25FE |    // Squares
-        0x2934..=0x2935 |    // ⤴ ⤵
-        0x2B05..=0x2B07 |    // ⬅⬆⬇
-        0x2B1B..=0x2B1C |    // ⬛⬜
-        0x2B50 | 0x2B55 |    // ⭐⭕
-        0x3030 | 0x303D |    // 〰 〽
-        0x3297 | 0x3299      // ㊗ ㊙
+        0x1F1E0..=0x1F1FF    // Regional Indicator Symbols (flags)
+        // Note: BMP characters (U+2xxx etc.) use unicode-width directly
+        // This avoids breaking applications like carbonyl that expect width=1
     )
 }
 
@@ -377,13 +364,44 @@ pub struct ShellState {
 pub struct KeyboardState {
     /// modifyOtherKeys level (0=disabled, 1=partial, 2=full)
     pub modify_other_keys: u8,
-    /// Kitty keyboard protocol flags
+    /// Kitty keyboard protocol flags (current)
     /// Bit 0: Report ambiguous keys in CSI u format
     /// Bit 1: Report event type (press/repeat/release)
     /// Bit 2: Report alternate keys
     /// Bit 3: Report all keys in CSI u format
     /// Bit 4: Report associated text
     pub kitty_flags: u32,
+    /// Kitty keyboard protocol stack (for nested push/pop)
+    /// Max depth: 256 (per Kitty spec)
+    pub kitty_stack: Vec<u32>,
+}
+
+impl KeyboardState {
+    /// Push current flags onto stack and set new flags
+    pub fn kitty_push(&mut self, flags: u32) {
+        // Stack limit per Kitty spec
+        const MAX_STACK_DEPTH: usize = 256;
+        if self.kitty_stack.len() < MAX_STACK_DEPTH {
+            self.kitty_stack.push(self.kitty_flags);
+        }
+        self.kitty_flags = flags;
+    }
+
+    /// Pop flags from stack (restore previous state)
+    /// If count is 0, pop one entry
+    /// If count > 0, pop that many entries
+    pub fn kitty_pop(&mut self, count: u16) {
+        let n = if count == 0 { 1 } else { count as usize };
+        for _ in 0..n {
+            if let Some(flags) = self.kitty_stack.pop() {
+                self.kitty_flags = flags;
+            } else {
+                // Stack empty, reset to default
+                self.kitty_flags = 0;
+                break;
+            }
+        }
+    }
 }
 
 /// Dynamic colors (OSC 10/11)
@@ -473,6 +491,9 @@ struct AlternateScreen {
     cells: Vec<Cell>,
     cursor_row: usize,
     cursor_col: usize,
+    pen: Pen,
+    scroll_top: usize,
+    scroll_bottom: usize,
 }
 
 impl Grid {
@@ -595,6 +616,22 @@ impl Grid {
     /// Get iterator of dirty row indices
     pub fn dirty_row_indices(&self) -> impl Iterator<Item = usize> + '_ {
         (0..self.rows).filter(move |&row| self.is_row_dirty(row))
+    }
+
+    /// Create a blank cell using current SGR background color
+    /// Used by erase operations (ECH, EL, ED) per ECMA-48 spec
+    #[inline]
+    fn blank_cell(&self) -> Cell {
+        Cell {
+            grapheme: SPACE.clone(),
+            fg: Color::Default,
+            bg: self.pen.bg.clone(),
+            attrs: CellAttrs::default(),
+            width: 1,
+            hyperlink: None,
+            underline_style: UnderlineStyle::None,
+            underline_color: None,
+        }
     }
 
     // ========== Compatibility accessors (delegate to sub-structs) ==========
@@ -997,13 +1034,14 @@ impl Grid {
 
     /// Erase display (CSI J)
     /// mode: 0=from cursor, 1=to cursor, 2=entire screen
+    /// Uses current SGR background color per ECMA-48
     pub fn erase_in_display(&mut self, mode: u16) {
         match mode {
             0 => {
                 // Erase from cursor to end
                 self.erase_in_line(0);
                 for row in (self.cursor_row + 1)..self.rows {
-                    self.clear_row(row);
+                    self.clear_row_with_bg(row);
                     self.remove_images_at_row(row);
                     self.mark_dirty(row);
                 }
@@ -1011,7 +1049,7 @@ impl Grid {
             1 => {
                 // Erase from start to cursor
                 for row in 0..self.cursor_row {
-                    self.clear_row(row);
+                    self.clear_row_with_bg(row);
                     self.remove_images_at_row(row);
                     self.mark_dirty(row);
                 }
@@ -1019,8 +1057,9 @@ impl Grid {
             }
             2 | 3 => {
                 // Erase entire screen
+                let blank = self.blank_cell();
                 for cell in &mut self.cells {
-                    *cell = Cell::default();
+                    *cell = blank.clone();
                 }
                 // Also clear image placements
                 self.image_placements.clear();
@@ -1033,18 +1072,20 @@ impl Grid {
 
     /// Erase line (CSI K)
     /// mode: 0=from cursor, 1=to cursor, 2=entire line
+    /// Uses current SGR background color per ECMA-48
     pub fn erase_in_line(&mut self, mode: u16) {
         let row = self.cursor_row;
+        let blank = self.blank_cell();
         match mode {
             0 => {
                 // Also clear left neighbor head cell if start position is continuation cell (width=0)
                 if self.cursor_col < self.cols && self.cell(row, self.cursor_col).width == 0 {
                     if self.cursor_col > 0 {
-                        *self.cell_mut(row, self.cursor_col - 1) = Cell::default();
+                        *self.cell_mut(row, self.cursor_col - 1) = blank.clone();
                     }
                 }
                 for col in self.cursor_col..self.cols {
-                    *self.cell_mut(row, col) = Cell::default();
+                    *self.cell_mut(row, col) = blank.clone();
                 }
                 // Delete images overlapping this row
                 self.remove_images_at_row(row);
@@ -1053,16 +1094,16 @@ impl Grid {
                 let end = self.cursor_col.min(self.cols - 1);
                 // Also clear right neighbor continuation cell if end position is head cell (width=2)
                 if self.cell(row, end).width == 2 && end + 1 < self.cols {
-                    *self.cell_mut(row, end + 1) = Cell::default();
+                    *self.cell_mut(row, end + 1) = blank.clone();
                 }
                 for col in 0..=end {
-                    *self.cell_mut(row, col) = Cell::default();
+                    *self.cell_mut(row, col) = blank.clone();
                 }
                 // Delete images overlapping this row
                 self.remove_images_at_row(row);
             }
             2 => {
-                self.clear_row(row);
+                self.clear_row_with_bg(row);
                 // Delete images overlapping this row
                 self.remove_images_at_row(row);
             }
@@ -1073,7 +1114,15 @@ impl Grid {
         self.mark_dirty(row);
     }
 
-    /// Clear row (optimized with fill)
+    /// Clear row with current background color
+    fn clear_row_with_bg(&mut self, row: usize) {
+        let blank = self.blank_cell();
+        let start = row * self.cols;
+        let end = start + self.cols;
+        self.cells[start..end].fill(blank);
+    }
+
+    /// Clear row with default colors (for internal use)
     fn clear_row(&mut self, row: usize) {
         let start = row * self.cols;
         let end = start + self.cols;
@@ -1150,9 +1199,9 @@ impl Grid {
             left[dst_start..dst_start + self.cols].clone_from_slice(&right[..self.cols]);
         }
 
-        // Clear bottom
+        // Clear bottom (using current background)
         for row in (bottom + 1 - n)..=bottom {
-            self.clear_row(row);
+            self.clear_row_with_bg(row);
         }
 
         // Adjust image placement rows (delete scrolled out ones)
@@ -1293,9 +1342,9 @@ impl Grid {
             left[dst_start..dst_start + self.cols].clone_from_slice(&right[..self.cols]);
         }
 
-        // Clear bottom
+        // Clear bottom (using current background)
         for row in (bottom + 1 - n)..=bottom {
-            self.clear_row(row);
+            self.clear_row_with_bg(row);
         }
 
         // Mark affected rows as dirty
@@ -1342,9 +1391,10 @@ impl Grid {
             self.cells[row_start + dst_start + i] = self.cells[row_start + src_start + i].clone();
         }
 
-        // Fill right end with spaces
+        // Fill right end with spaces (using current background)
+        let blank = self.blank_cell();
         for c in (self.cols - n)..self.cols {
-            *self.cell_mut(row, c) = Cell::default();
+            *self.cell_mut(row, c) = blank.clone();
         }
 
         self.mark_dirty(row);
@@ -1352,6 +1402,7 @@ impl Grid {
 
     /// Insert characters (CSI @ / ICH)
     /// Insert n spaces at cursor position and shift right characters right
+    /// Uses current SGR background color for inserted spaces
     pub fn insert_chars(&mut self, n: usize) {
         let row = self.cursor_row;
         let col = self.cursor_col;
@@ -1388,9 +1439,10 @@ impl Grid {
             self.cells[row_start + i + n] = self.cells[row_start + i].clone();
         }
 
-        // Fill insertion position with spaces
+        // Fill insertion position with spaces (using current background)
+        let blank = self.blank_cell();
         for c in col..(col + n) {
-            *self.cell_mut(row, c) = Cell::default();
+            *self.cell_mut(row, c) = blank.clone();
         }
 
         self.mark_dirty(row);
@@ -1398,6 +1450,7 @@ impl Grid {
 
     /// Erase characters (CSI X / ECH)
     /// Overwrite n characters from cursor position with spaces (no shift)
+    /// Uses current SGR background color per ECMA-48
     pub fn erase_chars(&mut self, n: usize) {
         let row = self.cursor_row;
         let col = self.cursor_col;
@@ -1406,7 +1459,7 @@ impl Grid {
         // Handle wide character at start position
         // If start is on continuation cell (width=0), clear the head cell too
         if self.cell(row, col).width == 0 && col > 0 {
-            *self.cell_mut(row, col - 1) = Cell::default();
+            *self.cell_mut(row, col - 1) = self.blank_cell();
         }
 
         // Handle wide character at end position
@@ -1419,12 +1472,13 @@ impl Grid {
             let last_erased = end_col - 1;
             if self.cell(row, last_erased).width == 2 && end_col < self.cols {
                 // Wide char head at end of erase range, continuation cell outside - clear it
-                *self.cell_mut(row, end_col) = Cell::default();
+                *self.cell_mut(row, end_col) = self.blank_cell();
             }
         }
 
+        let blank = self.blank_cell();
         for c in col..(col + n) {
-            *self.cell_mut(row, c) = Cell::default();
+            *self.cell_mut(row, c) = blank.clone();
         }
 
         self.mark_dirty(row);
@@ -1449,9 +1503,9 @@ impl Grid {
             right[..self.cols].clone_from_slice(&left[src_start..src_start + self.cols]);
         }
 
-        // Fill top with spaces
+        // Fill top with spaces (using current background)
         for row in top..(top + n) {
-            self.clear_row(row);
+            self.clear_row_with_bg(row);
         }
 
         // Adjust image placement rows
@@ -1520,17 +1574,23 @@ impl Grid {
         if self.alternate_screen.is_some() {
             return; // Already in alternate screen
         }
-        // Save current state
+        // Save current state (including pen and scroll region per xterm spec)
         let saved = AlternateScreen {
             cells: self.cells.clone(),
             cursor_row: self.cursor_row,
             cursor_col: self.cursor_col,
+            pen: self.pen.clone(),
+            scroll_top: self.scroll_top,
+            scroll_bottom: self.scroll_bottom,
         };
         self.alternate_screen = Some(saved);
-        // Clear screen
+        // Clear screen and reset state for alternate buffer
         self.cells = vec![Cell::default(); self.cols * self.rows];
         self.cursor_row = 0;
         self.cursor_col = 0;
+        self.pen = Pen::default();
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
         self.image_placements.clear();
         // Mark all rows dirty for FBO cache invalidation
         self.mark_all_dirty();
@@ -1542,6 +1602,9 @@ impl Grid {
             self.cells = saved.cells;
             self.cursor_row = saved.cursor_row;
             self.cursor_col = saved.cursor_col;
+            self.pen = saved.pen;
+            self.scroll_top = saved.scroll_top;
+            self.scroll_bottom = saved.scroll_bottom;
             self.image_placements.clear();
             // Mark all rows dirty for FBO cache invalidation
             self.mark_all_dirty();
@@ -1572,9 +1635,9 @@ impl Grid {
             right[..self.cols].clone_from_slice(&left[src_start..src_start + self.cols]);
         }
 
-        // Clear inserted rows
+        // Clear inserted rows (using current background)
         for row in self.cursor_row..(self.cursor_row + n) {
-            self.clear_row(row);
+            self.clear_row_with_bg(row);
         }
 
         // Mark affected rows as dirty

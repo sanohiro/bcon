@@ -24,9 +24,11 @@ Look around — the only thing running on your X11/Wayland session might be a te
 
 bcon is the **foundation layer**. Leave session management and multiplexing to the tools that do it best:
 
-- **Sessions**: tmux, zellij, screen
+- **Sessions**: tmux (recommended), screen, zellij*
 - **Files**: yazi, ranger
 - **Editors**: Emacs, Neovim, Helix
+
+*zellij does not support Kitty graphics protocol passthrough. Image preview in yazi won't work through zellij.
 
 Following the Unix philosophy, bcon does one thing well: beautiful, fast rendering.
 

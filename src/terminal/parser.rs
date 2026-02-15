@@ -316,13 +316,25 @@ impl<'a> Perform for Performer<'a> {
             ('u', [b'>']) => {
                 // Kitty keyboard: Push mode
                 // CSI > flags u
-                self.grid.keyboard.kitty_flags = param0 as u32;
-                trace!("Kitty keyboard: push flags={}", param0);
+                // Push current flags onto stack, then set new flags
+                self.grid.keyboard.kitty_push(param0 as u32);
+                trace!(
+                    "Kitty keyboard: push flags={} (stack depth={})",
+                    param0,
+                    self.grid.keyboard.kitty_stack.len()
+                );
             }
             ('u', [b'<']) => {
                 // Kitty keyboard: Pop mode
-                self.grid.keyboard.kitty_flags = 0;
-                trace!("Kitty keyboard: pop");
+                // CSI < count u - pop 'count' entries (default 1)
+                let count = param0 as u16;
+                self.grid.keyboard.kitty_pop(count);
+                trace!(
+                    "Kitty keyboard: pop count={} (now flags={}, stack depth={})",
+                    if count == 0 { 1 } else { count },
+                    self.grid.keyboard.kitty_flags,
+                    self.grid.keyboard.kitty_stack.len()
+                );
             }
             ('u', [b'?']) => {
                 // Kitty keyboard: Query mode

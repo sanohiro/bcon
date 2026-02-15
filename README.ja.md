@@ -20,9 +20,11 @@ AI コーディングツール（Claude Code、Codex、Gemini CLI など）の�
 
 bcon はあくまで**土台**です。画面分割やセッション管理は、それを得意とするツールに任せましょう：
 
-- **セッション管理**: tmux, zellij, screen
+- **セッション管理**: tmux (推奨), screen, zellij*
 - **ファイル操作**: yazi, ranger
 - **エディタ**: Emacs, Neovim, Helix
+
+*zellij は Kitty graphics protocol のパススルーに対応していません。zellij 経由では yazi の画像プレビューが動作しません。
 
 Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく、速いレンダリング」に集中します。
 

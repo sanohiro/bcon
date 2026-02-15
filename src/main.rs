@@ -24,6 +24,7 @@ mod terminal;
 
 use anyhow::{anyhow, Context, Result};
 use log::{info, trace};
+use glow::HasContext;
 use std::time::Duration;
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
@@ -57,13 +58,9 @@ fn is_transition_char(ch: char) -> bool {
     matches!(cp,
         // Powerline symbols: U+E0B0-U+E0D4 (arrows, rounded, etc.)
         0xE0B0..=0xE0D4 |
-        // Half blocks and other block elements used for UI transitions
-        0x2580 |        // ▀ upper half block
-        0x2584 |        // ▄ lower half block
-        0x258C |        // ▌ left half block
-        0x2590 |        // ▐ right half block
-        // Quarter blocks
-        0x2596..=0x259F
+        // Block elements: U+2580-U+259F
+        // Full block, half blocks, eighth blocks, quarter blocks
+        0x2580..=0x259F
     )
 }
 
@@ -840,7 +837,7 @@ fn save_screenshot(
 }
 
 fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     // Check command line arguments
     let args: Vec<String> = std::env::args().collect();
@@ -1906,8 +1903,9 @@ fn main() -> Result<()> {
             for mouse in &mouse_events {
                 match mouse {
                     input::MouseEvent::ButtonPress { button, x, y } => {
-                        let col = (*x / cell_w as f64) as usize;
-                        let row = (*y / cell_h as f64) as usize;
+                        // Account for terminal margin when converting to cell coordinates
+                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
 
                         // Ctrl+Left click: Copy URL to clipboard
                         if ctrl_pressed && *button == input::BTN_LEFT {
@@ -1988,8 +1986,9 @@ fn main() -> Result<()> {
                         needs_redraw = true;
                     }
                     input::MouseEvent::Move { x, y } => {
-                        let col = (*x / cell_w as f64) as usize;
-                        let row = (*y / cell_h as f64) as usize;
+                        // Account for terminal margin when converting to cell coordinates
+                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
 
                         // Send move event if mouse mode is enabled
                         if term.mouse_mode_enabled() {
@@ -2010,8 +2009,9 @@ fn main() -> Result<()> {
                         mouse_y = *y;
                     }
                     input::MouseEvent::ButtonRelease { button, x, y } => {
-                        let col = (*x / cell_w as f64) as usize;
-                        let row = (*y / cell_h as f64) as usize;
+                        // Account for terminal margin when converting to cell coordinates
+                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
 
                         // Send to PTY if mouse mode is enabled
                         if term.mouse_mode_enabled() {
@@ -2037,8 +2037,9 @@ fn main() -> Result<()> {
                         mouse_button_held = None;
                     }
                     input::MouseEvent::Scroll { delta, x, y } => {
-                        let col = (*x / cell_w as f64) as usize;
-                        let row = (*y / cell_h as f64) as usize;
+                        // Account for terminal margin when converting to cell coordinates
+                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
 
                         // Send to PTY if ButtonEvent/AnyEvent + SGR is enabled
                         // Don't send wheel events in X10 mode
@@ -2699,8 +2700,11 @@ fn main() -> Result<()> {
                     if is_transition_char(first_char) {
                         let cell_pixel_w = cell.width as f32 * cell_w;
                         let is_powerline = (0xE0B0..=0xE0D4).contains(&cp);
-                        if is_powerline {
-                            // Draw per-cell background (Pass1 skipped), keeps powerline opaque and stable
+                        let is_block_element = (0x2580..=0x259F).contains(&cp);
+
+                        // Draw per-cell background for block elements (Pass1 skipped)
+                        // Block elements need explicit background to fill the "empty" portion
+                        if is_powerline || is_block_element {
                             text_renderer.push_rect(
                                 x,
                                 y,
@@ -2710,22 +2714,210 @@ fn main() -> Result<()> {
                                 &glyph_atlas,
                             );
                         }
+
                         // For transition characters: use programmatic draw or glyph fallback
+                        // Block elements helper - fractional heights and widths
+                        let eighth_h = cell_h / 8.0;
+                        let eighth_w = cell_pixel_w / 8.0;
+
                         match cp {
-                            // === Half-block characters - draw as rectangles for pixel-perfect rendering ===
+                            // === Block elements: U+2580-U+259F ===
+
+                            // Upper/Lower eighth blocks (vertical divisions)
                             0x2580 => {
-                                text_renderer.push_rect(x, y, cell_pixel_w, (cell_h / 2.0).ceil(), fg, &glyph_atlas);
+                                // ▀ Upper half block (4/8 from top)
+                                text_renderer.push_rect(x, y, cell_pixel_w, (4.0 * eighth_h).ceil(), fg, &glyph_atlas);
+                            }
+                            0x2581 => {
+                                // ▁ Lower one eighth block
+                                let h = eighth_h.ceil();
+                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                            }
+                            0x2582 => {
+                                // ▂ Lower one quarter block (2/8)
+                                let h = (2.0 * eighth_h).ceil();
+                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                            }
+                            0x2583 => {
+                                // ▃ Lower three eighths block
+                                let h = (3.0 * eighth_h).ceil();
+                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
                             }
                             0x2584 => {
-                                let half = (cell_h / 2.0).floor();
-                                text_renderer.push_rect(x, y + half, cell_pixel_w, cell_h - half, fg, &glyph_atlas);
+                                // ▄ Lower half block (4/8)
+                                let h = (4.0 * eighth_h).ceil();
+                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                            }
+                            0x2585 => {
+                                // ▅ Lower five eighths block
+                                let h = (5.0 * eighth_h).ceil();
+                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                            }
+                            0x2586 => {
+                                // ▆ Lower three quarters block (6/8)
+                                let h = (6.0 * eighth_h).ceil();
+                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                            }
+                            0x2587 => {
+                                // ▇ Lower seven eighths block
+                                let h = (7.0 * eighth_h).ceil();
+                                text_renderer.push_rect(x, y + cell_h - h, cell_pixel_w, h, fg, &glyph_atlas);
+                            }
+                            0x2588 => {
+                                // █ Full block (8/8)
+                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, fg, &glyph_atlas);
+                            }
+
+                            // Left/Right eighth blocks (horizontal divisions)
+                            0x2589 => {
+                                // ▉ Left seven eighths block
+                                let w = (7.0 * eighth_w).ceil();
+                                text_renderer.push_rect(x, y, w, cell_h, fg, &glyph_atlas);
+                            }
+                            0x258A => {
+                                // ▊ Left three quarters block (6/8)
+                                let w = (6.0 * eighth_w).ceil();
+                                text_renderer.push_rect(x, y, w, cell_h, fg, &glyph_atlas);
+                            }
+                            0x258B => {
+                                // ▋ Left five eighths block
+                                let w = (5.0 * eighth_w).ceil();
+                                text_renderer.push_rect(x, y, w, cell_h, fg, &glyph_atlas);
                             }
                             0x258C => {
-                                text_renderer.push_rect(x, y, (cell_pixel_w / 2.0).ceil(), cell_h, fg, &glyph_atlas);
+                                // ▌ Left half block (4/8)
+                                let w = (4.0 * eighth_w).ceil();
+                                text_renderer.push_rect(x, y, w, cell_h, fg, &glyph_atlas);
+                            }
+                            0x258D => {
+                                // ▍ Left three eighths block
+                                let w = (3.0 * eighth_w).ceil();
+                                text_renderer.push_rect(x, y, w, cell_h, fg, &glyph_atlas);
+                            }
+                            0x258E => {
+                                // ▎ Left one quarter block (2/8)
+                                let w = (2.0 * eighth_w).ceil();
+                                text_renderer.push_rect(x, y, w, cell_h, fg, &glyph_atlas);
+                            }
+                            0x258F => {
+                                // ▏ Left one eighth block
+                                let w = eighth_w.ceil();
+                                text_renderer.push_rect(x, y, w, cell_h, fg, &glyph_atlas);
                             }
                             0x2590 => {
-                                let half = (cell_pixel_w / 2.0).floor();
-                                text_renderer.push_rect(x + half, y, cell_pixel_w - half, cell_h, fg, &glyph_atlas);
+                                // ▐ Right half block (4/8 from right)
+                                let w = (4.0 * eighth_w).floor();
+                                text_renderer.push_rect(x + cell_pixel_w - w, y, w, cell_h, fg, &glyph_atlas);
+                            }
+
+                            // Shade blocks
+                            0x2591 => {
+                                // ░ Light shade (25%) - draw with reduced alpha
+                                let shade_fg = [fg[0], fg[1], fg[2], 0.25];
+                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, shade_fg, &glyph_atlas);
+                            }
+                            0x2592 => {
+                                // ▒ Medium shade (50%)
+                                let shade_fg = [fg[0], fg[1], fg[2], 0.50];
+                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, shade_fg, &glyph_atlas);
+                            }
+                            0x2593 => {
+                                // ▓ Dark shade (75%)
+                                let shade_fg = [fg[0], fg[1], fg[2], 0.75];
+                                text_renderer.push_rect(x, y, cell_pixel_w, cell_h, shade_fg, &glyph_atlas);
+                            }
+
+                            // Upper and right one eighth blocks
+                            0x2594 => {
+                                // ▔ Upper one eighth block
+                                let h = eighth_h.ceil();
+                                text_renderer.push_rect(x, y, cell_pixel_w, h, fg, &glyph_atlas);
+                            }
+                            0x2595 => {
+                                // ▕ Right one eighth block
+                                let w = eighth_w.ceil();
+                                text_renderer.push_rect(x + cell_pixel_w - w, y, w, cell_h, fg, &glyph_atlas);
+                            }
+
+                            // Quarter blocks (quadrants)
+                            0x2596 => {
+                                // ▖ Quadrant lower left
+                                let hw = (cell_pixel_w / 2.0).ceil();
+                                let hh = (cell_h / 2.0).ceil();
+                                text_renderer.push_rect(x, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                            }
+                            0x2597 => {
+                                // ▗ Quadrant lower right
+                                let hw = (cell_pixel_w / 2.0).floor();
+                                let hh = (cell_h / 2.0).ceil();
+                                text_renderer.push_rect(x + cell_pixel_w - hw, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                            }
+                            0x2598 => {
+                                // ▘ Quadrant upper left
+                                let hw = (cell_pixel_w / 2.0).ceil();
+                                let hh = (cell_h / 2.0).ceil();
+                                text_renderer.push_rect(x, y, hw, hh, fg, &glyph_atlas);
+                            }
+                            0x2599 => {
+                                // ▙ Quadrant upper left and lower left and lower right
+                                let hw = (cell_pixel_w / 2.0).ceil();
+                                let hh = (cell_h / 2.0).ceil();
+                                // Upper left
+                                text_renderer.push_rect(x, y, hw, hh, fg, &glyph_atlas);
+                                // Lower half
+                                text_renderer.push_rect(x, y + cell_h - hh, cell_pixel_w, hh, fg, &glyph_atlas);
+                            }
+                            0x259A => {
+                                // ▚ Quadrant upper left and lower right (diagonal)
+                                let hw = (cell_pixel_w / 2.0).ceil();
+                                let hh = (cell_h / 2.0).ceil();
+                                // Upper left
+                                text_renderer.push_rect(x, y, hw, hh, fg, &glyph_atlas);
+                                // Lower right
+                                text_renderer.push_rect(x + cell_pixel_w - (cell_pixel_w / 2.0).floor(), y + cell_h - hh, (cell_pixel_w / 2.0).floor(), hh, fg, &glyph_atlas);
+                            }
+                            0x259B => {
+                                // ▛ Quadrant upper left and upper right and lower left
+                                let hw = (cell_pixel_w / 2.0).ceil();
+                                let hh = (cell_h / 2.0).ceil();
+                                // Upper half
+                                text_renderer.push_rect(x, y, cell_pixel_w, hh, fg, &glyph_atlas);
+                                // Lower left
+                                text_renderer.push_rect(x, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                            }
+                            0x259C => {
+                                // ▜ Quadrant upper left and upper right and lower right
+                                let hw = (cell_pixel_w / 2.0).floor();
+                                let hh = (cell_h / 2.0).ceil();
+                                // Upper half
+                                text_renderer.push_rect(x, y, cell_pixel_w, hh, fg, &glyph_atlas);
+                                // Lower right
+                                text_renderer.push_rect(x + cell_pixel_w - hw, y + cell_h - hh, hw, hh, fg, &glyph_atlas);
+                            }
+                            0x259D => {
+                                // ▝ Quadrant upper right
+                                let hw = (cell_pixel_w / 2.0).floor();
+                                let hh = (cell_h / 2.0).ceil();
+                                text_renderer.push_rect(x + cell_pixel_w - hw, y, hw, hh, fg, &glyph_atlas);
+                            }
+                            0x259E => {
+                                // ▞ Quadrant upper right and lower left (diagonal)
+                                let hw_ceil = (cell_pixel_w / 2.0).ceil();
+                                let hw_floor = (cell_pixel_w / 2.0).floor();
+                                let hh = (cell_h / 2.0).ceil();
+                                // Upper right
+                                text_renderer.push_rect(x + cell_pixel_w - hw_floor, y, hw_floor, hh, fg, &glyph_atlas);
+                                // Lower left
+                                text_renderer.push_rect(x, y + cell_h - hh, hw_ceil, hh, fg, &glyph_atlas);
+                            }
+                            0x259F => {
+                                // ▟ Quadrant upper right and lower left and lower right
+                                let hw = (cell_pixel_w / 2.0).floor();
+                                let hh = (cell_h / 2.0).ceil();
+                                // Upper right
+                                text_renderer.push_rect(x + cell_pixel_w - hw, y, hw, hh, fg, &glyph_atlas);
+                                // Lower half
+                                text_renderer.push_rect(x, y + cell_h - hh, cell_pixel_w, hh, fg, &glyph_atlas);
                             }
                             // Powerline: draw programmatically with smoothstep AA
                             // E0B0/E0B2: solid separators
@@ -2741,7 +2933,7 @@ fn main() -> Result<()> {
                             0xE0B5 => draw_powerline_semicircle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, true),
                             0xE0B7 => draw_powerline_semicircle_outline(x, y, cell_w, cell_h, fg, bg, &glyph_atlas, &mut text_renderer, false),
                             _ => {
-                                // Fallback for unhandled transition chars (quarter blocks, powerline variants, etc.)
+                                // Fallback for unhandled transition chars (powerline variants, etc.)
                                 // Apply LCD compositing with actual cell background
                                 glyph_atlas.ensure_glyph(first_char);
                                 let baseline_y = (y + ascent).round();
@@ -3365,19 +3557,123 @@ fn main() -> Result<()> {
                     // Display at end of preedit when composing
                     let cursor_x = margin_x + (grid.cursor_col + preedit_total_cols) as f32 * cell_w;
                     let cursor_y = margin_y + grid.cursor_row as f32 * cell_h;
-                    let cursor_color = [config_cursor.0, config_cursor.1, config_cursor.2, config_cursor_opacity];
+                    let mut cursor_rgb = [config_cursor.0, config_cursor.1, config_cursor.2];
+                    let cursor_row = grid.cursor_row;
+                    let cursor_col = grid.cursor_col;
 
                     // Draw according to cursor style
+                    // Compute actual background under cursor (selection/search/inverse)
+                    let cell = grid.cell(cursor_row, cursor_col);
+                    let is_inverse = cell.attrs.contains(terminal::grid::CellAttrs::INVERSE);
+                    let mut bg_rgba = if is_inverse {
+                        effective_fg(&cell.fg)
+                    } else {
+                        effective_bg(&cell.bg)
+                    };
+
+                    if let Some((sel_start, sel_end)) =
+                        term.selection.as_ref().and_then(|s| s.cols_for_row(cursor_row, grid.cols()))
+                    {
+                        if cursor_col >= sel_start && cursor_col < sel_end {
+                            let a = selection_alpha;
+                            bg_rgba[0] = selection_color[0] * a + bg_rgba[0] * (1.0 - a);
+                            bg_rgba[1] = selection_color[1] * a + bg_rgba[1] * (1.0 - a);
+                            bg_rgba[2] = selection_color[2] * a + bg_rgba[2] * (1.0 - a);
+                        }
+                    }
+
+                    if search_mode {
+                        let current_match_idx = term.current_search_match();
+                        for &(start_col, end_col, match_idx) in term.get_search_matches_for_display_row(cursor_row) {
+                            if cursor_col >= start_col && cursor_col < end_col.min(grid.cols()) {
+                                let is_current = current_match_idx == Some(match_idx);
+                                let hl_color = if is_current {
+                                    [1.0, 0.6, 0.0, 0.5]
+                                } else {
+                                    [1.0, 1.0, 0.0, 0.3]
+                                };
+                                let a = hl_color[3];
+                                bg_rgba[0] = hl_color[0] * a + bg_rgba[0] * (1.0 - a);
+                                bg_rgba[1] = hl_color[1] * a + bg_rgba[1] * (1.0 - a);
+                                bg_rgba[2] = hl_color[2] * a + bg_rgba[2] * (1.0 - a);
+                                break;
+                            }
+                        }
+                    }
+
+                    let cell_bg = [bg_rgba[0], bg_rgba[1], bg_rgba[2]];
+
+                    // Ensure cursor is visible against light/dark backgrounds
+                    let bg_luma = 0.2126 * cell_bg[0] + 0.7152 * cell_bg[1] + 0.0722 * cell_bg[2];
+                    let cur_luma = 0.2126 * cursor_rgb[0] + 0.7152 * cursor_rgb[1] + 0.0722 * cursor_rgb[2];
+                    if (cur_luma - bg_luma).abs() < 0.25 {
+                        cursor_rgb = if bg_luma > 0.5 { [0.0, 0.0, 0.0] } else { [1.0, 1.0, 1.0] };
+                    }
+                    let cursor_color = [cursor_rgb[0], cursor_rgb[1], cursor_rgb[2], config_cursor_opacity];
+
                     match grid.cursor.style {
                         terminal::grid::CursorStyle::Block => {
+                            // First, draw cursor rectangle
+                            let cursor_bg = [
+                                cursor_color[0] * cursor_color[3] + cell_bg[0] * (1.0 - cursor_color[3]),
+                                cursor_color[1] * cursor_color[3] + cell_bg[1] * (1.0 - cursor_color[3]),
+                                cursor_color[2] * cursor_color[3] + cell_bg[2] * (1.0 - cursor_color[3]),
+                            ];
                             text_renderer.push_rect(
                                 cursor_x,
                                 cursor_y,
                                 cell_w,
                                 cell_h,
-                                cursor_color,
+                                [cursor_bg[0], cursor_bg[1], cursor_bg[2], 1.0],
                                 &glyph_atlas,
                             );
+                            // Flush cursor rectangle first to ensure it's below the text
+                            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+                            text_renderer.begin();
+
+                            // Draw character under cursor in inverted color
+                            // (only when not in preedit mode)
+                            if preedit_total_cols == 0 {
+                                let cell = grid.cell(cursor_row, cursor_col);
+                                let ch = cell.grapheme.chars().next().unwrap_or(' ');
+                                if ch != ' ' {
+                                    // Choose text color based on cursor luminance (black for light cursor, white for dark)
+                                    // Prefer original cell foreground; if contrast is too low, invert to cell_bg
+                                    let cell_fg = if is_inverse {
+                                        effective_bg(&cell.bg)
+                                    } else {
+                                        effective_fg(&cell.fg)
+                                    };
+                                    let fg_luma = 0.2126 * cell_fg[0] + 0.7152 * cell_fg[1] + 0.0722 * cell_fg[2];
+                                    let bg_luma = 0.2126 * cursor_bg[0] + 0.7152 * cursor_bg[1] + 0.0722 * cursor_bg[2];
+                                    let contrast = (fg_luma - bg_luma).abs();
+                                    let text_color = if contrast < 0.35 {
+                                        [cell_bg[0], cell_bg[1], cell_bg[2], 1.0]
+                                    } else {
+                                        [cell_fg[0], cell_fg[1], cell_fg[2], 1.0]
+                                    };
+                                    let baseline_y = (cursor_y + glyph_atlas.ascent).round();
+                                    glyph_atlas.ensure_glyph(ch);
+                                    // Use lcd_disable=1.0 to avoid LCD artifacts on cursor
+                                    text_renderer.push_char_with_bg(ch, cursor_x, baseline_y, text_color, cursor_bg, 1.0, &glyph_atlas);
+
+                                    // Clip glyph to cursor cell to avoid bleeding outside the block
+                                    unsafe {
+                                        gl.enable(glow::SCISSOR_TEST);
+                                        let sx = cursor_x.floor() as i32;
+                                        let sy = cursor_y.floor() as i32;
+                                        let sw = cell_w.ceil() as i32;
+                                        let sh = cell_h.ceil() as i32;
+                                        let flipped_y = screen_h as i32 - sy - sh;
+                                        gl.scissor(sx, flipped_y, sw, sh);
+                                    }
+                                    text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+                                    unsafe {
+                                        gl.disable(glow::SCISSOR_TEST);
+                                    }
+                                    text_renderer.begin();
+                                }
+                            }
                         }
                         terminal::grid::CursorStyle::Underline => {
                             let underline_h = 2.0;
@@ -3414,13 +3710,33 @@ fn main() -> Result<()> {
             let mx = mouse_x as f32;
             let my = mouse_y as f32;
             text_renderer.begin();
-            // Crosshair style
+            // Crosshair style with outline for visibility on any background
+            let outline_color = [0.0, 0.0, 0.0, 0.9];
+            let fill_color = [1.0, 1.0, 1.0, 0.9];
+            // Black outline (1px larger on each side)
+            text_renderer.push_rect(
+                mx - cursor_size / 2.0 - 1.0,
+                my - 2.0,
+                cursor_size + 2.0,
+                4.0,
+                outline_color,
+                &glyph_atlas,
+            );
+            text_renderer.push_rect(
+                mx - 2.0,
+                my - cursor_size / 2.0 - 1.0,
+                4.0,
+                cursor_size + 2.0,
+                outline_color,
+                &glyph_atlas,
+            );
+            // White fill
             text_renderer.push_rect(
                 mx - cursor_size / 2.0,
                 my - 1.0,
                 cursor_size,
                 2.0,
-                [1.0, 1.0, 1.0, 0.9],
+                fill_color,
                 &glyph_atlas,
             );
             text_renderer.push_rect(
@@ -3428,7 +3744,7 @@ fn main() -> Result<()> {
                 my - cursor_size / 2.0,
                 2.0,
                 cursor_size,
-                [1.0, 1.0, 1.0, 0.9],
+                fill_color,
                 &glyph_atlas,
             );
             text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);

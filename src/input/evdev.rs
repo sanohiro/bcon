@@ -21,11 +21,11 @@ use xkbcommon::xkb;
 use xkbcommon::xkb::keysyms;
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
+use crate::session::SeatSession;
+#[cfg(all(target_os = "linux", feature = "seatd"))]
 use std::cell::RefCell;
 #[cfg(all(target_os = "linux", feature = "seatd"))]
 use std::rc::Rc;
-#[cfg(all(target_os = "linux", feature = "seatd"))]
-use crate::session::SeatSession;
 
 use crate::config::KeyboardInputConfig;
 
@@ -161,14 +161,18 @@ impl EvdevKeyboard {
     /// Scan /dev/input/event* and add devices to libinput.
     /// Set up keymap with xkbcommon.
     /// screen_width/height used for mouse coordinate clamping.
-    pub fn new(screen_width: u32, screen_height: u32, kb_config: &KeyboardInputConfig) -> Result<Self> {
+    pub fn new(
+        screen_width: u32,
+        screen_height: u32,
+        kb_config: &KeyboardInputConfig,
+    ) -> Result<Self> {
         // Create libinput context
         let mut input = Libinput::new_from_path(InputInterface);
 
         // Scan and add devices from /dev/input/event*
         let mut device_count = 0;
-        for entry in std::fs::read_dir("/dev/input")
-            .map_err(|e| anyhow!("Cannot scan /dev/input: {}", e))?
+        for entry in
+            std::fs::read_dir("/dev/input").map_err(|e| anyhow!("Cannot scan /dev/input: {}", e))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -205,11 +209,27 @@ impl EvdevKeyboard {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
 
         // Use config values or empty string for default
-        let rules = "";  // Always use default rules
-        let model = if kb_config.xkb_model.is_empty() { "" } else { &kb_config.xkb_model };
-        let layout = if kb_config.xkb_layout.is_empty() { "" } else { &kb_config.xkb_layout };
-        let variant = if kb_config.xkb_variant.is_empty() { "" } else { &kb_config.xkb_variant };
-        let options = if kb_config.xkb_options.is_empty() { None } else { Some(kb_config.xkb_options.clone()) };
+        let rules = ""; // Always use default rules
+        let model = if kb_config.xkb_model.is_empty() {
+            ""
+        } else {
+            &kb_config.xkb_model
+        };
+        let layout = if kb_config.xkb_layout.is_empty() {
+            ""
+        } else {
+            &kb_config.xkb_layout
+        };
+        let variant = if kb_config.xkb_variant.is_empty() {
+            ""
+        } else {
+            &kb_config.xkb_variant
+        };
+        let options = if kb_config.xkb_options.is_empty() {
+            None
+        } else {
+            Some(kb_config.xkb_options.clone())
+        };
         let options_for_error = options.clone();
 
         let keymap = xkb::Keymap::new_from_names(
@@ -221,14 +241,24 @@ impl EvdevKeyboard {
             options,
             xkb::COMPILE_NO_FLAGS,
         )
-        .ok_or_else(|| anyhow!("Failed to create xkb keymap (model={}, layout={}, variant={}, options={:?})",
-            model, layout, variant, options_for_error))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "Failed to create xkb keymap (model={}, layout={}, variant={}, options={:?})",
+                model,
+                layout,
+                variant,
+                options_for_error
+            )
+        })?;
 
         let xkb_state = xkb::State::new(&keymap);
 
-        info!("evdev keyboard initialized (layout={}, repeat_delay={}ms, repeat_rate={}ms)",
+        info!(
+            "evdev keyboard initialized (layout={}, repeat_delay={}ms, repeat_rate={}ms)",
             if layout.is_empty() { "default" } else { layout },
-            kb_config.repeat_delay, kb_config.repeat_rate);
+            kb_config.repeat_delay,
+            kb_config.repeat_rate
+        );
 
         Ok(Self {
             input,
@@ -266,8 +296,8 @@ impl EvdevKeyboard {
 
         // Scan and add devices from /dev/input/event*
         let mut device_count = 0;
-        for entry in std::fs::read_dir("/dev/input")
-            .map_err(|e| anyhow!("Cannot scan /dev/input: {}", e))?
+        for entry in
+            std::fs::read_dir("/dev/input").map_err(|e| anyhow!("Cannot scan /dev/input: {}", e))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -304,11 +334,27 @@ impl EvdevKeyboard {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
 
         // Use config values or empty string for default
-        let rules = "";  // Always use default rules
-        let model = if kb_config.xkb_model.is_empty() { "" } else { &kb_config.xkb_model };
-        let layout = if kb_config.xkb_layout.is_empty() { "" } else { &kb_config.xkb_layout };
-        let variant = if kb_config.xkb_variant.is_empty() { "" } else { &kb_config.xkb_variant };
-        let options = if kb_config.xkb_options.is_empty() { None } else { Some(kb_config.xkb_options.clone()) };
+        let rules = ""; // Always use default rules
+        let model = if kb_config.xkb_model.is_empty() {
+            ""
+        } else {
+            &kb_config.xkb_model
+        };
+        let layout = if kb_config.xkb_layout.is_empty() {
+            ""
+        } else {
+            &kb_config.xkb_layout
+        };
+        let variant = if kb_config.xkb_variant.is_empty() {
+            ""
+        } else {
+            &kb_config.xkb_variant
+        };
+        let options = if kb_config.xkb_options.is_empty() {
+            None
+        } else {
+            Some(kb_config.xkb_options.clone())
+        };
         let options_for_error = options.clone();
 
         let keymap = xkb::Keymap::new_from_names(
@@ -320,8 +366,15 @@ impl EvdevKeyboard {
             options,
             xkb::COMPILE_NO_FLAGS,
         )
-        .ok_or_else(|| anyhow!("Failed to create xkb keymap (model={}, layout={}, variant={}, options={:?})",
-            model, layout, variant, options_for_error))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "Failed to create xkb keymap (model={}, layout={}, variant={}, options={:?})",
+                model,
+                layout,
+                variant,
+                options_for_error
+            )
+        })?;
 
         let xkb_state = xkb::State::new(&keymap);
 
@@ -475,7 +528,8 @@ impl EvdevKeyboard {
                         if key_state == KeyState::Pressed {
                             if !is_modifier {
                                 let now = Instant::now();
-                                let first_repeat = now + Duration::from_millis(self.repeat_delay_ms);
+                                let first_repeat =
+                                    now + Duration::from_millis(self.repeat_delay_ms);
                                 self.held_keys
                                     .insert(evdev_code, (now, first_repeat, raw_event.clone()));
                             }
@@ -898,58 +952,120 @@ fn encode_function_key(raw: u32, has_mods: bool, mod_code: u8) -> Option<Vec<u8>
 
 /// Kitty keyboard protocol encoding (CSI u format)
 /// all_keys: if true (flags & 8), report all keys including plain letters
-fn encode_kitty_keyboard(raw: u32, ctrl: bool, alt: bool, shift: bool, all_keys: bool, utf8_input: &str) -> Option<Vec<u8>> {
-    // Basic keycode mapping
-    let unicode = match raw {
-        _ if raw == keysyms::KEY_Escape => Some(27),
+///
+/// Flag 1 (disambiguate) affects:
+/// - Escape key (always CSI u)
+/// - Ctrl+key, Alt+key, Ctrl+Alt+key, Shift+Alt+key combinations
+/// - Enter/Tab/Backspace only WITH modifiers (without modifiers, keep legacy for shell compat)
+///
+/// Flag 8 (all keys) affects:
+/// - All keys including functional keys (arrows, F-keys) and plain text
+fn encode_kitty_keyboard(
+    raw: u32,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    all_keys: bool,
+    utf8_input: &str,
+) -> Option<Vec<u8>> {
+    let mod_code = modifier_code(ctrl, alt, shift);
+    let has_mods = mod_code > 1;
+    // Disambiguate mode triggers on: Ctrl, Alt, or Ctrl+Alt (Shift alone doesn't count)
+    let disambiguate_mods = ctrl || alt;
+
+    // === Escape key: always CSI u in disambiguate mode ===
+    if raw == keysyms::KEY_Escape {
+        if has_mods {
+            return Some(format!("\x1b[27;{}u", mod_code).into_bytes());
+        } else {
+            return Some(b"\x1b[27u".to_vec());
+        }
+    }
+
+    // === Enter, Tab, Backspace: CSI u only with modifiers ===
+    // Without modifiers, return None to use legacy encoding (shell compatibility)
+    let legacy_key_code = match raw {
         _ if raw == keysyms::KEY_Return || raw == keysyms::KEY_KP_Enter => Some(13),
         _ if raw == keysyms::KEY_Tab => Some(9),
         _ if raw == keysyms::KEY_BackSpace => Some(127),
-        _ if raw == keysyms::KEY_Up => Some(57352),      // KITTY_KEY_UP
-        _ if raw == keysyms::KEY_Down => Some(57353),    // KITTY_KEY_DOWN
-        _ if raw == keysyms::KEY_Left => Some(57351),    // KITTY_KEY_LEFT
-        _ if raw == keysyms::KEY_Right => Some(57350),   // KITTY_KEY_RIGHT
-        _ if raw == keysyms::KEY_Home => Some(57345),    // KITTY_KEY_HOME
-        _ if raw == keysyms::KEY_End => Some(57346),     // KITTY_KEY_END
-        _ if raw == keysyms::KEY_Insert => Some(57348),  // KITTY_KEY_INSERT
-        _ if raw == keysyms::KEY_Delete => Some(57349),  // KITTY_KEY_DELETE
-        _ if raw == keysyms::KEY_Page_Up => Some(57354), // KITTY_KEY_PAGE_UP
-        _ if raw == keysyms::KEY_Page_Down => Some(57355), // KITTY_KEY_PAGE_DOWN
-        _ if raw == keysyms::KEY_F1 => Some(57364),
-        _ if raw == keysyms::KEY_F2 => Some(57365),
-        _ if raw == keysyms::KEY_F3 => Some(57366),
-        _ if raw == keysyms::KEY_F4 => Some(57367),
-        _ if raw == keysyms::KEY_F5 => Some(57368),
-        _ if raw == keysyms::KEY_F6 => Some(57369),
-        _ if raw == keysyms::KEY_F7 => Some(57370),
-        _ if raw == keysyms::KEY_F8 => Some(57371),
-        _ if raw == keysyms::KEY_F9 => Some(57372),
-        _ if raw == keysyms::KEY_F10 => Some(57373),
-        _ if raw == keysyms::KEY_F11 => Some(57374),
-        _ if raw == keysyms::KEY_F12 => Some(57375),
-        _ => {
-            // Normal Unicode characters
-            utf8_input.chars().next().map(|c| c as u32)
-        }
+        _ => None,
     };
 
-    let code = unicode?;
-    let mod_code = modifier_code(ctrl, alt, shift);
-
-    // For normal printable characters without modifiers:
-    // - If all_keys mode: encode as CSI u
-    // - Otherwise: return None to use normal character output
-    if mod_code == 1 && code < 57345 {
-        if all_keys {
+    if let Some(code) = legacy_key_code {
+        if has_mods {
+            return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+        } else if all_keys {
+            // all_keys mode: encode everything
             return Some(format!("\x1b[{}u", code).into_bytes());
         }
+        // No modifiers and not all_keys: use legacy encoding
         return None;
     }
 
-    // CSI {code};{mod}u format
-    if mod_code > 1 {
-        Some(format!("\x1b[{};{}u", code, mod_code).into_bytes())
-    } else {
-        Some(format!("\x1b[{}u", code).into_bytes())
+    // === Ctrl+key, Alt+key combinations in disambiguate mode ===
+    // This is the key fix: Ctrl+A should be CSI 97;5u, not 0x01
+    if disambiguate_mods {
+        if let Some(ch) = utf8_input.chars().next() {
+            if ch.is_ascii_alphanumeric() || ch.is_ascii_punctuation() || ch == ' ' {
+                // Use lowercase codepoint for letters
+                let code = if ch.is_ascii_alphabetic() {
+                    ch.to_ascii_lowercase() as u32
+                } else {
+                    ch as u32
+                };
+                return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+            }
+        }
     }
+
+    // === Functional keys (only in all_keys mode) ===
+    // These have unambiguous legacy encodings (CSI A, CSI ~, etc.)
+    if all_keys {
+        let functional_code = match raw {
+            _ if raw == keysyms::KEY_Up => Some(57352), // KITTY_KEY_UP
+            _ if raw == keysyms::KEY_Down => Some(57353), // KITTY_KEY_DOWN
+            _ if raw == keysyms::KEY_Left => Some(57351), // KITTY_KEY_LEFT
+            _ if raw == keysyms::KEY_Right => Some(57350), // KITTY_KEY_RIGHT
+            _ if raw == keysyms::KEY_Home => Some(57345), // KITTY_KEY_HOME
+            _ if raw == keysyms::KEY_End => Some(57346), // KITTY_KEY_END
+            _ if raw == keysyms::KEY_Insert => Some(57348), // KITTY_KEY_INSERT
+            _ if raw == keysyms::KEY_Delete => Some(57349), // KITTY_KEY_DELETE
+            _ if raw == keysyms::KEY_Page_Up => Some(57354), // KITTY_KEY_PAGE_UP
+            _ if raw == keysyms::KEY_Page_Down => Some(57355), // KITTY_KEY_PAGE_DOWN
+            _ if raw == keysyms::KEY_F1 => Some(57364),
+            _ if raw == keysyms::KEY_F2 => Some(57365),
+            _ if raw == keysyms::KEY_F3 => Some(57366),
+            _ if raw == keysyms::KEY_F4 => Some(57367),
+            _ if raw == keysyms::KEY_F5 => Some(57368),
+            _ if raw == keysyms::KEY_F6 => Some(57369),
+            _ if raw == keysyms::KEY_F7 => Some(57370),
+            _ if raw == keysyms::KEY_F8 => Some(57371),
+            _ if raw == keysyms::KEY_F9 => Some(57372),
+            _ if raw == keysyms::KEY_F10 => Some(57373),
+            _ if raw == keysyms::KEY_F11 => Some(57374),
+            _ if raw == keysyms::KEY_F12 => Some(57375),
+            _ => None,
+        };
+
+        if let Some(code) = functional_code {
+            if has_mods {
+                return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+            } else {
+                return Some(format!("\x1b[{}u", code).into_bytes());
+            }
+        }
+
+        // Normal printable characters in all_keys mode
+        if let Some(ch) = utf8_input.chars().next() {
+            let code = ch as u32;
+            if has_mods {
+                return Some(format!("\x1b[{};{}u", code, mod_code).into_bytes());
+            } else {
+                return Some(format!("\x1b[{}u", code).into_bytes());
+            }
+        }
+    }
+
+    // Not handled by Kitty protocol - fall back to legacy encoding
+    None
 }
