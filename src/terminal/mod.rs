@@ -686,7 +686,7 @@ impl Terminal {
 
     /// Finish Kitty decode processing
     fn finish_kitty_decode(&mut self) {
-        use kitty::{make_response, KittyAction, KittyDecodeResult};
+        use kitty::{make_response, KittyAction};
 
         if let Some(decoder) = self.kitty_decoder.take() {
             let params = decoder.params();

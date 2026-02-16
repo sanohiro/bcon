@@ -24,7 +24,7 @@ mod terminal;
 
 use anyhow::{anyhow, Context, Result};
 use glow::HasContext;
-use log::{info, trace};
+use log::{info, trace, warn};
 use std::time::Duration;
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
