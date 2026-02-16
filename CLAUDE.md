@@ -212,12 +212,17 @@ Japanese is fine for:
 
 ## Release Checklist
 
-When releasing a new version:
+**IMPORTANT: Do NOT tag or push without explicit user instruction.**
+
+- Commits: OK to make
+- Version update in Cargo.toml: Ask user first
+- **Tag + Push: Wait for user's explicit "release" instruction**
+
+When releasing a new version (after user approval):
 1. Update version in `Cargo.toml`
-2. Update CHANGELOG / release notes
-3. Commit with message: `Release vX.Y.Z`
-4. Tag: `git tag vX.Y.Z`
-5. Push: `git push && git push --tags`
+2. Commit changes
+3. Tag: `git tag vX.Y.Z`
+4. Push: `git push && git push --tags`
 
 ## Testing
 
