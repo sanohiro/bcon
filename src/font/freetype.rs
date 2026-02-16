@@ -679,7 +679,8 @@ impl FtFont {
 
     /// Get line metrics
     pub fn line_metrics(&self) -> (f32, f32, f32) {
-        let size_metrics = self.face.size_metrics().unwrap();
+        let size_metrics = self.face.size_metrics()
+            .expect("FreeType size not set - call set_size() first");
         let ascender = (size_metrics.ascender >> 6) as f32;
         let descender = (size_metrics.descender >> 6) as f32;
         let height = (size_metrics.height >> 6) as f32;

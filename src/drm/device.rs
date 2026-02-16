@@ -235,7 +235,10 @@ impl Device {
         // Sort by priority (lower is better)
         connectors.sort_by_key(|(_, _, p)| *p);
 
-        let (handle, info, _) = connectors.into_iter().next().unwrap();
+        let (handle, info, _) = connectors
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Internal error: no connectors after filtering"))?;
         info!("Selected connector: {:?} ({:?})", handle, info.interface());
         Ok((handle, info))
     }
