@@ -426,16 +426,7 @@ impl VtSwitcher {
         let signal_fd = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
             .context("Failed to create signalfd")?;
 
-        // Activate our VT first
-        let ret = unsafe { libc::ioctl(tty_fd, VT_ACTIVATE, target_vt as libc::c_int) };
-        if ret < 0 {
-            warn!(
-                "VT_ACTIVATE failed: {} (continuing anyway)",
-                std::io::Error::last_os_error()
-            );
-        }
-
-        // Wait for VT to become active
+        // Wait for VT to become active (user switches with Ctrl+Alt+Fn)
         let ret = unsafe { libc::ioctl(tty_fd, VT_WAITACTIVE, target_vt as libc::c_int) };
         if ret < 0 {
             warn!(
