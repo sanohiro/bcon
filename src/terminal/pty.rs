@@ -27,7 +27,17 @@ impl Pty {
     /// Specify initial terminal size with `cols`, `rows`.
     /// `term_env` sets the TERM environment variable.
     pub fn spawn(cols: u16, rows: u16, term_env: &str) -> Result<Self> {
-        Self::spawn_with_pixels(cols, rows, 0, 0, term_env)
+        Self::spawn_with_pixels(cols, rows, 0, 0, term_env, &[])
+    }
+
+    /// Create PTY and spawn shell with extra environment variables
+    pub fn spawn_with_env(
+        cols: u16,
+        rows: u16,
+        term_env: &str,
+        extra_env: &[(&str, &str)],
+    ) -> Result<Self> {
+        Self::spawn_with_pixels(cols, rows, 0, 0, term_env, extra_env)
     }
 
     /// Create PTY and spawn shell (with pixel size)
@@ -35,12 +45,14 @@ impl Pty {
     /// Specify initial terminal size with `cols`, `rows`,
     /// and pixel size with `xpixel`, `ypixel`.
     /// `term_env` sets the TERM environment variable.
+    /// `extra_env` sets additional environment variables for the child process.
     pub fn spawn_with_pixels(
         cols: u16,
         rows: u16,
         xpixel: u16,
         ypixel: u16,
         term_env: &str,
+        extra_env: &[(&str, &str)],
     ) -> Result<Self> {
         let winsize = Winsize {
             ws_row: rows,
@@ -59,6 +71,11 @@ impl Pty {
                 // Child process: set environment variables and spawn shell
                 std::env::set_var("TERM", term_env);
                 std::env::set_var("COLORTERM", "truecolor");
+
+                // Set extra environment variables (e.g., DBUS_SESSION_BUS_ADDRESS for IME)
+                for (key, value) in extra_env {
+                    std::env::set_var(key, value);
+                }
 
                 // If running as root (uid=0), use /bin/login for authentication
                 // Otherwise, spawn user's shell directly

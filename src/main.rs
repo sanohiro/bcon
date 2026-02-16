@@ -593,6 +593,7 @@ OPTIONS:
     -V, --version           Print version information
     -t, --test              Test mode (verify build without DRM)
     --init-config[=PRESET]  Generate config file with optional preset
+    -f, --force             Overwrite config file without confirmation
     --test-shaper           Test font shaping (debug mode)
 
 PRESETS (for --init-config):
@@ -604,10 +605,11 @@ PRESETS (for --init-config):
     Combine presets with comma: --init-config=vim,jp
 
 EXAMPLES:
-    bcon                          Run bcon (requires TTY, not X11/Wayland)
-    bcon --init-config            Generate default config
-    bcon --init-config=vim,jp     Generate config with vim and japanese presets
-    sudo bcon                     Run with root privileges (required for DRM)
+    bcon                              Run bcon (requires TTY, not X11/Wayland)
+    bcon --init-config                Generate default config
+    bcon --init-config=vim,jp         Generate config with vim and japanese presets
+    bcon --init-config=vim,jp --force Overwrite existing config
+    sudo bcon                         Run with root privileges (required for DRM)
 
 CONFIG FILE:
     ~/.config/bcon/config.toml
@@ -893,11 +895,51 @@ fn main() -> Result<()> {
             "default"
         };
 
+        let force = args.iter().any(|a| a == "--force" || a == "-f");
+
+        // Check if config file already exists
+        if let Ok(config_path) = config::Config::get_config_path_for_preset(preset) {
+            if config_path.exists() && !force {
+                println!("Config file already exists: {}", config_path.display());
+                print!("Overwrite? [y/N]: ");
+                std::io::Write::flush(&mut std::io::stdout())?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                let input = input.trim().to_lowercase();
+
+                if input != "y" && input != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+        }
+
+        // Check if Nerd Font is installed (for yazi, lsd icons)
+        let nerd_font_found = config::detect_nerd_font_path().is_some();
+
+        if !nerd_font_found {
+            println!("Tip: For icon display (yazi, lsd, etc.), install Nerd Font first:");
+            println!();
+            println!("  sudo apt install fontconfig curl  # if not installed");
+            println!("  mkdir -p ~/.local/share/fonts");
+            println!("  cd ~/.local/share/fonts");
+            println!("  curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz");
+            println!("  tar xf Hack.tar.xz && rm Hack.tar.xz");
+            println!("  fc-cache -fv");
+            println!();
+            println!("Then re-run --init-config to auto-detect the font.");
+            println!();
+        }
+
         match config::Config::write_config_with_preset(preset) {
             Ok(path) => {
                 println!("Config file generated:");
                 println!("  Preset: {}", preset);
                 println!("  Path:   {}", path.display());
+                if nerd_font_found {
+                    println!("  Nerd Font: detected (symbols configured)");
+                }
                 println!();
                 println!("Available presets (combine with comma):");
                 println!("  default  - Standard keybinds (Ctrl+Shift+C/V, etc.)");
@@ -1208,11 +1250,51 @@ fn main() -> Result<()> {
     // Base font size (for reset)
     let base_font_size = font_size;
 
-    let mut term = terminal::Terminal::with_scrollback(
+    // Japanese IME support: start D-Bus session if ime_disabled_apps is configured
+    let extra_env: Vec<(String, String)> = if !cfg.terminal.ime_disabled_apps.is_empty() {
+        match std::process::Command::new("dbus-launch")
+            .arg("--sh-syntax")
+            .output()
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Parse: DBUS_SESSION_BUS_ADDRESS='unix:...';
+                let mut env = Vec::new();
+                for line in stdout.lines() {
+                    if let Some(pos) = line.find('=') {
+                        let key = &line[..pos];
+                        let value = line[pos + 1..]
+                            .trim_end_matches(';')
+                            .trim_matches('\'')
+                            .trim_matches('"');
+                        if key == "DBUS_SESSION_BUS_ADDRESS" || key == "DBUS_SESSION_BUS_PID" {
+                            info!("D-Bus session: {}={}", key, value);
+                            env.push((key.to_string(), value.to_string()));
+                        }
+                    }
+                }
+                env
+            }
+            Err(e) => {
+                warn!("Failed to run dbus-launch (IME may not work): {}", e);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    let extra_env_refs: Vec<(&str, &str)> = extra_env
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let mut term = terminal::Terminal::with_scrollback_env(
         grid_cols,
         grid_rows,
         cfg.terminal.scrollback_lines,
         &cfg.terminal.term_env,
+        &extra_env_refs,
     )
     .context("Failed to initialize terminal")?;
 

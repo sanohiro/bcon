@@ -79,22 +79,32 @@ Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく�
 
 ### 基本セットアップ
 
+日本語環境が必要な場合は [日本語環境セットアップ](#日本語環境セットアップ) を参照してください。
+
 ```bash
 # 1. bcon をインストール
 curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 sudo apt install bcon
 
-# 2. 設定ファイルを生成
-sudo bcon --init-config=system           # デフォルト
-sudo bcon --init-config=system,vim       # Vim ユーザー
-sudo bcon --init-config=system,emacs     # Emacs ユーザー
+# 2. (任意) Nerd Font をインストール (yazi, lsd 等のアイコン表示用)
+sudo apt install fontconfig curl  # 未インストールの場合
+mkdir -p ~/.local/share/fonts
+cd ~/.local/share/fonts
+curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+tar xf Hack.tar.xz && rm Hack.tar.xz
+fc-cache -fv
 
-# 3. systemd サービスを有効化 (tty2)
+# 3. 設定ファイルを生成 (Nerd Font があれば自動検出)
+sudo bcon --init-config=system           # デフォルトキーバインド
+sudo bcon --init-config=system,vim       # Vim 風キーバインド
+sudo bcon --init-config=system,emacs     # Emacs 風キーバインド
+
+# 4. systemd サービスを有効化 (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# 4. bcon に切り替え
+# 5. bcon に切り替え
 # Ctrl+Alt+F2
 ```
 
@@ -110,23 +120,42 @@ sudo apt install bcon fonts-noto-cjk fonts-noto-color-emoji
 # bcon は X11/Wayland を使わないため GUI は不要。--no-install-recommends で最小構成に。
 sudo apt install --no-install-recommends fcitx5 fcitx5-mozc
 
-# 2. fcitx5 自動起動を設定
+# 2. (任意) Nerd Font をインストール (yazi, lsd 等のアイコン表示用)
+sudo apt install fontconfig curl  # 未インストールの場合
+mkdir -p ~/.local/share/fonts
+cd ~/.local/share/fonts
+curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+tar xf Hack.tar.xz && rm Hack.tar.xz
+fc-cache -fv
+
+# 3. fcitx5 自動起動を設定
 echo 'fcitx5 -d &>/dev/null' >> ~/.bashrc
 # または ~/.zshrc
 
-# 3. 設定ファイルを生成 (日本語プリセット)
-sudo bcon --init-config=system,vim,jp    # Vim ユーザー
-sudo bcon --init-config=system,emacs,jp  # Emacs ユーザー
+# 4. 設定ファイルを生成 (Nerd Font があれば自動検出)
+sudo bcon --init-config=system,jp        # デフォルトキーバインド
+sudo bcon --init-config=system,vim,jp    # Vim 風キーバインド
+sudo bcon --init-config=system,emacs,jp  # Emacs 風キーバインド
 
-# 4. systemd サービスを有効化 (tty2)
+# 5. systemd サービスを有効化 (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# 5. bcon に切り替え
+# 6. bcon に切り替え
 # Ctrl+Alt+F2
 
 # IME 切り替え: Ctrl+Space (fcitx5 デフォルト)
+```
+
+**Emacs ユーザー向け:** Ctrl+Space は `set-mark-command` (C-SPC) とバッティングします。Super(Win)+Space に変更する場合:
+
+```bash
+mkdir -p ~/.config/fcitx5
+cat >> ~/.config/fcitx5/config << 'EOF'
+[Hotkey/TriggerKeys]
+0=Super+space
+EOF
 ```
 
 ### ユーザー権限で起動 (sudo 不要)
@@ -201,20 +230,53 @@ auto_switch = true           # ホットプラグ時に自動切り替え
 screenshot_dir = "~/Pictures"
 ```
 
+### Nerd Fonts (アイコン表示)
+
+**yazi**, **ranger**, **lsd**, **eza**, **fish** などでアイコンを表示するには Nerd Font が必要:
+
+```bash
+# Hack Nerd Font をダウンロード・インストール
+mkdir -p ~/.local/share/fonts
+cd ~/.local/share/fonts
+curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+tar xf Hack.tar.xz
+rm Hack.tar.xz
+fc-cache -fv
+```
+
+`config.toml` で設定:
+
+```toml
+[font]
+symbols = "~/.local/share/fonts/HackNerdFontMono-Regular.ttf"
+```
+
+`symbols` フォントは Powerline グリフ (U+E000-U+F8FF) や Nerd Font アイコンのフォールバックとして使用されます。指定しない場合は main フォントがすべてに使用されます。
+
+注: Powerline 矢印グリフ (E0B0-E0B7) はフォントに関係なくプログラムでピクセルパーフェクトに描画されます。
+
 ### キーバインド
 
-| アクション | デフォルト | 説明 |
-|-----------|-----------|------|
-| コピー | `Ctrl+Shift+C` | 選択をクリップボードにコピー |
-| ペースト | `Ctrl+Shift+V` | クリップボードからペースト |
-| スクリーンショット | `PrintScreen` | PNG でスクリーンショット保存 |
-| 検索 | `Ctrl+Shift+F` | スクロールバック内検索 |
-| コピーモード | `Ctrl+Shift+Space` | Vim ライクコピーモード開始 |
-| フォント拡大 | `Ctrl+Plus` | フォントサイズ拡大 |
-| フォント縮小 | `Ctrl+Minus` | フォントサイズ縮小 |
-| フォントリセット | `Ctrl+0` | フォントサイズリセット |
-| スクロールアップ | `Shift+PageUp` | 上にスクロール |
-| スクロールダウン | `Shift+PageDown` | 下にスクロール |
+| アクション | デフォルト | Vim | Emacs | 説明 |
+|-----------|-----------|-----|-------|------|
+| コピー | `Ctrl+Shift+C` | 同左 | `Ctrl+Shift+W` | 選択をクリップボードにコピー |
+| ペースト | `Ctrl+Shift+V` | 同左 | `Ctrl+Shift+Y` | クリップボードからペースト |
+| スクリーンショット | `PrintScreen` | 同左 | 同左 | PNG でスクリーンショット保存 |
+| 検索 | `Ctrl+Shift+F` | 同左 | `Ctrl+Shift+S` | スクロールバック内検索 |
+| コピーモード | `Ctrl+Shift+Space` | 同左 | `Ctrl+Shift+M` | Vim ライクコピーモード開始 |
+| フォント拡大 | `Ctrl+Plus` | 同左 | 同左 | フォントサイズ拡大 |
+| フォント縮小 | `Ctrl+Minus` | 同左 | 同左 | フォントサイズ縮小 |
+| フォントリセット | `Ctrl+0` | 同左 | 同左 | フォントサイズリセット |
+| スクロールアップ | `Shift+PageUp` | `Ctrl+Shift+U` | `Alt+Shift+V` | 上にスクロール |
+| スクロールダウン | `Shift+PageDown` | `Ctrl+Shift+D` | `Alt+Shift+N` | 下にスクロール |
+
+1つのアクションに複数のキーを割り当て可能:
+
+```toml
+[keybinds]
+copy = ["ctrl+shift+c", "ctrl+insert"]
+paste = ["ctrl+shift+v", "shift+insert"]
+```
 
 ### コピーモードキー (Vim ライク)
 

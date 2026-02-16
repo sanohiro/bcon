@@ -424,8 +424,11 @@ impl GlyphAtlas {
             return;
         }
 
+        // Tofu character for missing glyphs
+        const TOFU: char = '\u{25A1}'; // □ WHITE SQUARE
+
         // Select source font for rasterization (rasterize at high resolution)
-        // Fallback chain: main -> symbols (Nerd Font) -> CJK
+        // Fallback chain: main -> symbols (Nerd Font) -> CJK -> tofu
         let (metrics, bitmap) = if self.font_main.lookup_glyph_index(ch) != 0 {
             self.font_main.rasterize(ch, self.render_size)
         } else if let Some(ref symbols_font) = self.font_symbols {
@@ -435,28 +438,46 @@ impl GlyphAtlas {
                 if cjk_font.lookup_glyph_index(ch) != 0 {
                     cjk_font.rasterize(ch, self.render_size)
                 } else {
-                    debug!("Glyph not found: U+{:04X} '{}'", ch as u32, ch);
+                    // Glyph not found - use tofu as fallback
+                    if ch != TOFU {
+                        self.ensure_glyph(TOFU);
+                        if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                            self.glyphs.insert(ch, tofu_info);
+                        }
+                    }
                     return;
                 }
             } else {
-                debug!(
-                    "Glyph not found (no CJK font): U+{:04X} '{}'",
-                    ch as u32, ch
-                );
+                // Glyph not found - use tofu as fallback
+                if ch != TOFU {
+                    self.ensure_glyph(TOFU);
+                    if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                        self.glyphs.insert(ch, tofu_info);
+                    }
+                }
                 return;
             }
         } else if let Some(ref cjk_font) = self.font_cjk {
             if cjk_font.lookup_glyph_index(ch) != 0 {
                 cjk_font.rasterize(ch, self.render_size)
             } else {
-                debug!("Glyph not found: U+{:04X} '{}'", ch as u32, ch);
+                // Glyph not found - use tofu as fallback
+                if ch != TOFU {
+                    self.ensure_glyph(TOFU);
+                    if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                        self.glyphs.insert(ch, tofu_info);
+                    }
+                }
                 return;
             }
         } else {
-            debug!(
-                "Glyph not found (no fallback font): U+{:04X} '{}'",
-                ch as u32, ch
-            );
+            // Glyph not found - use tofu as fallback
+            if ch != TOFU {
+                self.ensure_glyph(TOFU);
+                if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                    self.glyphs.insert(ch, tofu_info);
+                }
+            }
             return;
         };
 

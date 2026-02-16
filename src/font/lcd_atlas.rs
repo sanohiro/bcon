@@ -331,8 +331,11 @@ impl LcdGlyphAtlas {
 
     /// Ensure glyph for character
     /// Caches all 3 phases if subpixel phase is enabled
-    /// Fallback chain: main -> symbols (Nerd Font) -> CJK
+    /// Fallback chain: main -> symbols (Nerd Font) -> CJK -> tofu
     pub fn ensure_glyph(&mut self, ch: char) {
+        // Tofu character for missing glyphs
+        const TOFU: char = '\u{25A1}'; // □ WHITE SQUARE
+
         if ch <= ' ' {
             return;
         }
@@ -348,21 +351,46 @@ impl LcdGlyphAtlas {
                     if let Some(g) = cjk.rasterize(ch) {
                         g
                     } else {
-                        debug!("Glyph not found: U+{:04X}", ch as u32);
+                        // Glyph not found - use tofu as fallback
+                        if ch != TOFU {
+                            self.ensure_glyph(TOFU);
+                            if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                                self.glyphs.insert(ch, tofu_info);
+                            }
+                        }
                         return;
                     }
                 } else {
-                    debug!("Glyph not found: U+{:04X}", ch as u32);
+                    // Glyph not found - use tofu as fallback
+                    if ch != TOFU {
+                        self.ensure_glyph(TOFU);
+                        if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                            self.glyphs.insert(ch, tofu_info);
+                        }
+                    }
                     return;
                 }
             } else if let Some(ref cjk) = self.font_cjk {
                 if let Some(g) = cjk.rasterize(ch) {
                     g
                 } else {
-                    debug!("Glyph not found: U+{:04X}", ch as u32);
+                    // Glyph not found - use tofu as fallback
+                    if ch != TOFU {
+                        self.ensure_glyph(TOFU);
+                        if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                            self.glyphs.insert(ch, tofu_info);
+                        }
+                    }
                     return;
                 }
             } else {
+                // Glyph not found - use tofu as fallback
+                if ch != TOFU {
+                    self.ensure_glyph(TOFU);
+                    if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
+                        self.glyphs.insert(ch, tofu_info);
+                    }
+                }
                 return;
             };
 

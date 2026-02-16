@@ -81,22 +81,32 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 
 ### Basic Setup
 
+For Japanese environment, see [Japanese Environment Setup](#japanese-environment-setup) instead.
+
 ```bash
 # 1. Install bcon
 curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 sudo apt install bcon
 
-# 2. Generate config file
-sudo bcon --init-config=system           # Default
-sudo bcon --init-config=system,vim       # Vim users
-sudo bcon --init-config=system,emacs     # Emacs users
+# 2. (Optional) Install Nerd Font for icons (yazi, lsd, etc.)
+sudo apt install fontconfig curl  # if not already installed
+mkdir -p ~/.local/share/fonts
+cd ~/.local/share/fonts
+curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+tar xf Hack.tar.xz && rm Hack.tar.xz
+fc-cache -fv
 
-# 3. Enable systemd service (tty2)
+# 3. Generate config file (auto-detects Nerd Font if installed)
+sudo bcon --init-config=system           # Default keybinds
+sudo bcon --init-config=system,vim       # Vim-like keybinds
+sudo bcon --init-config=system,emacs     # Emacs-like keybinds
+
+# 4. Enable systemd service (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# 4. Switch to bcon
+# 5. Switch to bcon
 # Ctrl+Alt+F2
 ```
 
@@ -113,23 +123,42 @@ sudo apt install bcon fonts-noto-cjk fonts-noto-color-emoji
 # Use --no-install-recommends for minimal footprint.
 sudo apt install --no-install-recommends fcitx5 fcitx5-mozc
 
-# 2. Setup fcitx5 auto-start
+# 2. (Optional) Install Nerd Font for icons (yazi, lsd, etc.)
+sudo apt install fontconfig curl  # if not already installed
+mkdir -p ~/.local/share/fonts
+cd ~/.local/share/fonts
+curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+tar xf Hack.tar.xz && rm Hack.tar.xz
+fc-cache -fv
+
+# 3. Setup fcitx5 auto-start
 echo 'fcitx5 -d &>/dev/null' >> ~/.bashrc
 # or ~/.zshrc
 
-# 3. Generate config file (Japanese preset)
-sudo bcon --init-config=system,vim,jp    # Vim users
-sudo bcon --init-config=system,emacs,jp  # Emacs users
+# 4. Generate config file (auto-detects Nerd Font if installed)
+sudo bcon --init-config=system,jp        # Default keybinds
+sudo bcon --init-config=system,vim,jp    # Vim-like keybinds
+sudo bcon --init-config=system,emacs,jp  # Emacs-like keybinds
 
-# 4. Enable systemd service (tty2)
+# 5. Enable systemd service (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# 5. Switch to bcon
+# 6. Switch to bcon
 # Ctrl+Alt+F2
 
 # Toggle IME: Ctrl+Space (fcitx5 default)
+```
+
+**Emacs users:** Ctrl+Space conflicts with `set-mark-command` (C-SPC). To use Super(Win)+Space instead:
+
+```bash
+mkdir -p ~/.config/fcitx5
+cat >> ~/.config/fcitx5/config << 'EOF'
+[Hotkey/TriggerKeys]
+0=Super+space
+EOF
 ```
 
 ### User Login Session (no sudo required)
@@ -204,20 +233,53 @@ auto_switch = true           # Auto-switch on hotplug connect/disconnect
 screenshot_dir = "~/Pictures"
 ```
 
+### Nerd Fonts (Icons)
+
+For icon display in **yazi**, **ranger**, **lsd**, **eza**, **fish**, and Powerline prompts:
+
+```bash
+# Download and install Hack Nerd Font
+mkdir -p ~/.local/share/fonts
+cd ~/.local/share/fonts
+curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+tar xf Hack.tar.xz
+rm Hack.tar.xz
+fc-cache -fv
+```
+
+Configure in `config.toml`:
+
+```toml
+[font]
+symbols = "~/.local/share/fonts/HackNerdFontMono-Regular.ttf"
+```
+
+The `symbols` font is used as fallback for Powerline glyphs (U+E000-U+F8FF) and Nerd Font icons. If not specified, bcon uses the main font for everything.
+
+Note: Powerline arrow glyphs (E0B0-E0B7) are drawn programmatically for pixel-perfect rendering regardless of font.
+
 ### Keybinds
 
-| Action | Default | Description |
-|--------|---------|-------------|
-| Copy | `Ctrl+Shift+C` | Copy selection to clipboard |
-| Paste | `Ctrl+Shift+V` | Paste from clipboard |
-| Screenshot | `PrintScreen` | Save screenshot as PNG |
-| Search | `Ctrl+Shift+F` | Search in scrollback |
-| Copy Mode | `Ctrl+Shift+Space` | Enter vim-like copy mode |
-| Font + | `Ctrl+Plus` | Increase font size |
-| Font - | `Ctrl+Minus` | Decrease font size |
-| Font Reset | `Ctrl+0` | Reset font size |
-| Scroll Up | `Shift+PageUp` | Scroll back |
-| Scroll Down | `Shift+PageDown` | Scroll forward |
+| Action | Default | Vim | Emacs | Description |
+|--------|---------|-----|-------|-------------|
+| Copy | `Ctrl+Shift+C` | same | `Ctrl+Shift+W` | Copy selection to clipboard |
+| Paste | `Ctrl+Shift+V` | same | `Ctrl+Shift+Y` | Paste from clipboard |
+| Screenshot | `PrintScreen` | same | same | Save screenshot as PNG |
+| Search | `Ctrl+Shift+F` | same | `Ctrl+Shift+S` | Search in scrollback |
+| Copy Mode | `Ctrl+Shift+Space` | same | `Ctrl+Shift+M` | Enter vim-like copy mode |
+| Font + | `Ctrl+Plus` | same | same | Increase font size |
+| Font - | `Ctrl+Minus` | same | same | Decrease font size |
+| Font Reset | `Ctrl+0` | same | same | Reset font size |
+| Scroll Up | `Shift+PageUp` | `Ctrl+Shift+U` | `Alt+Shift+V` | Scroll back |
+| Scroll Down | `Shift+PageDown` | `Ctrl+Shift+D` | `Alt+Shift+N` | Scroll forward |
+
+Multiple keys can be assigned to a single action in config:
+
+```toml
+[keybinds]
+copy = ["ctrl+shift+c", "ctrl+insert"]
+paste = ["ctrl+shift+v", "shift+insert"]
+```
 
 ### Copy Mode Keys (Vim-like)
 

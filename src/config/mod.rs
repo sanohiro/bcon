@@ -522,15 +522,15 @@ impl KeybindConfig {
     /// (Ctrl+S/Y/V/Space conflicts with bash/zsh/tmux, so avoided)
     pub fn emacs_preset() -> Self {
         Self {
-            copy: vec!["ctrl+shift+c".to_string()],
-            paste: vec!["ctrl+shift+v".to_string()],
-            screenshot: vec!["ctrl+shift+s".to_string(), "printscreen".to_string()],
-            search: vec!["ctrl+shift+f".to_string()],
-            copy_mode: vec!["ctrl+shift+space".to_string()],
+            copy: vec!["ctrl+shift+w".to_string()],      // M-w (kill-ring-save) style
+            paste: vec!["ctrl+shift+y".to_string()],     // C-y (yank) style
+            screenshot: vec!["printscreen".to_string()],
+            search: vec!["ctrl+shift+s".to_string()],    // C-s (isearch) style
+            copy_mode: vec!["ctrl+shift+m".to_string()], // M for Mark/Mode
             font_increase: vec!["ctrl+plus".to_string()],
             font_decrease: vec!["ctrl+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
-            scroll_up: vec!["alt+shift+v".to_string()], // M-S-v (safe Emacs-like)
+            scroll_up: vec!["alt+shift+v".to_string()],   // M-S-v (safe Emacs-like)
             scroll_down: vec!["alt+shift+n".to_string()], // M-S-n (safe Emacs-like)
             ime_toggle: vec!["ctrl+shift+j".to_string()],
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
@@ -867,6 +867,20 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
     pub fn write_default_config() -> Result<PathBuf> {
         Self::write_config_with_preset("default")
     }
+
+    /// Get config file path for given preset (without writing)
+    pub fn get_config_path_for_preset(preset: &str) -> Result<PathBuf> {
+        let presets: Vec<&str> = preset.split(',').map(|s| s.trim()).collect();
+        let use_system_path = presets.contains(&"system");
+
+        if use_system_path {
+            Ok(std::path::Path::new("/etc/bcon").join("config.toml"))
+        } else {
+            let config_dir =
+                dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Config directory not found"))?;
+            Ok(config_dir.join("bcon").join("config.toml"))
+        }
+    }
 }
 
 /// Fix f32 serialization precision issues
@@ -1096,7 +1110,7 @@ pub fn default_config_path() -> Option<PathBuf> {
 }
 
 /// Detect Nerd Font path by checking common installation locations
-fn detect_nerd_font_path() -> Option<String> {
+pub fn detect_nerd_font_path() -> Option<String> {
     // Common Nerd Font paths on Debian/Ubuntu
     let candidates = [
         // Hack Nerd Font (apt: fonts-hack-nerd)

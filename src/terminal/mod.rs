@@ -396,9 +396,20 @@ impl Terminal {
         max_scrollback: usize,
         term_env: &str,
     ) -> Result<Self> {
+        Self::with_scrollback_env(cols, rows, max_scrollback, term_env, &[])
+    }
+
+    /// Initialize terminal with custom scrollback, TERM setting, and extra environment variables
+    pub fn with_scrollback_env(
+        cols: usize,
+        rows: usize,
+        max_scrollback: usize,
+        term_env: &str,
+        extra_env: &[(&str, &str)],
+    ) -> Result<Self> {
         let grid = Grid::with_scrollback(cols, rows, max_scrollback);
         let vt_parser = vte::Parser::new();
-        let pty = Pty::spawn(cols as u16, rows as u16, term_env)?;
+        let pty = Pty::spawn_with_env(cols as u16, rows as u16, term_env, extra_env)?;
 
         Ok(Self {
             grid,

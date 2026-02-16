@@ -143,7 +143,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
-          Depends: libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1
+          Depends: libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1, libfontconfig1, fonts-dejavu-core
           Maintainer: sanohiro <sanohiro@users.noreply.github.com>
           Homepage: https://github.com/sanohiro/bcon
           Description: GPU-accelerated terminal emulator for Linux console
@@ -172,7 +172,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: arm64
-          Depends: libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1
+          Depends: libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1, libfontconfig1, fonts-dejavu-core
           Maintainer: sanohiro <sanohiro@users.noreply.github.com>
           Homepage: https://github.com/sanohiro/bcon
           Description: GPU-accelerated terminal emulator for Linux console
