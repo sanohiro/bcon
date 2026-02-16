@@ -123,8 +123,10 @@ impl EmojiLoader {
         }
         info!("EmojiLoader: {} bytes read", data.len());
 
-        // Create 'static lifetime data for rustybuzz
-        let static_data: &'static [u8] = Box::leak(data.clone().into_boxed_slice());
+        // Create 'static lifetime data for rustybuzz/fontdue
+        // Note: This intentionally leaks memory because rustybuzz::Face requires 'static lifetime.
+        // Emoji font is loaded once at startup, so this is acceptable.
+        let static_data: &'static [u8] = Box::leak(data.into_boxed_slice());
         let face = rustybuzz::Face::from_slice(static_data, 0);
         if face.is_some() {
             info!("EmojiLoader: rustybuzz Face created successfully (GSUB support)");
@@ -137,7 +139,7 @@ impl EmojiLoader {
             info!("EmojiLoader: fontdue Font created successfully (COLR support)");
         }
 
-        Self::from_bytes_with_face(&data, target_size, face, fontdue_font)
+        Self::from_bytes_with_face(static_data, target_size, face, fontdue_font)
     }
 
     /// Load from bytes (with rustybuzz Face + fontdue Font)

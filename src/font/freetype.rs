@@ -389,6 +389,18 @@ impl FtFont {
             });
         }
 
+        // Sanity check: glyph dimensions should be reasonable (< 4096 pixels)
+        // This prevents integer overflow and OOM from malformed fonts
+        const MAX_GLYPH_DIMENSION: u32 = 4096;
+        if width > MAX_GLYPH_DIMENSION || height > MAX_GLYPH_DIMENSION {
+            log::warn!(
+                "FreeType: glyph too large ({}x{}), skipping",
+                width,
+                height
+            );
+            return None;
+        }
+
         // Copy bitmap data
         let buffer = bitmap.buffer();
         let pitch = bitmap.pitch().unsigned_abs() as usize;
@@ -396,7 +408,7 @@ impl FtFont {
         let data = match self.lcd_mode {
             LcdMode::Grayscale => {
                 // R8 format
-                let mut data = Vec::with_capacity((width * height) as usize);
+                let mut data = Vec::with_capacity((width as usize) * (height as usize));
                 for y in 0..height as usize {
                     for x in 0..width as usize {
                         data.push(buffer[y * pitch + x]);
@@ -406,7 +418,7 @@ impl FtFont {
             }
             LcdMode::LcdHorizontal => {
                 // RGB format (1 pixel = 3 bytes)
-                let mut data = Vec::with_capacity((width * height * 3) as usize);
+                let mut data = Vec::with_capacity((width as usize) * (height as usize) * 3);
                 for y in 0..height as usize {
                     for x in 0..width as usize {
                         let idx = y * pitch + x * 3;
@@ -419,7 +431,7 @@ impl FtFont {
             }
             LcdMode::LcdVertical => {
                 // Vertical subpixel (rarely used)
-                let mut data = Vec::with_capacity((width * height * 3) as usize);
+                let mut data = Vec::with_capacity((width as usize) * (height as usize) * 3);
                 for y in 0..height as usize {
                     for x in 0..width as usize {
                         let y3 = y * 3;

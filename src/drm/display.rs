@@ -191,7 +191,8 @@ impl DrmFramebuffer {
                 fb_cmd.fb_id, width, height, stride
             );
 
-            // framebuffer::Handle is internally u32
+            // SAFETY: framebuffer::Handle from the drm crate is a newtype wrapper around u32.
+            // Both types have identical memory layout, so transmute is safe.
             std::mem::transmute::<u32, framebuffer::Handle>(fb_cmd.fb_id)
         };
 
@@ -208,6 +209,8 @@ impl DrmFramebuffer {
 
 impl Drop for DrmFramebuffer {
     fn drop(&mut self) {
+        // SAFETY: framebuffer::Handle is a newtype wrapper around u32 (same layout).
+        // We need the raw u32 value for the ioctl call.
         unsafe {
             let mut fb_id = std::mem::transmute::<framebuffer::Handle, u32>(self.fb);
             libc::ioctl(self.device_fd, DRM_IOCTL_MODE_RMFB, &mut fb_id as *mut _);

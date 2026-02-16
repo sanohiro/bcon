@@ -81,28 +81,51 @@ impl Pty {
                 // Otherwise, spawn user's shell directly
                 if unsafe { libc::getuid() } == 0 {
                     // Running as root (e.g., systemd service) - require login
-                    let login = std::ffi::CString::new("/bin/login").unwrap();
-                    let argv0 = std::ffi::CString::new("login").unwrap();
+                    let login = match std::ffi::CString::new("/bin/login") {
+                        Ok(s) => s,
+                        Err(_) => std::process::exit(1),
+                    };
+                    let argv0 = match std::ffi::CString::new("login") {
+                        Ok(s) => s,
+                        Err(_) => std::process::exit(1),
+                    };
                     match nix::unistd::execvp(&login, &[&argv0]) {
                         Ok(infallible) => match infallible {},
-                        Err(e) => panic!("Failed to exec /bin/login: {}", e),
+                        Err(e) => {
+                            eprintln!("bcon: failed to exec /bin/login: {}", e);
+                            std::process::exit(1);
+                        }
                     }
                 } else {
                     // Running as normal user - spawn shell directly
                     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-                    let shell_cstr =
-                        std::ffi::CString::new(shell.as_str()).expect("NUL byte in shell path");
+                    let shell_cstr = match std::ffi::CString::new(shell.as_str()) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            eprintln!("bcon: invalid shell path (contains NUL byte)");
+                            std::process::exit(1);
+                        }
+                    };
 
                     // Launch as login shell (prefix with '-')
                     let shell_name = std::path::Path::new(&shell)
                         .file_name()
                         .map(|n| format!("-{}", n.to_string_lossy()))
                         .unwrap_or_else(|| "-sh".to_string());
-                    let argv0 = std::ffi::CString::new(shell_name).expect("NUL byte in argv0");
+                    let argv0 = match std::ffi::CString::new(shell_name) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            eprintln!("bcon: invalid shell name (contains NUL byte)");
+                            std::process::exit(1);
+                        }
+                    };
 
                     match nix::unistd::execvp(&shell_cstr, &[&argv0]) {
                         Ok(infallible) => match infallible {},
-                        Err(e) => panic!("Failed to spawn shell: {}", e),
+                        Err(e) => {
+                            eprintln!("bcon: failed to spawn shell: {}", e);
+                            std::process::exit(1);
+                        }
                     }
                 }
             }
