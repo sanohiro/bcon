@@ -1232,8 +1232,9 @@ fn main() -> Result<()> {
     // Phase 3: Terminal initialization
     let screen_w = display_config.width;
     let screen_h = display_config.height;
-    let mut cell_w = glyph_atlas.cell_width;
-    let mut cell_h = glyph_atlas.cell_height;
+    // Cell dimensions from font metrics (always positive, but guard against edge cases)
+    let mut cell_w = glyph_atlas.cell_width.max(1.0);
+    let mut cell_h = glyph_atlas.cell_height.max(1.0);
 
     // Terminal margin (padding from screen edges)
     let margin_x = 8.0_f32;
@@ -1940,8 +1941,8 @@ fn main() -> Result<()> {
                         .max(8.0)
                         .min(72.0);
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
-                    cell_w = new_cell_w;
-                    cell_h = new_cell_h;
+                    cell_w = new_cell_w.max(1.0);
+                    cell_h = new_cell_h.max(1.0);
                     grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w) as usize;
                     grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h) as usize;
                     term.resize(grid_cols, grid_rows);
@@ -1958,8 +1959,8 @@ fn main() -> Result<()> {
                         .max(8.0)
                         .min(72.0);
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
-                    cell_w = new_cell_w;
-                    cell_h = new_cell_h;
+                    cell_w = new_cell_w.max(1.0);
+                    cell_h = new_cell_h.max(1.0);
                     grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w) as usize;
                     grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h) as usize;
                     term.resize(grid_cols, grid_rows);
@@ -1973,8 +1974,8 @@ fn main() -> Result<()> {
                 if kb_font_reset.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     font_size_delta = 0;
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(base_font_size as f32);
-                    cell_w = new_cell_w;
-                    cell_h = new_cell_h;
+                    cell_w = new_cell_w.max(1.0);
+                    cell_h = new_cell_h.max(1.0);
                     grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w) as usize;
                     grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h) as usize;
                     term.resize(grid_cols, grid_rows);

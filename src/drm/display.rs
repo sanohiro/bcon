@@ -157,7 +157,11 @@ impl DrmFramebuffer {
         let raw_handle = bo
             .handle()
             .map_err(|e| anyhow!("Failed to get BO handle: {:?}", e))?;
-        let handle = unsafe { raw_handle.s32 } as u32;
+        let raw_s32 = unsafe { raw_handle.s32 };
+        if raw_s32 < 0 {
+            return Err(anyhow!("Invalid GBM buffer handle: {}", raw_s32));
+        }
+        let handle = raw_s32 as u32;
         let width = bo.width().map_err(|e| anyhow!("{:?}", e))?;
         let height = bo.height().map_err(|e| anyhow!("{:?}", e))?;
         let stride = bo.stride().map_err(|e| anyhow!("{:?}", e))?;

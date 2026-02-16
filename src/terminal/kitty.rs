@@ -590,10 +590,15 @@ fn decode_image_data(params: &KittyParams, data: Vec<u8>) -> Result<(u32, u32, V
             if w == 0 || h == 0 {
                 return Err("missing width/height for RGBA".to_string());
             }
-            if data.len() != (w * h * 4) as usize {
+            // Use checked arithmetic to prevent overflow
+            let expected_size = (w as usize)
+                .checked_mul(h as usize)
+                .and_then(|wh| wh.checked_mul(4))
+                .ok_or_else(|| "RGBA dimensions too large".to_string())?;
+            if data.len() != expected_size {
                 return Err(format!(
                     "RGBA size mismatch: expected {}, got {}",
-                    w * h * 4,
+                    expected_size,
                     data.len()
                 ));
             }
