@@ -162,11 +162,52 @@ impl Pty {
         }
     }
 
-    /// Write data to PTY
+    /// Write data to PTY (single attempt, may be partial)
     pub fn write(&self, data: &[u8]) -> Result<usize> {
         match nix::unistd::write(self.master.as_raw_fd(), data) {
             Ok(n) => Ok(n),
+            Err(nix::errno::Errno::EAGAIN) => Ok(0),
             Err(e) => Err(anyhow!("PTY write error: {}", e)),
+        }
+    }
+
+    /// Write all data to PTY (handles partial writes and EAGAIN)
+    ///
+    /// Retries up to 100 times with short delays for EAGAIN/partial writes.
+    /// Use this for important data like paste operations.
+    pub fn write_all(&self, data: &[u8]) -> Result<()> {
+        let mut written = 0;
+        let mut retries = 0;
+        const MAX_RETRIES: usize = 100;
+
+        while written < data.len() && retries < MAX_RETRIES {
+            match nix::unistd::write(self.master.as_raw_fd(), &data[written..]) {
+                Ok(0) => {
+                    // No progress, wait and retry
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    retries += 1;
+                }
+                Ok(n) => {
+                    written += n;
+                    retries = 0; // Reset retries on successful write
+                }
+                Err(nix::errno::Errno::EAGAIN) => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    retries += 1;
+                }
+                Err(e) => return Err(anyhow!("PTY write error: {}", e)),
+            }
+        }
+
+        if written < data.len() {
+            Err(anyhow!(
+                "PTY write incomplete: {} of {} bytes after {} retries",
+                written,
+                data.len(),
+                retries
+            ))
+        } else {
+            Ok(())
         }
     }
 

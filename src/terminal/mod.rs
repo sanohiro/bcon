@@ -1239,13 +1239,12 @@ impl Terminal {
     pub fn paste_clipboard(&self) -> Result<()> {
         if !self.clipboard.is_empty() {
             if self.grid.modes.bracketed_paste {
-                // Bracketed paste mode: start sequence
-                self.pty.write(b"\x1b[200~")?;
-                self.pty.write(self.clipboard.as_bytes())?;
-                // End sequence
-                self.pty.write(b"\x1b[201~")?;
+                // Bracketed paste mode: use write_all for reliable delivery
+                self.pty.write_all(b"\x1b[200~")?;
+                self.pty.write_all(self.clipboard.as_bytes())?;
+                self.pty.write_all(b"\x1b[201~")?;
             } else {
-                self.pty.write(self.clipboard.as_bytes())?;
+                self.pty.write_all(self.clipboard.as_bytes())?;
             }
         }
         Ok(())

@@ -507,8 +507,9 @@ impl KeybindConfig {
             screenshot: vec!["ctrl+shift+s".to_string(), "printscreen".to_string()],
             search: vec!["ctrl+shift+f".to_string()],
             copy_mode: vec!["ctrl+shift+space".to_string()],
-            font_increase: vec!["ctrl+plus".to_string()],
-            font_decrease: vec!["ctrl+minus".to_string()],
+            // "=" is the key that has "+" with Shift on US keyboards
+            font_increase: vec!["ctrl+=".to_string(), "ctrl+shift+=".to_string()],
+            font_decrease: vec!["ctrl+minus".to_string(), "ctrl+shift+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
             scroll_up: vec!["shift+pageup".to_string()],
             scroll_down: vec!["shift+pagedown".to_string()],
@@ -527,8 +528,9 @@ impl KeybindConfig {
             screenshot: vec!["printscreen".to_string()],
             search: vec!["ctrl+shift+s".to_string()],    // C-s (isearch) style
             copy_mode: vec!["ctrl+shift+m".to_string()], // M for Mark/Mode
-            font_increase: vec!["ctrl+plus".to_string()],
-            font_decrease: vec!["ctrl+minus".to_string()],
+            // "=" is the key that has "+" with Shift on US keyboards
+            font_increase: vec!["ctrl+=".to_string(), "ctrl+shift+=".to_string()],
+            font_decrease: vec!["ctrl+minus".to_string(), "ctrl+shift+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
             scroll_up: vec!["alt+shift+v".to_string()],   // M-S-v (safe Emacs-like)
             scroll_down: vec!["alt+shift+n".to_string()], // M-S-n (safe Emacs-like)
@@ -547,8 +549,9 @@ impl KeybindConfig {
             screenshot: vec!["ctrl+shift+s".to_string(), "printscreen".to_string()],
             search: vec!["ctrl+shift+f".to_string()],
             copy_mode: vec!["ctrl+shift+space".to_string()],
-            font_increase: vec!["ctrl+plus".to_string()],
-            font_decrease: vec!["ctrl+minus".to_string()],
+            // "=" is the key that has "+" with Shift on US keyboards
+            font_increase: vec!["ctrl+=".to_string(), "ctrl+shift+=".to_string()],
+            font_decrease: vec!["ctrl+minus".to_string(), "ctrl+shift+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
             scroll_up: vec!["ctrl+shift+u".to_string()], // Ctrl+Shift+U (safe Vim-like)
             scroll_down: vec!["ctrl+shift+d".to_string()], // Ctrl+Shift+D (safe Vim-like)
@@ -1083,14 +1086,21 @@ impl ConfigWatcher {
 
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             if let Ok(event) = res {
-                // Only detect Modify events
-                if event.kind.is_modify() {
-                    let _ = tx.send(());
+                // Detect Modify, Create, and Rename events
+                // (editors often save by writing to temp file then rename)
+                use notify::EventKind;
+                match event.kind {
+                    EventKind::Modify(_) | EventKind::Create(_) => {
+                        let _ = tx.send(());
+                    }
+                    _ => {}
                 }
             }
         })?;
 
-        watcher.watch(config_path, RecursiveMode::NonRecursive)?;
+        // Watch the parent directory to catch rename operations
+        let watch_path = config_path.parent().unwrap_or(config_path);
+        watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
 
         Ok(Self {
             _watcher: watcher,
