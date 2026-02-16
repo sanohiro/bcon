@@ -329,7 +329,7 @@ impl Default for FontConfig {
             symbols: String::new(),
             cjk: String::new(),
             emoji: String::new(),
-            size: 18.0,                        // Recommended for console readability
+            size: 16.0,
             render_mode: "lcd".to_string(),    // LCD subpixel rendering (high quality)
             lcd_filter: "default".to_string(), // Sharp (less blur than light)
             lcd_weights: None,
@@ -739,7 +739,7 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 #   4. DejaVu Sans Mono - widely available
 #
 # [font]
-# size = 18.0
+# size = 16.0
 # main = "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf"
 # cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 # emoji = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
