@@ -976,13 +976,10 @@ fn main() -> Result<()> {
     let mut kb_reset_terminal = config::ParsedKeybinds::parse(&cfg.keybinds.reset_terminal);
 
     // Config file change watcher (Linux only)
+    // Watch the actual loaded config path, not just the default path
     #[cfg(target_os = "linux")]
-    let config_watcher = config::default_config_path().and_then(|path| {
-        if path.exists() {
-            config::ConfigWatcher::new(&path).ok()
-        } else {
-            None
-        }
+    let config_watcher = config::Config::config_path().and_then(|path| {
+        config::ConfigWatcher::new(&path).ok()
     });
     #[cfg(target_os = "linux")]
     if config_watcher.is_some() {

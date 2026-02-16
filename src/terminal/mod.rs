@@ -580,7 +580,7 @@ impl Terminal {
 
         if !self.pty_response.is_empty() {
             log::trace!("PTY response: {} bytes", self.pty_response.len());
-            let _ = self.pty.write(&self.pty_response);
+            self.write_response(&self.pty_response);
         }
 
         // Track if buffer ends with ESC for cross-buffer APC detection
@@ -660,7 +660,7 @@ impl Terminal {
 
         if !self.pty_response.is_empty() {
             log::trace!("PTY response: {} bytes", self.pty_response.len());
-            let _ = self.pty.write(&self.pty_response);
+            self.write_response(&self.pty_response);
         }
     }
 
@@ -684,7 +684,7 @@ impl Terminal {
 
             // Send response if any
             if let Some(resp) = response {
-                let _ = self.pty.write(&resp);
+                self.write_response(&resp);
             }
 
             if done {
@@ -747,7 +747,7 @@ impl Terminal {
                     // a=q is for protocol support detection - always return OK
                     if quiet < 2 {
                         let resp = make_response(id, true, "");
-                        let _ = self.pty.write(&resp);
+                        self.write_response(&resp);
                     }
                 }
                 // Actions that produce decode results
@@ -763,7 +763,7 @@ impl Terminal {
                         log::warn!("Kitty decode error: {}", e);
                         if quiet < 2 {
                             let resp = make_response(id, false, &e);
-                            let _ = self.pty.write(&resp);
+                            self.write_response(&resp);
                         }
                     }
                 },
@@ -814,7 +814,7 @@ impl Terminal {
                         img_id,
                         resp.len()
                     );
-                    let _ = self.pty.write(&resp);
+                    self.write_response(&resp);
                 }
             }
             KittyDecodeResult::Frame(frame_data) => {
@@ -868,14 +868,14 @@ impl Terminal {
 
                     if quiet < 2 {
                         let resp = make_response(frame_data.image_id, true, "");
-                        let _ = self.pty.write(&resp);
+                        self.write_response(&resp);
                     }
                 } else {
                     log::warn!("Kitty frame: image {} not found", frame_data.image_id);
                     if quiet < 2 {
                         let resp =
                             make_response(frame_data.image_id, false, "ENOENT:image not found");
-                        let _ = self.pty.write(&resp);
+                        self.write_response(&resp);
                     }
                 }
             }
@@ -906,12 +906,12 @@ impl Terminal {
                         } else {
                             make_response(cmd.image_id, false, &result.unwrap_err())
                         };
-                        let _ = self.pty.write(&resp);
+                        self.write_response(&resp);
                     }
                 } else {
                     if quiet < 2 {
                         let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
-                        let _ = self.pty.write(&resp);
+                        self.write_response(&resp);
                     }
                 }
             }
@@ -957,12 +957,12 @@ impl Terminal {
 
                     if quiet < 2 {
                         let resp = make_response(cmd.image_id, true, "");
-                        let _ = self.pty.write(&resp);
+                        self.write_response(&resp);
                     }
                 } else {
                     if quiet < 2 {
                         let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
-                        let _ = self.pty.write(&resp);
+                        self.write_response(&resp);
                     }
                 }
             }
@@ -1058,6 +1058,24 @@ fn compose_frames(
 }
 
 impl Terminal {
+    /// Write terminal response to PTY (DSR, device attributes, etc.)
+    /// Logs warning on failure but doesn't retry (responses are small)
+    fn write_response(&self, data: &[u8]) {
+        match self.pty.write(data) {
+            Ok(n) if n < data.len() => {
+                log::warn!(
+                    "PTY response partial write: {} of {} bytes",
+                    n,
+                    data.len()
+                );
+            }
+            Err(e) => {
+                log::warn!("PTY response write failed: {}", e);
+            }
+            _ => {}
+        }
+    }
+
     /// Write data to PTY (for keyboard input forwarding)
     pub fn write_to_pty(&self, data: &[u8]) -> Result<usize> {
         self.pty.write(data)

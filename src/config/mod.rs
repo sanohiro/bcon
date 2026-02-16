@@ -567,6 +567,34 @@ impl Config {
 
     /// Load configuration file
     ///
+    /// Get the path that would be used for loading config
+    /// Returns None if using built-in defaults
+    pub fn config_path() -> Option<std::path::PathBuf> {
+        // 1. BCON_CONFIG environment variable
+        if let Ok(path) = std::env::var("BCON_CONFIG") {
+            let p = std::path::Path::new(&path);
+            if p.exists() {
+                return Some(p.to_path_buf());
+            }
+        }
+
+        // 2. User config: ~/.config/bcon/config.toml
+        if let Some(config_dir) = dirs::config_dir() {
+            let config_path = config_dir.join("bcon").join("config.toml");
+            if config_path.exists() {
+                return Some(config_path);
+            }
+        }
+
+        // 3. System config: /etc/bcon/config.toml
+        let system_config = std::path::Path::new(Self::SYSTEM_CONFIG_PATH);
+        if system_config.exists() {
+            return Some(system_config.to_path_buf());
+        }
+
+        None
+    }
+
     /// Priority:
     /// 1. Path specified by BCON_CONFIG environment variable
     /// 2. ~/.config/bcon/config.toml (user config)

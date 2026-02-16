@@ -1224,14 +1224,23 @@ impl Grid {
         }
 
         // Adjust image placement rows (delete scrolled out ones)
-        // Images within scroll region that scroll past row 0 are removed
+        // Images within scroll region that would scroll out of top are removed
         self.image_placements.retain_mut(|p| {
             if p.row >= top && p.row <= bottom {
-                // Check if image would scroll completely out (row + height would be <= n)
-                if p.row + p.height_cells <= n {
-                    return false; // Completely scrolled out
+                // Image at row r scrolls to row r - n
+                // If new row would be < top, check if any part remains visible
+                if p.row < top + n {
+                    // Image top is in the scrolled-out area
+                    // Remove if entire image scrolls out (row + height <= top + n)
+                    if p.row + p.height_cells <= top + n {
+                        return false; // Completely scrolled out
+                    }
+                    // Partial: clamp to scroll region top
+                    p.row = top;
+                } else {
+                    // Image is below scrolled-out area, just move up
+                    p.row -= n;
                 }
-                p.row = p.row.saturating_sub(n);
             }
             true
         });
@@ -1532,14 +1541,20 @@ impl Grid {
             self.clear_row_with_bg(row);
         }
 
-        // Adjust image placement rows
-        for p in &mut self.image_placements {
+        // Adjust image placement rows (delete scrolled out ones)
+        // Images within scroll region that would scroll out of bottom are removed
+        self.image_placements.retain_mut(|p| {
             if p.row >= top && p.row <= bottom {
-                p.row += n;
+                // Image at row r scrolls to row r + n
+                let new_row = p.row + n;
+                if new_row > bottom {
+                    // Image top scrolled past scroll region bottom
+                    return false; // Remove entirely
+                }
+                p.row = new_row;
             }
-        }
-        // Delete images that scrolled out of screen
-        self.image_placements.retain(|p| p.row < self.rows);
+            true
+        });
 
         // Mark scroll region as dirty
         for row in top..=bottom {

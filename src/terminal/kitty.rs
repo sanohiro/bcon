@@ -746,7 +746,10 @@ fn read_shared_memory(name: &str) -> Result<Vec<u8>, String> {
 
     // Check size limit
     if size > MAX_IMAGE_DATA_SIZE {
-        unsafe { libc::close(fd) };
+        unsafe {
+            libc::close(fd);
+            libc::shm_unlink(c_name.as_ptr()); // Clean up shared memory
+        }
         return Err(format!(
             "shared memory too large: {} bytes (max {})",
             size, MAX_IMAGE_DATA_SIZE
