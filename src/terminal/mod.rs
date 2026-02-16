@@ -539,8 +539,11 @@ impl Terminal {
         // Fast path: if already in APC state or buffer contains ESC _, use slow path
         // This handles the rare APC (Kitty graphics) case
         // Use manual loop instead of windows(2).any() to avoid iterator overhead
-        let has_apc = matches!(self.apc_state, ApcState::InApc | ApcState::ApcEscape)
-            || has_esc_underscore(&self.read_buf[..n]);
+        // Include ApcState::Escape to handle ESC at buffer boundary (ESC in prev buffer, _ in this one)
+        let has_apc = matches!(
+            self.apc_state,
+            ApcState::Escape | ApcState::InApc | ApcState::ApcEscape
+        ) || has_esc_underscore(&self.read_buf[..n]);
 
         if has_apc {
             // Slow path: byte-by-byte for APC handling
@@ -578,6 +581,12 @@ impl Terminal {
         if !self.pty_response.is_empty() {
             log::trace!("PTY response: {} bytes", self.pty_response.len());
             let _ = self.pty.write(&self.pty_response);
+        }
+
+        // Track if buffer ends with ESC for cross-buffer APC detection
+        // If next buffer starts with '_', we need slow path
+        if n > 0 && self.read_buf[n - 1] == 0x1B {
+            self.apc_state = ApcState::Escape;
         }
     }
 
