@@ -384,8 +384,23 @@ impl SixelDecoder {
             return None;
         }
 
+        // Check RGBA buffer size (4 bytes per pixel)
+        let rgba_size = (self.width as usize)
+            .checked_mul(self.height as usize)
+            .and_then(|wh| wh.checked_mul(4));
+        let rgba_size = match rgba_size {
+            Some(size) if size <= MAX_PIXEL_BUFFER_SIZE => size,
+            _ => {
+                warn!(
+                    "Sixel: RGBA buffer too large ({}x{}x4), skipping",
+                    self.width, self.height
+                );
+                return None;
+            }
+        };
+
         // Convert palette indices to RGBA
-        let mut data = Vec::with_capacity((self.width * self.height * 4) as usize);
+        let mut data = Vec::with_capacity(rgba_size);
         for &idx in &self.pixels {
             if idx == 255 {
                 // Transparent pixel

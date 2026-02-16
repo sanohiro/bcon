@@ -1224,12 +1224,17 @@ impl Grid {
         }
 
         // Adjust image placement rows (delete scrolled out ones)
-        for p in &mut self.image_placements {
+        // Images within scroll region that scroll past row 0 are removed
+        self.image_placements.retain_mut(|p| {
             if p.row >= top && p.row <= bottom {
+                // Check if image would scroll completely out (row + height would be <= n)
+                if p.row + p.height_cells <= n {
+                    return false; // Completely scrolled out
+                }
                 p.row = p.row.saturating_sub(n);
             }
-        }
-        self.image_placements.retain(|p| p.row + p.height_cells > 0);
+            true
+        });
 
         // Mark scroll region as dirty
         for row in top..=bottom {
@@ -1723,10 +1728,10 @@ impl Grid {
     /// Delete image placements that scrolled out of screen
     #[allow(dead_code)]
     pub fn cleanup_image_placements(&mut self) {
-        // Delete placements where row became negative (scrolled out)
+        // Delete placements that are completely outside the visible area
         self.image_placements.retain(|p| {
-            // Check if image bottom is within screen
-            p.row + p.height_cells > 0
+            // Image is visible if its bottom edge is within screen bounds
+            p.row < self.rows
         });
     }
 

@@ -548,7 +548,16 @@ fn load_data_from_transmission(
             let path = String::from_utf8(raw_data).map_err(|_| "invalid file path encoding")?;
             let path = path.trim();
             info!("Kitty: reading image from file: {}", path);
-            std::fs::read(path).map_err(|e| format!("failed to read file '{}': {}", path, e))
+            let data = std::fs::read(path)
+                .map_err(|e| format!("failed to read file '{}': {}", path, e))?;
+            if data.len() > MAX_IMAGE_DATA_SIZE {
+                return Err(format!(
+                    "file too large: {} bytes (max {})",
+                    data.len(),
+                    MAX_IMAGE_DATA_SIZE
+                ));
+            }
+            Ok(data)
         }
         KittyTransmission::TempFile => {
             let path =
@@ -559,6 +568,13 @@ fn load_data_from_transmission(
                 .map_err(|e| format!("failed to read temp file '{}': {}", path, e))?;
             if let Err(e) = std::fs::remove_file(path) {
                 warn!("Kitty: failed to remove temp file '{}': {}", path, e);
+            }
+            if data.len() > MAX_IMAGE_DATA_SIZE {
+                return Err(format!(
+                    "temp file too large: {} bytes (max {})",
+                    data.len(),
+                    MAX_IMAGE_DATA_SIZE
+                ));
             }
             Ok(data)
         }
@@ -675,14 +691,29 @@ fn rgb_to_rgba(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> 
     Ok(rgba)
 }
 
-/// zlib decompression
+/// zlib decompression (with output size limit)
 fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut decoder = flate2::read::ZlibDecoder::new(data);
     let mut output = Vec::new();
-    decoder
-        .read_to_end(&mut output)
-        .map_err(|e| format!("zlib decompress error: {}", e))?;
+
+    // Read in chunks with size limit to prevent memory exhaustion
+    let mut buf = [0u8; 65536];
+    loop {
+        match decoder.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                output.extend_from_slice(&buf[..n]);
+                if output.len() > MAX_IMAGE_DATA_SIZE {
+                    return Err(format!(
+                        "decompressed data too large (max {} bytes)",
+                        MAX_IMAGE_DATA_SIZE
+                    ));
+                }
+            }
+            Err(e) => return Err(format!("zlib decompress error: {}", e)),
+        }
+    }
     Ok(output)
 }
 
@@ -712,6 +743,15 @@ fn read_shared_memory(name: &str) -> Result<Vec<u8>, String> {
     }
 
     let size = stat.st_size as usize;
+
+    // Check size limit
+    if size > MAX_IMAGE_DATA_SIZE {
+        unsafe { libc::close(fd) };
+        return Err(format!(
+            "shared memory too large: {} bytes (max {})",
+            size, MAX_IMAGE_DATA_SIZE
+        ));
+    }
 
     // Convert to File and read
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };

@@ -1241,8 +1241,9 @@ fn main() -> Result<()> {
     let margin_y = 8.0_f32;
 
     // Calculate grid size (accounting for margins)
-    let mut grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w) as usize;
-    let mut grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h) as usize;
+    // Ensure at least 1x1 grid to prevent underflow in Grid::with_scrollback
+    let mut grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
+    let mut grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
     info!(
         "Grid size: {}x{} (cell: {:.0}x{:.0}px)",
         grid_cols, grid_rows, cell_w, cell_h
@@ -1943,8 +1944,8 @@ fn main() -> Result<()> {
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
                     cell_w = new_cell_w.max(1.0);
                     cell_h = new_cell_h.max(1.0);
-                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w) as usize;
-                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h) as usize;
+                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
+                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
                     term.resize(grid_cols, grid_rows);
                     term.set_cell_size(cell_w as u32, cell_h as u32);
                     emoji_atlas.resize(cell_h as u32);
@@ -1961,8 +1962,8 @@ fn main() -> Result<()> {
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
                     cell_w = new_cell_w.max(1.0);
                     cell_h = new_cell_h.max(1.0);
-                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w) as usize;
-                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h) as usize;
+                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
+                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
                     term.resize(grid_cols, grid_rows);
                     term.set_cell_size(cell_w as u32, cell_h as u32);
                     emoji_atlas.resize(cell_h as u32);
@@ -1976,8 +1977,8 @@ fn main() -> Result<()> {
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(base_font_size as f32);
                     cell_w = new_cell_w.max(1.0);
                     cell_h = new_cell_h.max(1.0);
-                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w) as usize;
-                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h) as usize;
+                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
+                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
                     term.resize(grid_cols, grid_rows);
                     term.set_cell_size(cell_w as u32, cell_h as u32);
                     emoji_atlas.resize(cell_h as u32);
