@@ -1098,17 +1098,9 @@ fn main() -> Result<()> {
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
     let seat_session = {
-        // Wait for target VT to become active before opening libseat session
-        // This prevents bcon from "stealing" the display when started on an inactive VT
-        if let Some(vt) = target_vt {
-            if !drm::is_vt_active(vt) {
-                info!("VT{} is not active, waiting...", vt);
-                if let Err(e) = drm::wait_for_vt(vt) {
-                    warn!("Failed to wait for VT{}: {}", vt, e);
-                }
-            }
-        }
-
+        // Note: With libseat, we don't manually wait for VT.
+        // libseat handles session management - it will send Enable event
+        // when the session becomes active.
         info!("Opening libseat session...");
         Rc::new(RefCell::new(
             session::SeatSession::open().context("Failed to open libseat session")?,
@@ -1161,12 +1153,22 @@ fn main() -> Result<()> {
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
     let initial_drm_master = {
-        // libseat handles DRM master, but check if we're on the target VT
-        if let Some(vt) = target_vt {
-            drm::is_vt_active(vt)
-        } else {
-            true // No target VT info, assume active
+        // With libseat, poll for initial session state.
+        // Dispatch events to see if we get an Enable event.
+        let mut active = false;
+        if let Ok(true) = seat_session.borrow_mut().dispatch() {
+            while let Some(event) = seat_session.borrow().try_recv_event() {
+                if event == session::SessionEvent::Enable {
+                    active = true;
+                    info!("libseat: session initially active");
+                    break;
+                }
+            }
         }
+        if !active {
+            info!("libseat: session not yet active, deferring rendering");
+        }
+        active
     };
 
     // Detect display configuration (prefer external monitors if configured)
@@ -1226,7 +1228,7 @@ fn main() -> Result<()> {
     let mut needs_initial_mode_set = !initial_drm_master;
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let _needs_initial_mode_set = false;
+    let mut needs_initial_mode_set = !initial_drm_master;
 
     let (initial_bo, initial_fb) = if initial_drm_master {
         let init_bg = cfg.appearance.background_rgb();
@@ -1641,6 +1643,27 @@ fn main() -> Result<()> {
 
                         drm_master_held = true;
                         needs_redraw = true;
+
+                        // If mode setting was deferred (session wasn't active at startup),
+                        // do it now
+                        if needs_initial_mode_set && drm_master_held {
+                            info!("Performing deferred mode setting");
+                            let init_bg = cfg.appearance.background_rgb();
+                            renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
+                            if let Err(e) = egl_context.swap_buffers() {
+                                log::warn!("Failed to swap buffers: {}", e);
+                            }
+                            if let Ok(bo) = gbm_surface.lock_front_buffer() {
+                                if let Ok(fb) = drm::DrmFramebuffer::from_bo(&drm_device, &bo) {
+                                    if let Err(e) = drm::set_crtc(&drm_device, &display_config, &fb) {
+                                        log::warn!("Failed to set CRTC: {}", e);
+                                    } else {
+                                        needs_initial_mode_set = false;
+                                        info!("Deferred mode setting complete");
+                                    }
+                                }
+                            }
+                        }
 
                         // Invalidate GPU textures (may have been lost during suspend)
                         glyph_atlas.invalidate();
