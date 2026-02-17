@@ -818,6 +818,17 @@ pub fn get_target_vt() -> Option<u16> {
 
 /// Get currently active VT number
 pub fn get_active_vt() -> Option<u16> {
+    // First try sysfs (no special permissions required)
+    if let Ok(content) = std::fs::read_to_string("/sys/class/tty/tty0/active") {
+        // Content is like "tty2\n"
+        if let Some(num_str) = content.trim().strip_prefix("tty") {
+            if let Ok(vt) = num_str.parse::<u16>() {
+                return Some(vt);
+            }
+        }
+    }
+
+    // Fallback to ioctl (requires /dev/tty0 access)
     #[repr(C)]
     struct VtStat {
         v_active: libc::c_ushort,

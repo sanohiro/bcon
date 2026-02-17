@@ -1155,19 +1155,40 @@ fn main() -> Result<()> {
     let initial_drm_master = {
         // With libseat, poll for initial session state.
         // Dispatch events to see if we get an Enable event.
-        let mut active = false;
+        let mut libseat_active = false;
         // First dispatch, then drop the mutable borrow before trying to receive events
         let dispatched = seat_session.borrow_mut().dispatch();
         if let Ok(true) = dispatched {
             while let Some(event) = seat_session.borrow().try_recv_event() {
                 if event == session::SessionEvent::Enable {
-                    active = true;
-                    info!("libseat: session initially active");
+                    libseat_active = true;
+                    info!("libseat: session enabled");
                     break;
                 }
             }
         }
-        if !active {
+
+        // Also verify the VT is actually active (libseat might enable even on inactive VT)
+        let vt_active = match target_vt {
+            Some(vt) => {
+                let active = drm::is_vt_active(vt);
+                if !active {
+                    info!("VT{} is not active (current: {:?})", vt, drm::get_active_vt());
+                }
+                active
+            }
+            None => {
+                // Can't determine target VT, trust libseat
+                true
+            }
+        };
+
+        let active = libseat_active && vt_active;
+        if active {
+            info!("libseat: session initially active and VT is foreground");
+        } else if libseat_active && !vt_active {
+            info!("libseat: session enabled but VT not active, deferring rendering");
+        } else {
             info!("libseat: session not yet active, deferring rendering");
         }
         active
