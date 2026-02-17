@@ -212,17 +212,24 @@ Japanese is fine for:
 
 ## Release Checklist
 
-**IMPORTANT: Do NOT tag or push without explicit user instruction.**
+> **🚨 絶対に勝手にリリースしない 🚨**
+>
+> ユーザーが「リリースしよう」と言っても、タグ作成・プッシュ前に必ず確認を取る。
+> 「プッシュしていいですか？」と聞くこと。
 
-- Commits: OK to make
-- Version update in Cargo.toml: Ask user first
-- **Tag + Push: Wait for user's explicit "release" instruction**
+**許可なしでやっていいこと:**
+- コミット作成
+- バージョン更新（Cargo.toml）
 
-When releasing a new version (after user approval):
-1. Update version in `Cargo.toml`
-2. Commit changes
-3. Tag: `git tag vX.Y.Z`
-4. Push: `git push && git push --tags`
+**許可が必要なこと:**
+- `git tag` - タグ作成
+- `git push` - プッシュ
+
+手順（ユーザー承認後）:
+1. `Cargo.toml` のバージョン更新
+2. コミット作成
+3. **「プッシュしていいですか？」と確認**
+4. 承認後: `git tag vX.Y.Z && git push origin main --tags`
 
 ## Testing
 
