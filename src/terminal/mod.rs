@@ -1059,20 +1059,10 @@ fn compose_frames(
 
 impl Terminal {
     /// Write terminal response to PTY (DSR, device attributes, etc.)
-    /// Logs warning on failure but doesn't retry (responses are small)
+    /// Uses write_all to ensure complete delivery
     fn write_response(&self, data: &[u8]) {
-        match self.pty.write(data) {
-            Ok(n) if n < data.len() => {
-                log::warn!(
-                    "PTY response partial write: {} of {} bytes",
-                    n,
-                    data.len()
-                );
-            }
-            Err(e) => {
-                log::warn!("PTY response write failed: {}", e);
-            }
-            _ => {}
+        if let Err(e) = self.pty.write_all(data) {
+            log::warn!("PTY response write failed: {}", e);
         }
     }
 

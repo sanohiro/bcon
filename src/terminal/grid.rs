@@ -1228,19 +1228,13 @@ impl Grid {
         self.image_placements.retain_mut(|p| {
             if p.row >= top && p.row <= bottom {
                 // Image at row r scrolls to row r - n
-                // If new row would be < top, check if any part remains visible
                 if p.row < top + n {
-                    // Image top is in the scrolled-out area
-                    // Remove if entire image scrolls out (row + height <= top + n)
-                    if p.row + p.height_cells <= top + n {
-                        return false; // Completely scrolled out
-                    }
-                    // Partial: clamp to scroll region top
-                    p.row = top;
-                } else {
-                    // Image is below scrolled-out area, just move up
-                    p.row -= n;
+                    // Image top is in the scrolled-out area - delete entirely
+                    // (simple approach: no cropping, avoids ghost images)
+                    return false;
                 }
+                // Image is below scrolled-out area, move up
+                p.row -= n;
             }
             true
         });
@@ -1547,9 +1541,10 @@ impl Grid {
             if p.row >= top && p.row <= bottom {
                 // Image at row r scrolls to row r + n
                 let new_row = p.row + n;
-                if new_row > bottom {
-                    // Image top scrolled past scroll region bottom
-                    return false; // Remove entirely
+                if new_row + p.height_cells > bottom + 1 {
+                    // Image would extend past scroll region bottom - delete entirely
+                    // (simple approach: no cropping, avoids ghost images)
+                    return false;
                 }
                 p.row = new_row;
             }
