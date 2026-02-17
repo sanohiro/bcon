@@ -675,6 +675,24 @@ impl VtSwitcher {
         Ok(())
     }
 
+    /// Request switch to another VT
+    ///
+    /// This triggers a VT switch by calling VT_ACTIVATE.
+    /// The kernel will send SIGUSR2 to us, and we should handle it
+    /// in the event loop by calling ack_release().
+    pub fn switch_to(&self, target: u16) -> Result<()> {
+        info!("Requesting switch to VT{}", target);
+        let ret = unsafe { libc::ioctl(self.tty_fd, VT_ACTIVATE, target as libc::c_int) };
+        if ret < 0 {
+            return Err(anyhow!(
+                "VT_ACTIVATE({}) failed: {}",
+                target,
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
     /// Check if VT is currently active using VT_GETSTATE
     pub fn is_focused(&self) -> bool {
         #[repr(C)]

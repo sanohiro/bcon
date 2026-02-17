@@ -1870,8 +1870,25 @@ fn main() -> Result<()> {
 
             // Keyboard event processing
             for raw in &key_events {
-                // VT switching is now handled by VtSwitcher via kernel signals
-                // (Ctrl+Alt+Fn triggers SIGUSR1/SIGUSR2 via VT_SETMODE)
+                // Check for VT switch key combination (Ctrl+Alt+Fn)
+                // In KD_GRAPHICS mode, kernel doesn't see keypresses, so we must handle this
+                #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+                if let Some(target) = input::evdev::check_vt_switch(raw) {
+                    if target != vt_switcher.target_vt() {
+                        if let Err(e) = vt_switcher.switch_to(target) {
+                            warn!("Failed to switch to VT{}: {}", target, e);
+                        }
+                    }
+                    continue;
+                }
+
+                #[cfg(all(target_os = "linux", feature = "seatd"))]
+                if let Some(target) = input::evdev::check_vt_switch(raw) {
+                    if let Err(e) = seat_session.borrow_mut().switch_session(target as i32) {
+                        warn!("Failed to switch to VT{}: {}", target, e);
+                    }
+                    continue;
+                }
 
                 // Update Ctrl state (for URL click detection)
                 ctrl_pressed = raw.mods_ctrl;
