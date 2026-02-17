@@ -1156,7 +1156,9 @@ fn main() -> Result<()> {
         // With libseat, poll for initial session state.
         // Dispatch events to see if we get an Enable event.
         let mut active = false;
-        if let Ok(true) = seat_session.borrow_mut().dispatch() {
+        // First dispatch, then drop the mutable borrow before trying to receive events
+        let dispatched = seat_session.borrow_mut().dispatch();
+        if let Ok(true) = dispatched {
             while let Some(event) = seat_session.borrow().try_recv_event() {
                 if event == session::SessionEvent::Enable {
                     active = true;
@@ -1607,10 +1609,8 @@ fn main() -> Result<()> {
         // Poll for session events (VT switching)
         #[cfg(all(target_os = "linux", feature = "seatd"))]
         {
-            // Dispatch libseat events
-            if let Ok(true) = seat_session.borrow_mut().dispatch() {
-                // Events dispatched, check for session state changes
-            }
+            // Dispatch libseat events (drop borrow before processing events)
+            let _ = seat_session.borrow_mut().dispatch();
 
             // Process session events
             while let Some(event) = seat_session.borrow().try_recv_event() {
