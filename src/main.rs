@@ -1622,12 +1622,22 @@ fn main() -> Result<()> {
                             log::debug!("Failed to send FocusOut event: {}", e);
                         }
 
+                        // Suspend input devices
+                        if let Some(ref mut evdev) = evdev_keyboard {
+                            evdev.suspend();
+                        }
+
                         drm_master_held = false;
                         // Note: libseat handles DRM master automatically
                     }
                     session::SessionEvent::Enable => {
                         // Session enabled (VT acquired, or resume from suspend)
                         info!("libseat: session enabled");
+
+                        // Resume input devices
+                        if let Some(ref mut evdev) = evdev_keyboard {
+                            evdev.resume();
+                        }
 
                         drm_master_held = true;
                         needs_redraw = true;
@@ -1661,6 +1671,11 @@ fn main() -> Result<()> {
                             log::debug!("Failed to send FocusOut event: {}", e);
                         }
 
+                        // Suspend input devices before releasing VT
+                        if let Some(ref mut evdev) = evdev_keyboard {
+                            evdev.suspend();
+                        }
+
                         if drm_master_held {
                             if let Err(e) = drm_device.drop_master() {
                                 log::warn!("Failed to drop DRM master: {}", e);
@@ -1676,6 +1691,12 @@ fn main() -> Result<()> {
                     drm::VtEvent::Acquire => {
                         // Kernel grants us the VT (or resume from suspend)
                         info!("VT acquire");
+
+                        // Resume input devices
+                        if let Some(ref mut evdev) = evdev_keyboard {
+                            evdev.resume();
+                        }
+
                         if !drm_master_held {
                             if let Err(e) = drm_device.set_master() {
                                 log::warn!("Failed to acquire DRM master: {}", e);

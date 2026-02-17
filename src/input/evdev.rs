@@ -658,6 +658,29 @@ impl EvdevKeyboard {
     pub fn mouse_position(&self) -> (f64, f64) {
         (self.mouse_x, self.mouse_y)
     }
+
+    /// Suspend libinput (call when VT switches away)
+    ///
+    /// This releases input devices so other VTs can use them.
+    pub fn suspend(&mut self) {
+        info!("Suspending libinput");
+        self.input.suspend();
+        // Clear held keys to avoid stuck keys after resume
+        self.held_keys.clear();
+        self.shift_pressed = false;
+        self.ctrl_pressed = false;
+        self.alt_pressed = false;
+    }
+
+    /// Resume libinput (call when VT switches back)
+    ///
+    /// This re-acquires input devices.
+    pub fn resume(&mut self) {
+        info!("Resuming libinput");
+        if let Err(e) = self.input.resume() {
+            warn!("Failed to resume libinput: {:?}", e);
+        }
+    }
 }
 
 // evdev keycodes for F1-F12
