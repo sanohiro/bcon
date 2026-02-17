@@ -32,6 +32,121 @@ use std::cell::RefCell;
 #[cfg(all(target_os = "linux", feature = "seatd"))]
 use std::rc::Rc;
 
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Box drawing line thickness scale relative to cell height
+const LINE_THICKNESS_SCALE: f32 = 0.12;
+
+/// Anti-aliasing width for solid powerline shapes (triangles, semicircles)
+const AA_WIDTH_SOLID: f32 = 1.5;
+
+/// Anti-aliasing width for outline shapes
+const AA_WIDTH_OUTLINE: f32 = 0.7;
+
+/// Half-width of outline strokes
+const OUTLINE_STROKE_HALF: f32 = 0.35;
+
+/// Alpha threshold for rendering pixels (below this = skip)
+const ALPHA_THRESHOLD: f32 = 0.01;
+
+/// Alpha threshold for outline rendering
+const ALPHA_THRESHOLD_OUTLINE: f32 = 0.02;
+
+/// Minimum font size (pixels)
+const MIN_FONT_SIZE: f32 = 8.0;
+
+/// Maximum font size (pixels)
+const MAX_FONT_SIZE: f32 = 72.0;
+
+/// Minimum display scale factor
+const MIN_DISPLAY_SCALE: f32 = 0.5;
+
+/// Maximum display scale factor
+const MAX_DISPLAY_SCALE: f32 = 4.0;
+
+// ============================================================================
+// Graphics Helper Functions
+// ============================================================================
+
+/// Smoothstep interpolation for anti-aliasing.
+/// Returns smooth transition from 0 to 1 as t goes from 0 to 1.
+/// Formula: 3t² - 2t³ (Hermite interpolation)
+#[inline]
+fn smoothstep(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Compute anti-aliased alpha from signed distance.
+/// d > 0: inside shape (alpha = 1.0)
+/// d < 0: outside shape, with smooth falloff
+#[inline]
+fn aa_alpha_from_distance(d: f32, aa_width: f32) -> f32 {
+    if d >= 0.0 {
+        1.0
+    } else {
+        let t = (d / aa_width + 1.0).clamp(0.0, 1.0);
+        smoothstep(t)
+    }
+}
+
+/// Compute SDF (signed distance field) for an ellipse.
+/// Positive inside, negative outside.
+/// Uses approximation for arbitrary ellipse (not exact but visually correct).
+///
+/// # Arguments
+/// * `nx`, `ny` - normalized coordinates (point / radius)
+/// * `rx`, `ry` - ellipse radii
+/// * `len` - length of normalized vector (precomputed)
+#[inline]
+fn ellipse_sdf(nx: f32, ny: f32, rx: f32, ry: f32, len: f32) -> f32 {
+    if len <= 0.001 {
+        return -rx.min(ry);
+    }
+    // Approximate gradient-based SDF
+    let k = (rx * ry) / (rx * ny.abs() + ry * nx.abs()).max(0.001);
+    (len - 1.0) * k.min(rx.min(ry))
+}
+
+/// Calculate distance from point to line segment.
+/// Used for outline rendering of triangular shapes.
+///
+/// # Arguments
+/// * `px`, `py` - point coordinates
+/// * `ax`, `ay` - segment start
+/// * `bx`, `by` - segment end
+#[inline]
+fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let vx = bx - ax;
+    let vy = by - ay;
+    let wx = px - ax;
+    let wy = py - ay;
+
+    // Project P onto line AB
+    let c1 = vx * wx + vy * wy;  // dot(v, w)
+    if c1 <= 0.0 {
+        // Before segment start
+        return (wx * wx + wy * wy).sqrt();
+    }
+
+    let c2 = vx * vx + vy * vy;  // dot(v, v) = |v|²
+    if c2 <= c1 {
+        // After segment end
+        let dx = px - bx;
+        let dy = py - by;
+        return (dx * dx + dy * dy).sqrt();
+    }
+
+    // Projection falls within segment
+    let t = c1 / c2;
+    let proj_x = ax + t * vx;
+    let proj_y = ay + t * vy;
+    let dx = px - proj_x;
+    let dy = py - proj_y;
+    (dx * dx + dy * dy).sqrt()
+}
+
 /// sRGB to linear conversion (same calculation as shader)
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -64,7 +179,8 @@ fn is_transition_char(ch: char) -> bool {
     )
 }
 
-/// Draw box-drawing characters programmatically for pixel-perfect alignment
+/// Draw box-drawing characters programmatically for pixel-perfect alignment.
+/// Uses procedural rendering to ensure exact pixel alignment regardless of font.
 fn draw_box_drawing(
     ch: char,
     x: f32,
@@ -75,7 +191,8 @@ fn draw_box_drawing(
     atlas: &crate::font::lcd_atlas::LcdGlyphAtlas,
     tr: &mut crate::gpu::LcdTextRendererInstanced,
 ) -> bool {
-    let t = (cell_h * 0.12).clamp(1.0, 2.0).round();
+    // Line thickness: proportional to cell height, clamped for visibility
+    let t = (cell_h * LINE_THICKNESS_SCALE).clamp(1.0, 2.0).round();
     // Line centers - where the middle of the line stroke sits
     let line_cx = (x + (cell_w - t) * 0.5).round() + t * 0.5;
     let line_cy = (y + (cell_h - t) * 0.5).round() + t * 0.5;
@@ -146,9 +263,12 @@ fn draw_box_drawing(
     }
 }
 
-/// Draw powerline triangle (E0B0/E0B1/E0B2/E0B3)
-/// right = true => right-pointing (solid left), false => left-pointing (solid right)
-/// width_scale: 1.0 = full width, 0.5 = thin variant
+/// Draw powerline triangle (E0B0/E0B2 solid, with anti-aliasing).
+/// Used for status line separators in shells like fish, zsh with powerline themes.
+///
+/// # Arguments
+/// * `right` - true for right-pointing (▶), false for left-pointing (◀)
+/// * `width_scale` - 1.0 = full width, 0.5 = thin variant
 fn draw_powerline_triangle(
     x: f32,
     y: f32,
@@ -161,7 +281,6 @@ fn draw_powerline_triangle(
     right: bool,
     width_scale: f32,
 ) {
-    let aa_w = 1.5f32;
     let steps = cell_h as i32;
     let half = cell_h / 2.0;
     let max_w_px = (cell_w * width_scale - 1.0).max(1.0);
@@ -176,25 +295,20 @@ fn draw_powerline_triangle(
 
     for i in 0..steps {
         let row_y = y + i as f32;
+        // Calculate edge position based on vertical position (triangle shape)
         let dist = ((i as f32 + 0.5) - half).abs();
         let edge = (max_w_px * (1.0 - dist * inv_half) + 0.5).clamp(0.5, max_w_px + 0.5);
 
         for px in 0..=max_w_i {
             let px_center = px as f32 + 0.5;
+            // Signed distance: positive inside triangle, negative outside
             let d = if right {
-                // right-pointing: fill [0 .. edge]
                 edge - px_center
             } else {
-                // left-pointing: fill [max_w - edge .. max_w]
                 px_center - ((max_w_px + 0.5) - edge)
             };
-            let alpha = if d >= 0.0 {
-                1.0
-            } else {
-                let t = (d / aa_w + 1.0).clamp(0.0, 1.0);
-                t * t * (3.0 - 2.0 * t) // smoothstep
-            };
-            if alpha > 0.01 {
+            let alpha = aa_alpha_from_distance(d, AA_WIDTH_SOLID);
+            if alpha > ALPHA_THRESHOLD {
                 let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
                 tr.push_rect_with_bg(start_x + px as f32, row_y, 1.0, 1.0, aa_fg, bg, atlas);
             }
@@ -202,7 +316,8 @@ fn draw_powerline_triangle(
     }
 }
 
-/// Draw powerline triangle outline (E0B1/E0B3)
+/// Draw powerline triangle outline (E0B1/E0B3).
+/// Renders only the diagonal edges of the triangle shape.
 fn draw_powerline_triangle_outline(
     x: f32,
     y: f32,
@@ -214,37 +329,17 @@ fn draw_powerline_triangle_outline(
     tr: &mut crate::gpu::LcdTextRendererInstanced,
     right: bool,
 ) {
-    let aa = 0.7f32;
-    let line_half = 0.35f32;
     let w_px = (cell_w - 1.0).max(1.0);
     let h_px = (cell_h - 1.0).max(1.0);
     let half = h_px * 0.5;
 
+    // Define triangle vertices: base on one side, tip on the other
     let (x0, y0, x1, y1, x2, y2) = if right {
-        // right-pointing: two edges to the tip at (w, half)
+        // Right-pointing: tip at (w, half)
         (0.5, 0.5, w_px + 0.5, half + 0.5, 0.5, h_px + 0.5)
     } else {
-        // left-pointing: two edges to the tip at (0, half)
+        // Left-pointing: tip at (0, half)
         (w_px + 0.5, 0.5, 0.5, half + 0.5, w_px + 0.5, h_px + 0.5)
-    };
-
-    let dist_to_segment = |px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32| -> f32 {
-        let vx = bx - ax;
-        let vy = by - ay;
-        let wx = px - ax;
-        let wy = py - ay;
-        let c1 = vx * wx + vy * wy;
-        if c1 <= 0.0 {
-            return ((px - ax).powi(2) + (py - ay).powi(2)).sqrt();
-        }
-        let c2 = vx * vx + vy * vy;
-        if c2 <= c1 {
-            return ((px - bx).powi(2) + (py - by).powi(2)).sqrt();
-        }
-        let b = c1 / c2;
-        let bx = ax + b * vx;
-        let by = ay + b * vy;
-        ((px - bx).powi(2) + (py - by).powi(2)).sqrt()
     };
 
     let ww = w_px as i32 + 1;
@@ -255,18 +350,24 @@ fn draw_powerline_triangle_outline(
             let px_f = px as f32 + 0.5;
             let py_f = py as f32 + 0.5;
 
-            let d1 = dist_to_segment(px_f, py_f, x0, y0, x1, y1);
-            let d2 = dist_to_segment(px_f, py_f, x2, y2, x1, y1);
+            // Distance to either diagonal edge
+            let d1 = distance_to_segment(px_f, py_f, x0, y0, x1, y1);
+            let d2 = distance_to_segment(px_f, py_f, x2, y2, x1, y1);
             let d = d1.min(d2);
-            if d > line_half + aa {
+
+            // Skip pixels far from the outline
+            if d > OUTLINE_STROKE_HALF + AA_WIDTH_OUTLINE {
                 continue;
             }
-            let alpha = if d <= line_half {
+
+            // Linear falloff from stroke edge
+            let alpha = if d <= OUTLINE_STROKE_HALF {
                 1.0
             } else {
-                1.0 - (d - line_half) / aa
+                1.0 - (d - OUTLINE_STROKE_HALF) / AA_WIDTH_OUTLINE
             };
-            if alpha > 0.02 {
+
+            if alpha > ALPHA_THRESHOLD_OUTLINE {
                 let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
                 tr.push_rect_with_bg(x + px as f32, y + py as f32, 1.0, 1.0, aa_fg, bg, atlas);
             }
@@ -274,9 +375,12 @@ fn draw_powerline_triangle_outline(
     }
 }
 
-/// Draw powerline semicircle (E0B4/E0B5/E0B6/E0B7)
-/// right = true => right-pointing, false => left-pointing
-/// width_scale: 1.0 = full width, 0.5 = thin variant
+/// Draw powerline semicircle (E0B4/E0B6 solid).
+/// Renders a filled semicircle for rounded powerline separators.
+///
+/// # Arguments
+/// * `right` - true for right-pointing, false for left-pointing
+/// * `width_scale` - 1.0 = full width, 0.5 = thin variant
 fn draw_powerline_semicircle(
     x: f32,
     y: f32,
@@ -289,7 +393,6 @@ fn draw_powerline_semicircle(
     right: bool,
     width_scale: f32,
 ) {
-    let aa_w = 1.5f32;
     let steps = cell_h as i32;
     let h_px = (cell_h - 1.0).max(1.0);
     let cy = h_px * 0.5 + 0.5;
@@ -310,28 +413,19 @@ fn draw_powerline_semicircle(
 
         for px in 0..=rx_i {
             let px_rel = px as f32 + 0.5;
-            let px_f = if right {
-                px_rel
-            } else {
-                (max_w_px + 0.5) - px_rel
-            };
+            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
 
+            // Normalized ellipse coordinates
             let nx = px_f / rx;
             let ny = py / ry;
             let len = (nx * nx + ny * ny).sqrt();
-            let sdf = if len > 0.001 {
-                (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
-            } else {
-                -rx.min(ry)
-            };
-            let d = -sdf;
-            let alpha = if d >= 0.0 {
-                1.0
-            } else {
-                let t = (d / aa_w + 1.0).clamp(0.0, 1.0);
-                t * t * (3.0 - 2.0 * t)
-            };
-            if alpha > 0.01 {
+
+            // SDF: negative inside ellipse, positive outside
+            let sdf = ellipse_sdf(nx, ny, rx, ry, len);
+            let d = -sdf;  // Flip: positive inside for aa_alpha_from_distance
+
+            let alpha = aa_alpha_from_distance(d, AA_WIDTH_SOLID);
+            if alpha > ALPHA_THRESHOLD {
                 let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
                 tr.push_rect_with_bg(start_x + px as f32, row_y, 1.0, 1.0, aa_fg, bg, atlas);
             }
@@ -339,7 +433,8 @@ fn draw_powerline_semicircle(
     }
 }
 
-/// Draw powerline semicircle outline (E0B5/E0B7)
+/// Draw powerline semicircle outline (E0B5/E0B7).
+/// Renders only the curved edge of the semicircle.
 fn draw_powerline_semicircle_outline(
     x: f32,
     y: f32,
@@ -351,14 +446,11 @@ fn draw_powerline_semicircle_outline(
     tr: &mut crate::gpu::LcdTextRendererInstanced,
     right: bool,
 ) {
-    let aa = 0.7f32;
-    let line_half = 0.35f32;
     let steps = cell_h as i32;
     let ry = (cell_h - 1.0).max(1.0) * 0.5;
     let cy = ry + 0.5;
     let max_w_px = (cell_w - 1.0).max(1.0);
     let rx = max_w_px + 0.5;
-    let start_x = x;
     let rx_i = max_w_px.floor() as i32;
 
     for i in 0..steps {
@@ -367,32 +459,31 @@ fn draw_powerline_semicircle_outline(
 
         for px in 0..=rx_i {
             let px_rel = px as f32 + 0.5;
-            let px_f = if right {
-                px_rel
-            } else {
-                (max_w_px + 0.5) - px_rel
-            };
+            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
 
+            // Normalized ellipse coordinates
             let nx = px_f / rx;
             let ny = py / ry;
             let len = (nx * nx + ny * ny).sqrt();
-            let sdf = if len > 0.001 {
-                (len - 1.0) * (rx * ry / (rx * ny.abs() + ry * nx.abs()).max(0.001)).min(rx.min(ry))
-            } else {
-                -rx.min(ry)
-            };
-            let d = sdf.abs();
-            if d > line_half + aa {
+
+            let sdf = ellipse_sdf(nx, ny, rx, ry, len);
+            let d = sdf.abs();  // Distance to ellipse edge
+
+            // Skip pixels far from the outline
+            if d > OUTLINE_STROKE_HALF + AA_WIDTH_OUTLINE {
                 continue;
             }
-            let alpha = if d <= line_half {
+
+            // Linear falloff from stroke edge
+            let alpha = if d <= OUTLINE_STROKE_HALF {
                 1.0
             } else {
-                1.0 - (d - line_half) / aa
+                1.0 - (d - OUTLINE_STROKE_HALF) / AA_WIDTH_OUTLINE
             };
-            if alpha > 0.02 {
+
+            if alpha > ALPHA_THRESHOLD_OUTLINE {
                 let aa_fg = [fg[0], fg[1], fg[2], fg[3] * alpha];
-                tr.push_rect_with_bg(start_x + px as f32, row_y, 1.0, 1.0, aa_fg, bg, atlas);
+                tr.push_rect_with_bg(x + px as f32, row_y, 1.0, 1.0, aa_fg, bg, atlas);
             }
         }
     }
@@ -782,27 +873,23 @@ fn handle_selection_key(term: &mut terminal::Terminal, keycode: u32, cols: usize
 }
 
 /// Expand ~ in path to user's home directory
+/// Expand ~ to user's home directory.
+/// Uses provided user_home if available, falls back to dirs::home_dir().
 fn expand_path(path: &str, user_home: Option<&str>) -> String {
-    if path.starts_with("~/") {
-        if let Some(home) = user_home {
-            return format!("{}{}", home, &path[1..]);
-        }
-    } else if path == "~" {
-        if let Some(home) = user_home {
-            return home.to_string();
-        }
+    if !path.starts_with('~') {
+        return path.to_string();
     }
-    // Fallback: use dirs::home_dir() or keep as-is
-    if path.starts_with("~") {
-        if let Some(home) = dirs::home_dir() {
-            if path == "~" {
-                return home.to_string_lossy().to_string();
-            } else {
-                return format!("{}{}", home.to_string_lossy(), &path[1..]);
-            }
-        }
+
+    // Get home directory: prefer provided value, fallback to dirs
+    let home = user_home
+        .map(|h| h.to_string())
+        .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().to_string()));
+
+    match home {
+        Some(home) if path == "~" => home,
+        Some(home) => format!("{}{}", home, &path[1..]),
+        None => path.to_string(),
     }
-    path.to_string()
 }
 
 /// Save screenshot
@@ -1113,7 +1200,7 @@ fn main() -> Result<()> {
     };
 
     // Apply display scale factor to font size
-    let scale_factor = cfg.appearance.scale.max(0.5).min(4.0);
+    let scale_factor = cfg.appearance.scale.clamp(MIN_DISPLAY_SCALE, MAX_DISPLAY_SCALE);
     let font_size = (cfg.font.size * scale_factor) as u32;
     if (scale_factor - 1.0).abs() > 0.01 {
         info!(
@@ -1936,8 +2023,7 @@ fn main() -> Result<()> {
                 if kb_font_increase.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     font_size_delta += 2;
                     let new_size = (base_font_size as f32 + font_size_delta as f32)
-                        .max(8.0)
-                        .min(72.0);
+                        .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
                     cell_w = new_cell_w.max(1.0);
                     cell_h = new_cell_h.max(1.0);
@@ -1954,8 +2040,7 @@ fn main() -> Result<()> {
                 if kb_font_decrease.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     font_size_delta -= 2;
                     let new_size = (base_font_size as f32 + font_size_delta as f32)
-                        .max(8.0)
-                        .min(72.0);
+                        .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
                     cell_w = new_cell_w.max(1.0);
                     cell_h = new_cell_h.max(1.0);

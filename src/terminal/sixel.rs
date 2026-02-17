@@ -1,16 +1,32 @@
 //! Sixel graphics decoder
 //!
-//! Parses Sixel image data sent via DCS sequences
-//! and converts to RGBA images.
+//! Parses Sixel image data sent via DCS sequences and converts to RGBA images.
 //!
-//! Sixel format:
-//! - DCS Pa ; Pb ; Ph q [sixel-data] ST
-//! - Characters 0x3F-0x7E: 6-bit pattern (6 vertical pixels)
-//! - #Pc;Pu;Px;Py;Pz: Color definition (Pu=2: RGB 0-100%)
-//! - #Pc: Color selection
-//! - !n: RLE (repeat n times)
-//! - $: Return (X=0)
-//! - -: Newline (Y+=6, X=0)
+//! ## Sixel Format Overview
+//!
+//! Sixel is a bitmap graphics format designed for serial terminals.
+//! Each character encodes 6 vertical pixels (hence "six-pixel" → "sixel").
+//!
+//! ### Sequence Structure
+//! ```text
+//! DCS Pa ; Pb ; Ph q [sixel-data] ST
+//! ```
+//! - `Pa`: Pixel aspect ratio (usually 0 or 1)
+//! - `Pb`: Background mode (0=transparent, 1=use color 0)
+//! - `Ph`: Horizontal grid size (ignored by most implementations)
+//!
+//! ### Data Characters
+//! - `0x3F-0x7E` ('?' to '~'): 6-bit pixel pattern, value = char - 0x3F
+//! - `#Pc;Pu;Px;Py;Pz`: Define color Pc (Pu=2: RGB as 0-100% each)
+//! - `#Pc`: Select color Pc for subsequent pixels
+//! - `!n<char>`: RLE - repeat character n times
+//! - `$`: Carriage return (X = 0, stay on same row)
+//! - `-`: Line feed (X = 0, Y += 6)
+//!
+//! ## References
+//! - VT340 Graphics Programming: <https://vt100.net/docs/vt3xx-gp/chapter14.html>
+//! - libsixel: <https://github.com/saitoha/libsixel>
+//! - Sixel format: <https://en.wikipedia.org/wiki/Sixel>
 
 use log::{trace, warn};
 

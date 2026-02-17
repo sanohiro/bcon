@@ -1,6 +1,40 @@
-//! Kitty graphics protocol
+//! Kitty graphics protocol implementation
 //!
-//! https://sw.kovidgoyal.net/kitty/graphics-protocol/
+//! Supports the Kitty terminal's graphics protocol for displaying images
+//! inline in the terminal. Used by tools like ranger, viu, termpdf, etc.
+//!
+//! ## Protocol Overview
+//!
+//! Images are sent via APC (Application Program Command) sequences:
+//! ```text
+//! ESC _G <control-data>;<payload> ESC \
+//! ```
+//!
+//! ### Transmission Actions (a=t/T)
+//! - `a=t`: Transmit image data (direct/base64)
+//! - `a=T`: Transmit with display
+//! - `t=d`: Direct data in payload
+//! - `t=f`: Read from file path
+//! - `t=t`: Read from temp file
+//! - `t=s`: Read from shared memory
+//!
+//! ### Display Actions (a=p)
+//! - Place image at cursor position
+//! - `i=<id>`: Image ID to display
+//! - `c=<cols>`, `r=<rows>`: Size in cells
+//!
+//! ### Animation (a=f)
+//! - Frame-based animation support
+//! - `r=<frame>`: Frame number
+//! - `z=<gap>`: Inter-frame delay in ms
+//!
+//! ## Data Formats (f=)
+//! - 24: RGB (3 bytes/pixel)
+//! - 32: RGBA (4 bytes/pixel, default)
+//! - 100: PNG (decoded automatically)
+//!
+//! ## Reference
+//! - <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 
 use log::{info, trace, warn};
 

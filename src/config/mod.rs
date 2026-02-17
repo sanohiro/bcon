@@ -595,41 +595,23 @@ impl Config {
         None
     }
 
-    /// Priority:
-    /// 1. Path specified by BCON_CONFIG environment variable
+    /// Load configuration with priority:
+    /// 1. BCON_CONFIG environment variable
     /// 2. ~/.config/bcon/config.toml (user config)
     /// 3. /etc/bcon/config.toml (system config)
     /// 4. Built-in defaults
     pub fn load() -> Self {
-        // 1. BCON_CONFIG environment variable
-        if let Ok(path) = std::env::var("BCON_CONFIG") {
-            if let Ok(config) = Self::load_from_file(&path) {
-                info!("Loaded config from BCON_CONFIG: {}", path);
-                return config;
-            }
-        }
-
-        // 2. User config: ~/.config/bcon/config.toml
-        if let Some(config_dir) = dirs::config_dir() {
-            let config_path = config_dir.join("bcon").join("config.toml");
-            if config_path.exists() {
-                if let Ok(config) = Self::load_from_file(config_path.to_string_lossy().as_ref()) {
-                    info!("Loaded config: {}", config_path.display());
+        if let Some(path) = Self::config_path() {
+            match Self::load_from_file(path.to_string_lossy().as_ref()) {
+                Ok(config) => {
+                    info!("Loaded config: {}", path.display());
                     return config;
+                }
+                Err(e) => {
+                    warn!("Failed to load config {}: {}", path.display(), e);
                 }
             }
         }
-
-        // 3. System config: /etc/bcon/config.toml
-        let system_config = std::path::Path::new(Self::SYSTEM_CONFIG_PATH);
-        if system_config.exists() {
-            if let Ok(config) = Self::load_from_file(Self::SYSTEM_CONFIG_PATH) {
-                info!("Loaded system config: {}", Self::SYSTEM_CONFIG_PATH);
-                return config;
-            }
-        }
-
-        // 4. Built-in defaults
         info!("Using built-in default config");
         Self::default()
     }

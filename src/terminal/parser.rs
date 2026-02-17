@@ -1,15 +1,54 @@
 //! VT escape sequence parser
 //!
-//! Implements vte crate's Perform trait
-//! and applies parsed results to Grid.
+//! Implements vte crate's Perform trait and applies parsed results to Grid.
+//!
+//! ## References
+//! - ECMA-48: Control Functions for Coded Character Sets
+//! - VT100/VT220: <https://vt100.net/docs/>
+//! - Xterm Control Sequences: <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html>
+//! - Kitty Keyboard Protocol: <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
 
 use std::sync::Arc;
 
 use log::{info, trace, warn};
 use vte::{Params, Perform};
 
+// ============================================================================
+// Constants
+// ============================================================================
+
 /// Maximum XTGETTCAP buffer size (64KB)
 const MAX_XTGETTCAP_BUFFER: usize = 64 * 1024;
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Convert CSI parameter to usize with default value.
+/// CSI parameters treat 0 as "default" (usually 1).
+#[inline]
+const fn param_or_default(param: u16, default: usize) -> usize {
+    if param == 0 {
+        default
+    } else {
+        param as usize
+    }
+}
+
+/// Get cursor style and blink state from DECSCUSR parameter.
+/// Returns (CursorStyle, blink) or None for invalid parameter.
+#[inline]
+const fn cursor_style_from_decscusr(param: u16) -> Option<(CursorStyle, bool)> {
+    match param {
+        0 | 1 => Some((CursorStyle::Block, true)),      // Default / blinking block
+        2 => Some((CursorStyle::Block, false)),         // Steady block
+        3 => Some((CursorStyle::Underline, true)),      // Blinking underline
+        4 => Some((CursorStyle::Underline, false)),     // Steady underline
+        5 => Some((CursorStyle::Bar, true)),            // Blinking bar
+        6 => Some((CursorStyle::Bar, false)),           // Steady bar
+        _ => None,
+    }
+}
 
 use super::grid::{CellAttrs, Color, CursorStyle, Grid, Hyperlink, UnderlineStyle};
 use super::sixel::SixelDecoder;
@@ -149,57 +188,50 @@ impl<'a> Perform for Performer<'a> {
 
         match (action, intermediates) {
             // Cursor movement
+            // === Cursor Movement (CUU/CUD/CUF/CUB/CNL/CPL) ===
             ('A', []) => {
-                // CUU - Cursor Up
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_up(n);
+                // CUU - Cursor Up Ps times (default 1)
+                self.grid.move_cursor_up(param_or_default(param0, 1));
             }
             ('B', []) => {
-                // CUD - Cursor Down
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_down(n);
+                // CUD - Cursor Down Ps times (default 1)
+                self.grid.move_cursor_down(param_or_default(param0, 1));
             }
             ('C', []) => {
-                // CUF - Cursor Forward
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_forward(n);
+                // CUF - Cursor Forward Ps times (default 1)
+                self.grid.move_cursor_forward(param_or_default(param0, 1));
             }
             ('D', []) => {
-                // CUB - Cursor Backward
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_backward(n);
+                // CUB - Cursor Backward Ps times (default 1)
+                self.grid.move_cursor_backward(param_or_default(param0, 1));
             }
             ('E', []) => {
-                // CNL - Cursor Next Line
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_down(n);
+                // CNL - Cursor Next Line Ps times (default 1)
+                self.grid.move_cursor_down(param_or_default(param0, 1));
                 self.grid.carriage_return();
             }
             ('F', []) => {
-                // CPL - Cursor Previous Line
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_up(n);
+                // CPL - Cursor Previous Line Ps times (default 1)
+                self.grid.move_cursor_up(param_or_default(param0, 1));
                 self.grid.carriage_return();
             }
             ('H' | 'f', []) => {
-                // CUP - Cursor Position
-                let row = if param0 == 0 { 1 } else { param0 as usize };
+                // CUP - Cursor Position (row ; col, 1-based, default 1;1)
+                let row = param_or_default(param0, 1);
                 let col = flat_params
                     .get(1)
                     .and_then(|p| p.first().copied())
-                    .map(|v| if v == 0 { 1 } else { v as usize })
+                    .map(|v| param_or_default(v, 1))
                     .unwrap_or(1);
                 self.grid.move_cursor_to(row, col);
             }
             ('G', []) => {
-                // CHA - Cursor Horizontal Absolute
-                let col = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_to(self.grid.cursor_row + 1, col);
+                // CHA - Cursor Horizontal Absolute (column, 1-based)
+                self.grid.move_cursor_to(self.grid.cursor_row + 1, param_or_default(param0, 1));
             }
             ('d', []) => {
-                // VPA - Vertical Position Absolute
-                let row = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.move_cursor_to(row, self.grid.cursor_col + 1);
+                // VPA - Vertical Position Absolute (row, 1-based)
+                self.grid.move_cursor_to(param_or_default(param0, 1), self.grid.cursor_col + 1);
             }
             ('J', []) => {
                 // ED - Erase in Display
@@ -209,40 +241,35 @@ impl<'a> Perform for Performer<'a> {
                 // EL - Erase in Line
                 self.grid.erase_in_line(param0);
             }
+            // === Line/Character Operations ===
             ('L', []) => {
-                // IL - Insert Line
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.insert_lines(n);
+                // IL - Insert Ps blank lines (default 1)
+                self.grid.insert_lines(param_or_default(param0, 1));
             }
             ('M', []) => {
-                // DL - Delete Line
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.delete_lines(n);
+                // DL - Delete Ps lines (default 1)
+                self.grid.delete_lines(param_or_default(param0, 1));
             }
             ('P', []) => {
-                // DCH - Delete Character
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.delete_chars(n);
+                // DCH - Delete Ps characters (default 1)
+                self.grid.delete_chars(param_or_default(param0, 1));
             }
             ('@', []) => {
-                // ICH - Insert Character
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.insert_chars(n);
+                // ICH - Insert Ps blank characters (default 1)
+                self.grid.insert_chars(param_or_default(param0, 1));
             }
             ('X', []) => {
-                // ECH - Erase Character
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.erase_chars(n);
+                // ECH - Erase Ps characters (default 1)
+                self.grid.erase_chars(param_or_default(param0, 1));
             }
+            // === Scrolling ===
             ('S', []) => {
-                // SU - Scroll Up
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.scroll_up(n);
+                // SU - Scroll Up Ps lines (default 1)
+                self.grid.scroll_up(param_or_default(param0, 1));
             }
             ('T', []) => {
-                // SD - Scroll Down
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.scroll_down(n);
+                // SD - Scroll Down Ps lines (default 1)
+                self.grid.scroll_down(param_or_default(param0, 1));
             }
             ('s', []) => {
                 // SCOSC - Save Cursor Position
@@ -295,9 +322,8 @@ impl<'a> Perform for Performer<'a> {
                     .extend_from_slice(b"\x1bP>|bcon 0.1.0\x1b\\");
             }
             ('b', []) => {
-                // REP - Repeat preceding character
-                let n = if param0 == 0 { 1 } else { param0 as usize };
-                self.grid.repeat_char(n);
+                // REP - Repeat preceding graphic character Ps times (default 1)
+                self.grid.repeat_char(param_or_default(param0, 1));
             }
             ('m', []) => {
                 // SGR - Select Graphic Rendition
@@ -386,40 +412,11 @@ impl<'a> Perform for Performer<'a> {
                 self.handle_decset(param0, false);
             }
             ('q', [b' ']) => {
-                // DECSCUSR - Set Cursor Style
-                let style = param0;
-                match style {
-                    0 | 1 => {
-                        // 0: default, 1: blinking block
-                        self.grid.cursor.style = CursorStyle::Block;
-                        self.grid.cursor.blink = true;
-                    }
-                    2 => {
-                        // Steady block
-                        self.grid.cursor.style = CursorStyle::Block;
-                        self.grid.cursor.blink = false;
-                    }
-                    3 => {
-                        // Blinking underline
-                        self.grid.cursor.style = CursorStyle::Underline;
-                        self.grid.cursor.blink = true;
-                    }
-                    4 => {
-                        // Steady underline
-                        self.grid.cursor.style = CursorStyle::Underline;
-                        self.grid.cursor.blink = false;
-                    }
-                    5 => {
-                        // Blinking bar
-                        self.grid.cursor.style = CursorStyle::Bar;
-                        self.grid.cursor.blink = true;
-                    }
-                    6 => {
-                        // Steady bar
-                        self.grid.cursor.style = CursorStyle::Bar;
-                        self.grid.cursor.blink = false;
-                    }
-                    _ => {}
+                // DECSCUSR - Set Cursor Style (Ps SP q)
+                // 0/1: blinking block, 2: steady block, 3/4: underline, 5/6: bar
+                if let Some((style, blink)) = cursor_style_from_decscusr(param0) {
+                    self.grid.cursor.style = style;
+                    self.grid.cursor.blink = blink;
                 }
             }
             ('t', []) => {
@@ -615,67 +612,75 @@ impl<'a> Perform for Performer<'a> {
 }
 
 impl<'a> Performer<'a> {
-    /// DECSET/DECRST handling
+    /// Handle DECSET (CSI ? Pm h) and DECRST (CSI ? Pm l) sequences.
+    ///
+    /// These control DEC private modes. DECSET enables, DECRST disables.
+    /// Reference: <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-which-begin-with-CSI>
     fn handle_decset(&mut self, mode: u16, enable: bool) {
         match mode {
+            // === DEC VT Modes ===
             1 => {
-                // DECCKM - Application Cursor Keys
+                // DECCKM: Application Cursor Keys
+                // When set, cursor keys send application sequences (ESC O A/B/C/D)
+                // instead of normal sequences (ESC [ A/B/C/D)
                 self.grid.modes.application_cursor_keys = enable;
             }
             7 => {
-                // DECAWM - Auto-wrap Mode
+                // DECAWM: Auto-wrap Mode
+                // When set, text wraps to next line at right margin
                 self.grid.modes.auto_wrap = enable;
             }
             25 => {
-                // DECTCEM - Text Cursor Enable Mode
+                // DECTCEM: Text Cursor Enable Mode
+                // When set, cursor is visible
                 self.grid.modes.cursor_visible = enable;
             }
+
+            // === Xterm Extensions ===
             1049 => {
-                // Alternate Screen Buffer
+                // Alternate Screen Buffer (with save/restore cursor)
+                // Used by vim, less, etc. to preserve main screen content
                 if enable {
                     self.grid.enter_alternate_screen();
                 } else {
                     self.grid.leave_alternate_screen();
                 }
             }
-            1000 => {
-                // X10 Mouse Tracking
+
+            // === Mouse Tracking (mutually exclusive) ===
+            1000 | 1002 | 1003 => {
+                use super::grid::MouseMode;
                 self.grid.modes.mouse_mode = if enable {
-                    super::grid::MouseMode::X10
+                    match mode {
+                        1000 => MouseMode::X10,         // X10 compatibility (button press only)
+                        1002 => MouseMode::ButtonEvent, // Report button press/release/motion with button
+                        1003 => MouseMode::AnyEvent,    // Report all motion events
+                        _ => unreachable!(),
+                    }
                 } else {
-                    super::grid::MouseMode::None
-                };
-            }
-            1002 => {
-                // Button Event Mouse Tracking
-                self.grid.modes.mouse_mode = if enable {
-                    super::grid::MouseMode::ButtonEvent
-                } else {
-                    super::grid::MouseMode::None
-                };
-            }
-            1003 => {
-                // Any Event Mouse Tracking
-                self.grid.modes.mouse_mode = if enable {
-                    super::grid::MouseMode::AnyEvent
-                } else {
-                    super::grid::MouseMode::None
+                    MouseMode::None
                 };
             }
             1006 => {
                 // SGR Extended Mouse Mode
+                // Uses CSI < Pb ; Px ; Py M/m format (supports coordinates > 223)
                 self.grid.modes.mouse_sgr = enable;
+            }
+
+            // === Modern Extensions ===
+            1004 => {
+                // Focus Event Mode
+                // When set, terminal sends CSI I on focus-in, CSI O on focus-out
+                self.grid.modes.send_focus_events = enable;
             }
             2004 => {
                 // Bracketed Paste Mode
+                // Wraps pasted text with CSI 200~ and CSI 201~
                 self.grid.modes.bracketed_paste = enable;
             }
-            1004 => {
-                // Focus Event Mode
-                self.grid.modes.send_focus_events = enable;
-            }
             2026 => {
-                // Synchronized Update Mode
+                // Synchronized Update Mode (iTerm2/Kitty extension)
+                // Defers rendering until mode is disabled, reducing flicker
                 self.grid.modes.synchronized_update = enable;
             }
             _ => {
@@ -684,9 +689,14 @@ impl<'a> Performer<'a> {
         }
     }
 
-    /// SGR (Select Graphic Rendition) handling
+    /// Handle SGR (Select Graphic Rendition) sequences (CSI Pm m).
+    ///
+    /// Controls text attributes like bold, italic, colors, etc.
+    /// Multiple parameters can be combined: CSI 1;31;40 m = bold + red fg + black bg
+    ///
+    /// Reference: <https://en.wikipedia.org/wiki/ANSI_escape_code#SGR>
     fn handle_sgr(&mut self, params: &[Vec<u16>]) {
-        // No parameters -> reset
+        // No parameters = SGR 0 (reset all attributes)
         if params.is_empty() {
             self.grid.reset_attrs();
             return;
