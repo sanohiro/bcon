@@ -490,11 +490,43 @@ impl VtSwitcher {
             target_vt
         );
 
+        // Check if we're actually the active VT right now
+        // VT_WAITACTIVE might have returned because VT was briefly active,
+        // but another VT (e.g., tty1 for getty) could have become active since then.
+        let is_active = {
+            #[repr(C)]
+            struct VtStat {
+                v_active: libc::c_ushort,
+                v_signal: libc::c_ushort,
+                v_state: libc::c_ushort,
+            }
+            let mut stat = VtStat {
+                v_active: 0,
+                v_signal: 0,
+                v_state: 0,
+            };
+            let ret = unsafe { libc::ioctl(tty_fd, VT_GETSTATE, &mut stat) };
+            if ret >= 0 {
+                stat.v_active == target_vt
+            } else {
+                // VT_GETSTATE failed, assume active since VT_WAITACTIVE returned
+                true
+            }
+        };
+
+        if is_active {
+            info!("VT{} is active, keeping KD_GRAPHICS", target_vt);
+        } else {
+            // We're not the active VT - restore KD_TEXT so the active VT can display
+            info!("VT{} is not active (active={}), restoring KD_TEXT", target_vt, is_active);
+            unsafe { libc::ioctl(tty_fd, KDSETMODE, KD_TEXT) };
+        }
+
         Ok(Self {
             tty_fd,
             target_vt,
             signal_fd,
-            active: true,
+            active: is_active,
             old_sigmask,
             original_kd_mode,
         })

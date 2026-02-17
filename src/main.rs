@@ -1192,18 +1192,28 @@ fn main() -> Result<()> {
     );
 
     // Save original CRTC settings (restore on exit)
-    let saved_crtc = drm::SavedCrtc::save(&drm_device, &display_config)?;
+    // Note: This may fail if we don't have DRM master, but that's OK
+    let saved_crtc = drm::SavedCrtc::save(&drm_device, &display_config).ok();
 
-    // Render first frame and set mode
-    let init_bg = cfg.appearance.background_rgb();
-    renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
-    egl_context.swap_buffers()?;
+    // Render first frame and set mode (only if we have DRM master)
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+    let mut needs_initial_mode_set = !initial_drm_master;
 
-    let bo = gbm_surface.lock_front_buffer()?;
-    let fb = drm::DrmFramebuffer::from_bo(&drm_device, &bo)?;
-    drm::set_crtc(&drm_device, &display_config, &fb)?;
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    let _needs_initial_mode_set = false;
 
-    info!("Phase 1 initialization complete");
+    if initial_drm_master {
+        let init_bg = cfg.appearance.background_rgb();
+        renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
+        egl_context.swap_buffers()?;
+
+        let bo = gbm_surface.lock_front_buffer()?;
+        let fb = drm::DrmFramebuffer::from_bo(&drm_device, &bo)?;
+        drm::set_crtc(&drm_device, &display_config, &fb)?;
+        info!("Phase 1 initialization complete");
+    } else {
+        info!("Phase 1 initialization complete (VT not active, mode set deferred)");
+    }
 
     // Phase 2: Text rendering initialization (FreeType + LCD subpixel)
     let gl = renderer.gl();
@@ -1650,6 +1660,27 @@ fn main() -> Result<()> {
                         // Acknowledge acquire
                         if let Err(e) = vt_switcher.ack_acquire() {
                             log::warn!("Failed to acknowledge VT acquire: {}", e);
+                        }
+
+                        // If mode setting was deferred (VT wasn't active at startup),
+                        // do it now that we have DRM master
+                        if needs_initial_mode_set && drm_master_held {
+                            info!("Performing deferred mode setting");
+                            let init_bg = cfg.appearance.background_rgb();
+                            renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
+                            if let Err(e) = egl_context.swap_buffers() {
+                                log::warn!("Failed to swap buffers: {}", e);
+                            }
+                            if let Ok(bo) = gbm_surface.lock_front_buffer() {
+                                if let Ok(fb) = drm::DrmFramebuffer::from_bo(&drm_device, &bo) {
+                                    if let Err(e) = drm::set_crtc(&drm_device, &display_config, &fb) {
+                                        log::warn!("Failed to set CRTC: {}", e);
+                                    } else {
+                                        needs_initial_mode_set = false;
+                                        info!("Deferred mode setting complete");
+                                    }
+                                }
+                            }
                         }
 
                         // Invalidate GPU textures (may have been lost during suspend)
@@ -4461,7 +4492,9 @@ fn main() -> Result<()> {
     // Restore previous mode
     drop(prev_fb);
     drop(prev_bo);
-    saved_crtc.restore(&drm_device, display_config.crtc_handle);
+    if let Some(crtc) = saved_crtc {
+        crtc.restore(&drm_device, display_config.crtc_handle);
+    }
 
     // Delete clipboard file
     let _ = std::fs::remove_file(&cfg.paths.clipboard_file);
