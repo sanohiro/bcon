@@ -24,7 +24,7 @@ mod terminal;
 
 use anyhow::{anyhow, Context, Result};
 use glow::HasContext;
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 use std::time::Duration;
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
@@ -1398,34 +1398,33 @@ fn main() -> Result<()> {
     // Base font size (for reset)
     let base_font_size = font_size;
 
-    // Japanese IME support: start D-Bus session if ime_disabled_apps is configured
+    // Japanese IME support: ensure D-Bus session is available
     let extra_env: Vec<(String, String)> = if !cfg.terminal.ime_disabled_apps.is_empty() {
-        match std::process::Command::new("dbus-launch")
-            .arg("--sh-syntax")
-            .output()
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // Parse: DBUS_SESSION_BUS_ADDRESS='unix:...';
-                let mut env = Vec::new();
-                for line in stdout.lines() {
-                    if let Some(pos) = line.find('=') {
-                        let key = &line[..pos];
-                        let value = line[pos + 1..]
-                            .trim_end_matches(';')
-                            .trim_matches('\'')
-                            .trim_matches('"');
-                        if key == "DBUS_SESSION_BUS_ADDRESS" || key == "DBUS_SESSION_BUS_PID" {
-                            info!("D-Bus session: {}={}", key, value);
-                            env.push((key.to_string(), value.to_string()));
-                        }
+        // First check if D-Bus session is already available (e.g., from systemd user session)
+        if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok() {
+            info!("D-Bus session already available from environment");
+            Vec::new()
+        } else {
+            // Start a D-Bus session daemon (console-friendly, unlike dbus-launch which is X11)
+            match std::process::Command::new("dbus-daemon")
+                .args(["--session", "--fork", "--print-address=1"])
+                .output()
+            {
+                Ok(output) => {
+                    let addr = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !addr.is_empty() {
+                        info!("Started D-Bus session: {}", addr);
+                        vec![("DBUS_SESSION_BUS_ADDRESS".to_string(), addr)]
+                    } else {
+                        debug!("dbus-daemon returned empty address");
+                        Vec::new()
                     }
                 }
-                env
-            }
-            Err(e) => {
-                warn!("Failed to run dbus-launch (IME may not work): {}", e);
-                Vec::new()
+                Err(e) => {
+                    // D-Bus is optional for IME - only log at debug level
+                    debug!("D-Bus session not available (IME may not work): {}", e);
+                    Vec::new()
+                }
             }
         }
     } else {
