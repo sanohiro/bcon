@@ -84,16 +84,9 @@ impl Device {
 
         let temp = TempDevice(&file);
 
-        // Acquire DRM master privileges
-        unsafe {
-            let ret = libc::ioctl(file.as_raw_fd(), drm_ioctl::DRM_IOCTL_SET_MASTER);
-            if ret < 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() != Some(libc::EACCES) {
-                    warn!("DRM master set warning: {} (ignoring and continuing)", err);
-                }
-            }
-        }
+        // NOTE: DRM master is NOT acquired here.
+        // Caller should acquire master only when VT is active using set_master().
+        // This allows proper VT switching without "stealing" the display.
 
         // Get resources
         let resources = temp
@@ -429,14 +422,26 @@ impl VtSwitcher {
         let signal_fd = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
             .context("Failed to create signalfd")?;
 
-        // Wait for VT to become active (user switches with Ctrl+Alt+Fn)
-        let ret = unsafe { libc::ioctl(tty_fd, VT_WAITACTIVE, target_vt as libc::c_int) };
-        if ret < 0 {
-            warn!(
-                "VT_WAITACTIVE failed: {} (continuing anyway)",
-                std::io::Error::last_os_error()
-            );
+        // Wait for VT to become active
+        // This blocks until our target VT becomes the active console.
+        // If started via systemd on an inactive VT, this will wait until
+        // the user switches to that VT (Ctrl+Alt+Fn).
+        // If already active (e.g., user ran bcon directly from shell), returns immediately.
+        info!("Waiting for VT{} to become active...", target_vt);
+        loop {
+            let ret = unsafe { libc::ioctl(tty_fd, VT_WAITACTIVE, target_vt as libc::c_int) };
+            if ret >= 0 {
+                break; // Success
+            }
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                // Interrupted by signal, retry
+                continue;
+            }
+            warn!("VT_WAITACTIVE failed: {}", err);
+            break;
         }
+        info!("VT{} is now active", target_vt);
 
         // Set up process-controlled VT switching
         // Same as kmscon: acqsig = SIGUSR1, relsig = SIGUSR2

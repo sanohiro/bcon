@@ -1121,6 +1121,28 @@ fn main() -> Result<()> {
     let drm_device = drm::Device::open(&drm_path)
         .context("Cannot open DRM device. Root privileges may be required.")?;
 
+    // Acquire DRM master only if VT is active
+    // This prevents bcon from "stealing" the display when started on an inactive VT
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+    let initial_drm_master = if vt_switcher.is_focused() {
+        match drm_device.set_master() {
+            Ok(()) => {
+                info!("VT is active, DRM master acquired");
+                true
+            }
+            Err(e) => {
+                warn!("VT is active but failed to acquire DRM master: {}", e);
+                false
+            }
+        }
+    } else {
+        info!("VT is not active, deferring DRM master acquisition");
+        false
+    };
+
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    let initial_drm_master = true; // libseat handles DRM master automatically
+
     // Detect display configuration (prefer external monitors if configured)
     let mut display_config =
         drm::DisplayConfig::detect_with_preference(&drm_device, cfg.display.prefer_external)
@@ -1533,7 +1555,7 @@ fn main() -> Result<()> {
     // User controls input method switching via fcitx5's Ctrl+Space
 
     // DRM master state (for VT switching)
-    let mut drm_master_held = true;
+    let mut drm_master_held = initial_drm_master;
 
     // Appearance colors (from config, may be overridden by OSC 10/11)
     let config_bg = cfg.appearance.background_rgb();
