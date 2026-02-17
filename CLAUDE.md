@@ -1,5 +1,15 @@
 # CLAUDE.md - Project Context for Claude Code
 
+## ⛔ NEVER RELEASE WITHOUT EXPLICIT INSTRUCTION
+
+**NEVER run these commands unless the user explicitly tells you to:**
+- `git push`
+- `git tag`
+
+Commits are fine. Push/tag requires explicit instruction like "push it" or "release it".
+
+---
+
 ## Project Overview
 
 **bcon** - A GPU-accelerated terminal emulator running directly on Linux console (TTY) without X11/Wayland.
@@ -212,24 +222,7 @@ Japanese is fine for:
 
 ## Release Checklist
 
-> **🚨 絶対に勝手にリリースしない 🚨**
->
-> ユーザーが「リリースしよう」と言っても、タグ作成・プッシュ前に必ず確認を取る。
-> 「プッシュしていいですか？」と聞くこと。
-
-**許可なしでやっていいこと:**
-- コミット作成
-- バージョン更新（Cargo.toml）
-
-**許可が必要なこと:**
-- `git tag` - タグ作成
-- `git push` - プッシュ
-
-手順（ユーザー承認後）:
-1. `Cargo.toml` のバージョン更新
-2. コミット作成
-3. **「プッシュしていいですか？」と確認**
-4. 承認後: `git tag vX.Y.Z && git push origin main --tags`
+See the rule at the top of this file. Never push/tag without explicit instruction.
 
 ## Testing
 
@@ -266,21 +259,6 @@ When implementing, prefer:
 - Add debug logging liberally during development
 - Check Ghostty source for reference when stuck on specific problems
 
-### When asked to "release"
+### Before any release
 
-**Always push to remote.** Never say "done" after just local commit/tag.
-
-1. Update CHANGELOG
-2. Update version in Cargo.toml
-3. Commit
-4. Create tag (`git tag vX.Y.Z`)
-5. **Push (`git push origin main && git push origin vX.Y.Z`)**
-6. Confirm push succeeded before reporting "release complete"
-
-### Before pushing any code changes
-
-**Always build locally first** to verify no compile errors:
-```bash
-cargo build --release
-```
-Do NOT push until the build succeeds. Fix errors locally, then push.
+See the rule at the top. Never push/tag without explicit instruction.
