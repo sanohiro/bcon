@@ -1,7 +1,38 @@
-//! Character grid
+//! Character grid - the core data structure for terminal emulation
 //!
-//! 2D cell array that manages terminal screen state.
-//! Provides cursor position, character attributes, erase and scroll operations.
+//! This module manages the 2D cell array that represents the terminal screen state,
+//! including text content, colors, attributes, and cursor position.
+//!
+//! ## Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────┐
+//! │              Scrollback Buffer          │  ← Historical lines (VecDeque)
+//! ├─────────────────────────────────────────┤
+//! │  ┌───────────────────────────────────┐  │
+//! │  │          Primary Screen           │  │  ← Main visible area
+//! │  │   (cells: Vec<Cell>, row-major)   │  │
+//! │  │                                   │  │
+//! │  │  cursor: (row, col)               │  │
+//! │  │  scroll_region: (top, bottom)     │  │
+//! │  └───────────────────────────────────┘  │
+//! │  ┌───────────────────────────────────┐  │
+//! │  │       Alternate Screen            │  │  ← For vim/less/etc.
+//! │  │   (saved_screen: Option<...>)     │  │
+//! │  └───────────────────────────────────┘  │
+//! └─────────────────────────────────────────┘
+//! ```
+//!
+//! ## Wide Character Handling
+//!
+//! East Asian Wide characters (CJK, emoji) occupy 2 cells:
+//! - First cell: Contains the character with `width = 2`
+//! - Second cell: Continuation cell with `width = 0`, empty grapheme
+//!
+//! ## Image Support
+//!
+//! Images (Sixel, Kitty) are stored separately in `image_placements` and
+//! rendered on top of text. Each placement tracks position in cell coordinates.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
@@ -842,7 +873,15 @@ impl Grid {
         }
     }
 
-    /// Merge Regional Indicator with previous RI to form flag
+    /// Try to merge Regional Indicator with previous RI to form a flag emoji.
+    ///
+    /// Regional Indicators (U+1F1E6..U+1F1FF) are combined in pairs to form
+    /// country flag emoji. For example: 🇯 (U+1F1EF) + 🇵 (U+1F1F5) = 🇯🇵
+    ///
+    /// When a single RI exists in the previous cell and the current character
+    /// is also an RI, we merge them into a single grapheme cluster.
+    ///
+    /// Returns `true` if merge succeeded (cursor should not advance).
     fn try_merge_regional_indicator(&mut self, ch: char) -> bool {
         // Find previous cell (skip continuation cells with width=0)
         let (row, col) = if self.cursor_col > 0 {
@@ -885,7 +924,15 @@ impl Grid {
 
     // ========== Character writing ==========
 
-    /// Write character at cursor position and advance cursor
+    /// Write character at cursor position and advance cursor.
+    ///
+    /// Handles the complexity of Unicode text rendering in terminals:
+    /// - **ZWJ sequences**: Emoji like 👨‍👩‍👧 are formed by joining with U+200D
+    /// - **Variation Selectors**: U+FE0F forces emoji presentation
+    /// - **Regional Indicators**: Pairs form flag emoji (🇯🇵)
+    /// - **Combining characters**: Diacritics merge with previous cell
+    /// - **Wide characters**: CJK and emoji occupy 2 cells
+    /// - **Auto-wrap**: Line breaks at right edge (if enabled)
     pub fn put_char(&mut self, ch: char) {
         // ZWJ (Zero Width Joiner) combines with previous cell
         if ch == '\u{200D}' {
