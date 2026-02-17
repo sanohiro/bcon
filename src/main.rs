@@ -1135,7 +1135,7 @@ fn main() -> Result<()> {
     // Acquire DRM master only if VT is active
     // This prevents bcon from "stealing" the display when started on an inactive VT
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-    let initial_drm_master = if vt_switcher.is_focused() {
+    let mut initial_drm_master = if vt_switcher.is_focused() {
         match drm_device.set_master() {
             Ok(()) => {
                 info!("VT is active, DRM master acquired");
@@ -1152,7 +1152,7 @@ fn main() -> Result<()> {
     };
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let initial_drm_master = {
+    let mut initial_drm_master = {
         // With libseat, poll for initial session state.
         // Dispatch events to see if we get an Enable event.
         let mut libseat_active = false;
@@ -1255,6 +1255,13 @@ fn main() -> Result<()> {
     let mut needs_initial_mode_set = !initial_drm_master;
 
     let (initial_bo, initial_fb) = if initial_drm_master {
+        // Ensure we actually hold DRM master before the first modeset.
+        if let Err(e) = drm_device.set_master() {
+            warn!("Failed to acquire DRM master for initial modeset: {}", e);
+            initial_drm_master = false;
+            needs_initial_mode_set = true;
+            (None, None)
+        } else {
         let init_bg = cfg.appearance.background_rgb();
         renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
         egl_context.swap_buffers()?;
@@ -1264,6 +1271,7 @@ fn main() -> Result<()> {
         drm::set_crtc(&drm_device, &display_config, &fb)?;
         info!("Phase 1 initialization complete");
         (Some(bo), Some(fb))
+        }
     } else {
         info!("Phase 1 initialization complete (VT not active, mode set deferred)");
         (None, None)
@@ -4614,6 +4622,14 @@ fn main() -> Result<()> {
         // Buffer swap (skip during Synchronized Update mode or when VT switched away)
         // CSI ? 2026 h starts buffering, CSI ? 2026 l displays all at once
         if !term.is_synchronized_update() && drm_master_held {
+            // Safety: avoid modesetting when our VT isn't actually active.
+            // This prevents stealing the visible console (e.g., tty1 getty).
+            if let Some(vt) = target_vt {
+                if !drm::is_vt_active(vt) {
+                    continue;
+                }
+            }
+
             egl_context.swap_buffers()?;
 
             // Get front buffer and display to DRM

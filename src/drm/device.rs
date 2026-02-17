@@ -387,8 +387,8 @@ impl VtSwitcher {
     /// This blocks SIGUSR1/SIGUSR2 and sets up signalfd to receive them.
     /// VT_SETMODE is called to enable process-controlled switching.
     pub fn new() -> Result<Self> {
-        // Get VT number from stdin (systemd sets TTYPath)
-        let target_vt = Self::get_vt_from_stdin()
+        // Get VT number from systemd instance or stdin (TTYPath)
+        let target_vt = get_target_vt()
             .ok_or_else(|| anyhow!("Cannot determine VT from stdin - not running on a VT?"))?;
 
         info!("Target VT: {}", target_vt);
@@ -776,6 +776,35 @@ impl Drop for Device {
 /// When systemd starts a service with TTYPath=/dev/ttyN, stdin will be
 /// connected to that tty, allowing us to determine the target VT.
 pub fn get_target_vt() -> Option<u16> {
+    // Prefer systemd instance if present (e.g., bcon@tty2.service -> "tty2")
+    if let Ok(instance) = std::env::var("SYSTEMD_INSTANCE") {
+        if let Some(num_str) = instance.strip_prefix("tty") {
+            if let Ok(vt) = num_str.parse::<u16>() {
+                if vt >= 1 && vt <= 63 {
+                    return Some(vt);
+                }
+            }
+        }
+    }
+
+    // Fallback: parse SYSTEMD_UNIT if instance isn't available
+    if let Ok(unit) = std::env::var("SYSTEMD_UNIT") {
+        // Example: "bcon@tty2.service"
+        if let Some(at) = unit.find('@') {
+            let rest = &unit[at + 1..];
+            if let Some(dot) = rest.find('.') {
+                let inst = &rest[..dot];
+                if let Some(num_str) = inst.strip_prefix("tty") {
+                    if let Ok(vt) = num_str.parse::<u16>() {
+                        if vt >= 1 && vt <= 63 {
+                            return Some(vt);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Try ttyname first
     let tty_path = unsafe {
         let ptr = libc::ttyname(0);
