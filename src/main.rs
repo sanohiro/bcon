@@ -1202,7 +1202,7 @@ fn main() -> Result<()> {
     #[cfg(all(target_os = "linux", feature = "seatd"))]
     let _needs_initial_mode_set = false;
 
-    if initial_drm_master {
+    let (initial_bo, initial_fb) = if initial_drm_master {
         let init_bg = cfg.appearance.background_rgb();
         renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
         egl_context.swap_buffers()?;
@@ -1211,9 +1211,11 @@ fn main() -> Result<()> {
         let fb = drm::DrmFramebuffer::from_bo(&drm_device, &bo)?;
         drm::set_crtc(&drm_device, &display_config, &fb)?;
         info!("Phase 1 initialization complete");
+        (Some(bo), Some(fb))
     } else {
         info!("Phase 1 initialization complete (VT not active, mode set deferred)");
-    }
+        (None, None)
+    };
 
     // Phase 2: Text rendering initialization (FreeType + LCD subpixel)
     let gl = renderer.gl();
@@ -1521,8 +1523,8 @@ fn main() -> Result<()> {
     let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Ready]);
 
     // Keep previous frame's BO/FB
-    let mut prev_bo = Some(bo);
-    let mut prev_fb = Some(fb);
+    let mut prev_bo = initial_bo;
+    let mut prev_fb = initial_fb;
     let mut key_buf = [0u8; 256];
     let mut needs_redraw = true;
 
