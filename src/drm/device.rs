@@ -738,6 +738,130 @@ impl Drop for Device {
     }
 }
 
+// ============================================================================
+// Public VT utility functions (used by both seatd and non-seatd code paths)
+// ============================================================================
+
+/// Get VT number from stdin (for systemd TTYPath integration)
+///
+/// This reads the VT number from stdin's tty device.
+/// When systemd starts a service with TTYPath=/dev/ttyN, stdin will be
+/// connected to that tty, allowing us to determine the target VT.
+pub fn get_target_vt() -> Option<u16> {
+    // Try ttyname first
+    let tty_path = unsafe {
+        let ptr = libc::ttyname(0);
+        if ptr.is_null() {
+            None
+        } else {
+            Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
+        }
+    };
+
+    if let Some(path) = &tty_path {
+        debug!("stdin TTY: {}", path);
+        if let Some(num_str) = path.strip_prefix("/dev/tty") {
+            if let Ok(vt) = num_str.parse::<u16>() {
+                if vt >= 1 && vt <= 63 {
+                    return Some(vt);
+                }
+            }
+        }
+    }
+
+    // Fallback: fstat on stdin
+    let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(0, &mut stat_buf) } < 0 {
+        return None;
+    }
+
+    let major = libc::major(stat_buf.st_rdev);
+    let minor = libc::minor(stat_buf.st_rdev);
+
+    debug!("stdin device: major={}, minor={}", major, minor);
+
+    // tty1-tty63 is major=4, minor=1-63
+    if major == 4 && minor >= 1 && minor <= 63 {
+        Some(minor as u16)
+    } else {
+        None
+    }
+}
+
+/// Get currently active VT number
+pub fn get_active_vt() -> Option<u16> {
+    #[repr(C)]
+    struct VtStat {
+        v_active: libc::c_ushort,
+        v_signal: libc::c_ushort,
+        v_state: libc::c_ushort,
+    }
+
+    // Open /dev/tty0 (console device) for ioctl
+    let tty0 = std::ffi::CString::new("/dev/tty0").ok()?;
+    let fd = unsafe { libc::open(tty0.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return None;
+    }
+
+    let mut stat = VtStat {
+        v_active: 0,
+        v_signal: 0,
+        v_state: 0,
+    };
+
+    let ret = unsafe { libc::ioctl(fd, VT_GETSTATE, &mut stat) };
+    unsafe { libc::close(fd) };
+
+    if ret >= 0 {
+        Some(stat.v_active)
+    } else {
+        None
+    }
+}
+
+/// Check if specified VT is currently active
+pub fn is_vt_active(target_vt: u16) -> bool {
+    get_active_vt().map(|active| active == target_vt).unwrap_or(false)
+}
+
+/// Wait for specified VT to become active (blocking)
+///
+/// This blocks until the target VT becomes the active console.
+/// Returns Ok(()) when the VT becomes active, or Err if waiting fails.
+pub fn wait_for_vt(target_vt: u16) -> anyhow::Result<()> {
+    // Open /dev/tty0 for ioctl
+    let tty0 = std::ffi::CString::new("/dev/tty0")
+        .map_err(|_| anyhow::anyhow!("Invalid tty path"))?;
+    let fd = unsafe { libc::open(tty0.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(anyhow::anyhow!(
+            "Cannot open /dev/tty0: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    info!("Waiting for VT{} to become active...", target_vt);
+
+    loop {
+        let ret = unsafe { libc::ioctl(fd, VT_WAITACTIVE, target_vt as libc::c_int) };
+        if ret >= 0 {
+            break;
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EINTR) {
+            // Interrupted by signal, retry
+            continue;
+        }
+        unsafe { libc::close(fd) };
+        return Err(anyhow::anyhow!("VT_WAITACTIVE failed: {}", err));
+    }
+
+    unsafe { libc::close(fd) };
+    info!("VT{} is now active", target_vt);
+    Ok(())
+}
+
 /// Get connector priority for display selection
 ///
 /// When prefer_external is true, external connectors are prioritized.

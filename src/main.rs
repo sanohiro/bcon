@@ -1088,8 +1088,27 @@ fn main() -> Result<()> {
     // - With seatd feature: Use libseat for rootless operation
     // - Without seatd: Use VtSwitcher (requires root)
 
+    // Determine target VT from stdin (systemd's TTYPath sets this)
+    let target_vt = drm::get_target_vt();
+    if let Some(vt) = target_vt {
+        info!("Target VT from stdin: tty{}", vt);
+    } else {
+        info!("Could not determine target VT from stdin");
+    }
+
     #[cfg(all(target_os = "linux", feature = "seatd"))]
     let seat_session = {
+        // Wait for target VT to become active before opening libseat session
+        // This prevents bcon from "stealing" the display when started on an inactive VT
+        if let Some(vt) = target_vt {
+            if !drm::is_vt_active(vt) {
+                info!("VT{} is not active, waiting...", vt);
+                if let Err(e) = drm::wait_for_vt(vt) {
+                    warn!("Failed to wait for VT{}: {}", vt, e);
+                }
+            }
+        }
+
         info!("Opening libseat session...");
         Rc::new(RefCell::new(
             session::SeatSession::open().context("Failed to open libseat session")?,
@@ -1141,7 +1160,14 @@ fn main() -> Result<()> {
     };
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let initial_drm_master = true; // libseat handles DRM master automatically
+    let initial_drm_master = {
+        // libseat handles DRM master, but check if we're on the target VT
+        if let Some(vt) = target_vt {
+            drm::is_vt_active(vt)
+        } else {
+            true // No target VT info, assume active
+        }
+    };
 
     // Detect display configuration (prefer external monitors if configured)
     let mut display_config =
