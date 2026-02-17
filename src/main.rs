@@ -1651,18 +1651,62 @@ fn main() -> Result<()> {
                             evdev.suspend();
                         }
 
+                        // Drop DRM master on Disable so other VTs (e.g., getty@tty1) can render.
+                        // Keeping master during Disable can black-screen the active VT.
+                        if drm_master_held {
+                            if let Err(e) = drm_device.drop_master() {
+                                log::warn!("Failed to drop DRM master: {}", e);
+                            }
+                        }
                         drm_master_held = false;
-                        // Note: libseat handles DRM master automatically
                     }
                     session::SessionEvent::Enable => {
                         // Session enabled (VT acquired, or resume from suspend)
                         info!("libseat: session enabled");
 
-                        // Resume input devices
+                        // Ensure our target VT is actually active before taking DRM master.
+                        // If not active, defer to avoid stealing the visible console.
+                        let vt_active = match target_vt {
+                            Some(vt) => {
+                                let active = drm::is_vt_active(vt);
+                                if !active {
+                                    info!(
+                                        "VT{} is not active (current: {:?}), deferring",
+                                        vt,
+                                        drm::get_active_vt()
+                                    );
+                                }
+                                active
+                            }
+                            None => {
+                                info!("Cannot determine target VT, deferring");
+                                false
+                            }
+                        };
+
+                        if !vt_active {
+                            // Keep input suspended until we're actually active.
+                            // Do not hold DRM master or modeset while inactive.
+                            drm_master_held = false;
+                            if let Err(e) = drm_device.drop_master() {
+                                log::debug!("Failed to drop DRM master: {}", e);
+                            }
+                            continue;
+                        }
+
+                        // Resume input devices (only when active)
                         if let Some(ref mut evdev) = evdev_keyboard {
                             evdev.resume();
                         }
 
+                        if !drm_master_held {
+                            // Acquire DRM master only when VT is foreground.
+                            if let Err(e) = drm_device.set_master() {
+                                log::warn!("Failed to acquire DRM master: {}", e);
+                                drm_master_held = false;
+                                continue;
+                            }
+                        }
                         drm_master_held = true;
                         needs_redraw = true;
 
