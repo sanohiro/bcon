@@ -231,6 +231,7 @@ pub fn load_nerd_font_fc() -> Option<Vec<u8>> {
 }
 
 /// Find Nerd Font path (for config generation)
+#[allow(dead_code)]
 pub fn find_nerd_font_path() -> Option<String> {
     let finder = FontFinder::new().ok()?;
     let font_match = finder.find_nerd_font()?;

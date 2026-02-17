@@ -148,6 +148,7 @@ fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> 
 }
 
 /// sRGB to linear conversion (same calculation as shader)
+#[allow(dead_code)]
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
         c / 12.92
@@ -157,6 +158,7 @@ fn srgb_to_linear(c: f32) -> f32 {
 }
 
 /// Linear to sRGB conversion (same calculation as shader)
+#[allow(dead_code)]
 fn linear_to_srgb(c: f32) -> f32 {
     if c <= 0.0031308 {
         c * 12.92

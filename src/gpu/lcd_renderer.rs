@@ -2,6 +2,10 @@
 //!
 //! High-quality text rendering with FreeType + RGB atlas + LCD shader
 //! Each vertex has FG/BG colors for accurate per-cell subpixel compositing
+//!
+//! Note: This module is kept for potential future use with subpixel rendering.
+
+#![allow(dead_code)]
 
 use anyhow::{anyhow, Result};
 use glow::HasContext;

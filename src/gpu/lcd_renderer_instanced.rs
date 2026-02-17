@@ -405,6 +405,7 @@ impl LcdTextRendererInstanced {
     }
 
     /// Add text string (using default background, LCD enabled)
+    #[allow(dead_code)]
     pub fn push_text(&mut self, text: &str, x: f32, y: f32, fg: [f32; 4], atlas: &LcdGlyphAtlas) {
         self.push_text_with_bg_lcd(text, x, y, fg, self.default_bg, 0.0, atlas);
     }
@@ -537,6 +538,7 @@ impl LcdTextRendererInstanced {
     }
 
     /// Add glyph scaled to specific size (for Powerline characters)
+    #[allow(dead_code)]
     pub fn push_glyph_scaled(
         &mut self,
         glyph: &GlyphInfo,

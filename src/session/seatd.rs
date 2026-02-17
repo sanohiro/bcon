@@ -25,6 +25,7 @@ pub enum SessionEvent {
 /// Device opened via libseat
 pub struct SeatDevice {
     /// libseat device ID
+    #[allow(dead_code)]
     pub device_id: i32,
     /// File descriptor (owned)
     pub fd: OwnedFd,
@@ -48,7 +49,8 @@ struct SeatState {
 pub struct SeatSession {
     /// libseat handle
     seat: Seat,
-    /// Shared state
+    /// Shared state (kept for callback lifetime)
+    #[allow(dead_code)]
     state: Rc<RefCell<SeatState>>,
     /// Event receiver
     event_rx: mpsc::Receiver<SessionEvent>,
@@ -103,16 +105,19 @@ impl SeatSession {
     }
 
     /// Get the seat name
+    #[allow(dead_code)]
     pub fn name(&mut self) -> &str {
         self.seat.name()
     }
 
     /// Check if session is currently active
+    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         self.state.borrow().active
     }
 
     /// Get pollable file descriptor for event loop integration
+    #[allow(dead_code)]
     pub fn get_fd(&mut self) -> Result<RawFd> {
         let borrowed_fd = self.seat.get_fd().context("Failed to get seat fd")?;
         Ok(borrowed_fd.as_raw_fd())
@@ -170,6 +175,7 @@ impl SeatSession {
     }
 
     /// Close a device
+    #[allow(dead_code)]
     pub fn close_device(&mut self, device: SeatDevice) -> Result<()> {
         // Find and remove the device from our map
         self.devices.retain(|_, &mut id| id != device.device_id);
@@ -183,6 +189,7 @@ impl SeatSession {
     }
 
     /// Request VT switch to another session
+    #[allow(dead_code)]
     pub fn switch_session(&mut self, session: i32) -> Result<()> {
         self.seat
             .switch_session(session)
