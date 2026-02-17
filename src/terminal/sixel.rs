@@ -359,8 +359,8 @@ impl SixelDecoder {
         let target_h = new_h.max(self.height).min(MAX_IMAGE_DIMENSION);
 
         // Check total buffer size (use checked_mul to prevent overflow)
-        let required_size = match (target_w as usize).checked_mul(target_h as usize) {
-            Some(size) if size <= MAX_PIXEL_BUFFER_SIZE => size,
+        match (target_w as usize).checked_mul(target_h as usize) {
+            Some(size) if size <= MAX_PIXEL_BUFFER_SIZE => {}
             _ => {
                 warn!(
                     "Sixel: image size {}x{} exceeds buffer limit, ignoring",
@@ -368,7 +368,7 @@ impl SixelDecoder {
                 );
                 return;
             }
-        };
+        }
 
         if self.width == 0 {
             // Initialize
