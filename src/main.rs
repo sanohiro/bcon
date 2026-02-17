@@ -1178,8 +1178,9 @@ fn main() -> Result<()> {
                 active
             }
             None => {
-                // Can't determine target VT, trust libseat
-                true
+                // Can't determine target VT, don't risk stealing display
+                info!("Cannot determine target VT, deferring mode set");
+                false
             }
         };
 
