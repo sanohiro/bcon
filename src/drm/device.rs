@@ -428,18 +428,28 @@ impl VtSwitcher {
         // the user switches to that VT (Ctrl+Alt+Fn).
         // If already active (e.g., user ran bcon directly from shell), returns immediately.
         info!("Waiting for VT{} to become active...", target_vt);
-        loop {
+        let vt_wait_success = loop {
             let ret = unsafe { libc::ioctl(tty_fd, VT_WAITACTIVE, target_vt as libc::c_int) };
             if ret >= 0 {
-                break; // Success
+                break true; // Success
             }
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() == Some(libc::EINTR) {
-                // Interrupted by signal, retry
+                // Interrupted by signal - check if we should exit
+                if sigterm_received() {
+                    info!("SIGTERM received during VT_WAITACTIVE, exiting");
+                    break false;
+                }
                 continue;
             }
             warn!("VT_WAITACTIVE failed: {}", err);
-            break;
+            break false;
+        };
+
+        if !vt_wait_success {
+            unsafe { libc::close(tty_fd) };
+            old_sigmask.thread_set_mask().ok();
+            return Err(anyhow!("VT_WAITACTIVE interrupted or failed"));
         }
         info!("VT{} is now active", target_vt);
 
@@ -850,7 +860,12 @@ pub fn wait_for_vt(target_vt: u16) -> anyhow::Result<()> {
         }
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EINTR) {
-            // Interrupted by signal, retry
+            // Interrupted by signal - check if we should exit
+            if sigterm_received() {
+                info!("SIGTERM received during VT_WAITACTIVE, exiting");
+                unsafe { libc::close(fd) };
+                return Err(anyhow::anyhow!("VT_WAITACTIVE interrupted by SIGTERM"));
+            }
             continue;
         }
         unsafe { libc::close(fd) };
