@@ -3,6 +3,8 @@
 //! Provides error-handling wrappers around common ioctl operations
 //! to reduce unsafe boilerplate in device.rs and display.rs.
 
+#![allow(dead_code)]
+
 use anyhow::{anyhow, Result};
 use std::os::unix::io::RawFd;
 

@@ -3,6 +3,8 @@
 //! Consolidates all evdev key constants used throughout bcon.
 //! These are Linux input event codes from <linux/input-event-codes.h>.
 
+#![allow(dead_code)]
+
 // ============================================================================
 // Modifier Keys
 // ============================================================================

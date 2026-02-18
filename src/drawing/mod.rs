@@ -9,6 +9,3 @@
 //! to ensure exact pixel alignment and seamless transitions.
 
 pub mod geometry;
-
-// Re-export commonly used functions
-pub use geometry::{aa_alpha_from_distance, distance_to_segment, ellipse_sdf, smoothstep};

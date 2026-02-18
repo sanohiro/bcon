@@ -2,6 +2,8 @@
 //!
 //! Consolidates hex color parsing from config and terminal modules.
 
+#![allow(dead_code)]
+
 /// Parse 6-digit hex color (e.g., "ff0000" -> (255, 0, 0))
 /// Also supports 3-digit short format (e.g., "f00" -> (255, 0, 0))
 /// Returns None on invalid input.

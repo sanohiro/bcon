@@ -3,6 +3,8 @@
 //! Functions for computing distances and alpha values used in
 //! anti-aliased rendering of geometric shapes.
 
+#![allow(dead_code)]
+
 /// Smoothstep interpolation for anti-aliasing.
 ///
 /// Returns smooth transition from 0 to 1 as t goes from 0 to 1.

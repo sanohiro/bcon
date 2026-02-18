@@ -3,6 +3,8 @@
 //! Consolidates timing, rendering, and Unicode range constants
 //! to eliminate magic numbers throughout the codebase.
 
+#![allow(dead_code)]
+
 // ============================================================================
 // Timing Constants
 // ============================================================================
