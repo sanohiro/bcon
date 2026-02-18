@@ -8,6 +8,7 @@
 pub mod evdev;
 pub mod ime;
 pub mod keyboard;
+pub mod keycodes;
 
 pub use evdev::{
     keysym_to_bytes_with_mods, EvdevKeyboard, KeyAction, KeyboardConfig, MouseEvent, BTN_LEFT,

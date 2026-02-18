@@ -15,12 +15,15 @@
 //! ```
 
 mod config;
+mod constants;
+mod drawing;
 mod drm;
 mod font;
 mod gpu;
 mod input;
 mod session;
 mod terminal;
+mod utils;
 
 use anyhow::{anyhow, Context, Result};
 use glow::HasContext;
@@ -32,39 +35,47 @@ use std::cell::RefCell;
 #[cfg(all(target_os = "linux", feature = "seatd"))]
 use std::rc::Rc;
 
-// ============================================================================
-// Constants
-// ============================================================================
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackendMode {
+    Auto,
+    Seatd,
+    Vt,
+}
 
-/// Box drawing line thickness scale relative to cell height
-const LINE_THICKNESS_SCALE: f32 = 0.12;
+fn backend_mode_from_str(s: &str) -> Option<BackendMode> {
+    match s.trim().to_lowercase().as_str() {
+        "auto" => Some(BackendMode::Auto),
+        "seatd" => Some(BackendMode::Seatd),
+        "vt" | "vt_process" | "vt-process" => Some(BackendMode::Vt),
+        _ => None,
+    }
+}
 
-/// Anti-aliasing width for solid powerline shapes (triangles, semicircles)
-const AA_WIDTH_SOLID: f32 = 1.5;
+fn parse_backend_mode(args: &[String]) -> Option<BackendMode> {
+    // Support: --backend=auto|seatd|vt
+    for arg in args {
+        if let Some(value) = arg.strip_prefix("--backend=") {
+            return backend_mode_from_str(value);
+        }
+    }
+    // Environment fallback
+    if let Ok(env) = std::env::var("BCON_BACKEND") {
+        return backend_mode_from_str(&env);
+    }
+    None
+}
 
-/// Anti-aliasing width for outline shapes
-const AA_WIDTH_OUTLINE: f32 = 0.7;
+fn has_user_session() -> bool {
+    std::env::var("XDG_SESSION_ID").is_ok() || std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok()
+}
 
-/// Half-width of outline strokes
-const OUTLINE_STROKE_HALF: f32 = 0.35;
-
-/// Alpha threshold for rendering pixels (below this = skip)
-const ALPHA_THRESHOLD: f32 = 0.01;
-
-/// Alpha threshold for outline rendering
-const ALPHA_THRESHOLD_OUTLINE: f32 = 0.02;
-
-/// Minimum font size (pixels)
-const MIN_FONT_SIZE: f32 = 8.0;
-
-/// Maximum font size (pixels)
-const MAX_FONT_SIZE: f32 = 72.0;
-
-/// Minimum display scale factor
-const MIN_DISPLAY_SCALE: f32 = 0.5;
-
-/// Maximum display scale factor
-const MAX_DISPLAY_SCALE: f32 = 4.0;
+// Import constants from the dedicated module
+use constants::{
+    AA_WIDTH_OUTLINE, AA_WIDTH_SOLID, ALPHA_THRESHOLD, ALPHA_THRESHOLD_OUTLINE,
+    BELL_FLASH_DURATION_MS, CURSOR_BLINK_INTERVAL_MS, DOUBLE_CLICK_THRESHOLD_MS,
+    LINE_THICKNESS_SCALE, MAX_DISPLAY_SCALE, MAX_FONT_SIZE, MIN_DISPLAY_SCALE, MIN_FONT_SIZE,
+    OUTLINE_STROKE_HALF, XKB_MOD_ALT, XKB_MOD_CONTROL, XKB_MOD_SHIFT,
+};
 
 // ============================================================================
 // Graphics Helper Functions
@@ -91,54 +102,91 @@ fn aa_alpha_from_distance(d: f32, aa_width: f32) -> f32 {
     }
 }
 
-/// Compute SDF (signed distance field) for an ellipse.
-/// Positive inside, negative outside.
-/// Uses approximation for arbitrary ellipse (not exact but visually correct).
+/// Compute approximate SDF (signed distance field) for an ellipse.
+///
+/// Returns signed distance: positive inside ellipse, negative outside.
+/// Uses gradient-based approximation rather than exact Newton iteration
+/// for better performance at acceptable visual quality.
+///
+/// # Algorithm
+/// For a point P at normalized coordinates (nx, ny):
+/// 1. len = sqrt(nx² + ny²) gives distance from center in normalized space
+/// 2. In normalized space, ellipse has implicit equation: x² + y² = 1
+/// 3. len - 1.0 gives approximate distance (exact for circles)
+/// 4. Scale by gradient correction factor k to account for non-uniform stretch
+///
+/// The gradient correction k = (rx * ry) / (rx * |ny| + ry * |nx|)
+/// approximates the local gradient magnitude of the implicit function.
 ///
 /// # Arguments
-/// * `nx`, `ny` - normalized coordinates (point / radius)
-/// * `rx`, `ry` - ellipse radii
-/// * `len` - length of normalized vector (precomputed)
+/// * `nx`, `ny` - Normalized coordinates (point / radius)
+/// * `rx`, `ry` - Ellipse radii (used for gradient correction)
+/// * `len` - Length of normalized vector sqrt(nx² + ny²), precomputed for efficiency
+///
+/// # Note
+/// This is an approximation. For exact ellipse SDF, iterative methods
+/// like Newton's method are needed, but this is fast and visually sufficient.
 #[inline]
 fn ellipse_sdf(nx: f32, ny: f32, rx: f32, ry: f32, len: f32) -> f32 {
     if len <= 0.001 {
+        // Point at center: inside by the smaller radius
         return -rx.min(ry);
     }
-    // Approximate gradient-based SDF
+    // Gradient-based correction factor for non-circular ellipses
     let k = (rx * ry) / (rx * ny.abs() + ry * nx.abs()).max(0.001);
+    // Distance in normalized space, scaled by gradient correction
     (len - 1.0) * k.min(rx.min(ry))
 }
 
-/// Calculate distance from point to line segment.
-/// Used for outline rendering of triangular shapes.
+/// Calculate shortest distance from point P to line segment AB.
+///
+/// Used for anti-aliased outline rendering of powerline triangle shapes.
+///
+/// # Algorithm
+/// Uses point-to-line projection to find the closest point on segment AB:
+///
+/// 1. Compute vectors: v = B - A (segment direction), w = P - A (point offset)
+/// 2. Project P onto infinite line AB: t = dot(v, w) / dot(v, v)
+/// 3. Clamp t to [0, 1] to stay within segment
+/// 4. Return distance from P to the clamped projection point
+///
+/// # Geometric Cases
+/// - t < 0 (c1 <= 0): Point projects before segment start A → return |PA|
+/// - t > 1 (c2 <= c1): Point projects after segment end B → return |PB|
+/// - 0 <= t <= 1: Point projects within segment → return perpendicular distance
 ///
 /// # Arguments
-/// * `px`, `py` - point coordinates
-/// * `ax`, `ay` - segment start
-/// * `bx`, `by` - segment end
+/// * `px`, `py` - Point coordinates
+/// * `ax`, `ay` - Segment start (A)
+/// * `bx`, `by` - Segment end (B)
+///
+/// # Reference
+/// <https://en.wikipedia.org/wiki/Distance_from_a_point_to_a_line>
 #[inline]
 fn distance_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
-    let vx = bx - ax;
+    let vx = bx - ax; // Segment direction vector
     let vy = by - ay;
-    let wx = px - ax;
+    let wx = px - ax; // Vector from segment start to point
     let wy = py - ay;
 
-    // Project P onto line AB
-    let c1 = vx * wx + vy * wy;  // dot(v, w)
+    // c1 = dot(v, w): projection of w onto v (unnormalized)
+    let c1 = vx * wx + vy * wy;
     if c1 <= 0.0 {
-        // Before segment start
+        // Point projects before segment start: closest point is A
         return (wx * wx + wy * wy).sqrt();
     }
 
-    let c2 = vx * vx + vy * vy;  // dot(v, v) = |v|²
+    // c2 = dot(v, v) = |v|²: squared length of segment
+    let c2 = vx * vx + vy * vy;
     if c2 <= c1 {
-        // After segment end
+        // Point projects after segment end: closest point is B
         let dx = px - bx;
         let dy = py - by;
         return (dx * dx + dy * dy).sqrt();
     }
 
-    // Projection falls within segment
+    // Point projects within segment: compute perpendicular distance
+    // t = c1 / c2 is the normalized projection parameter (0 <= t <= 1)
     let t = c1 / c2;
     let proj_x = ax + t * vx;
     let proj_y = ay + t * vy;
@@ -171,14 +219,7 @@ fn linear_to_srgb(c: f32) -> f32 {
 /// These glyphs create visual transitions between background colors
 #[inline]
 fn is_transition_char(ch: char) -> bool {
-    let cp = ch as u32;
-    matches!(cp,
-        // Powerline symbols: U+E0B0-U+E0D4 (arrows, rounded, etc.)
-        0xE0B0..=0xE0D4 |
-        // Block elements: U+2580-U+259F
-        // Full block, half blocks, eighth blocks, quarter blocks
-        0x2580..=0x259F
-    )
+    constants::is_transition_char(ch as u32)
 }
 
 /// Draw box-drawing characters programmatically for pixel-perfect alignment.
@@ -266,11 +307,33 @@ fn draw_box_drawing(
 }
 
 /// Draw powerline triangle (E0B0/E0B2 solid, with anti-aliasing).
-/// Used for status line separators in shells like fish, zsh with powerline themes.
+///
+/// Renders a filled triangle glyph used for powerline status line separators
+/// in shells like fish, zsh, and starship themes.
+///
+/// # Glyph Mapping
+/// - U+E0B0 (▶): Right-pointing solid triangle
+/// - U+E0B2 (◀): Left-pointing solid triangle
+///
+/// # Algorithm
+/// Rasterizes the triangle row by row using scanline rendering:
+/// 1. For each row, calculate the edge position based on vertical distance from center
+/// 2. For each pixel in the row, compute signed distance to edge
+/// 3. Apply smoothstep anti-aliasing based on the signed distance
+///
+/// # Anti-aliasing
+/// Uses signed distance field (SDF) approach:
+/// - d > 0: Inside triangle, full alpha
+/// - d < 0: Outside triangle, smoothstep falloff
+/// - AA_WIDTH_SOLID controls the transition width
 ///
 /// # Arguments
+/// * `x`, `y` - Cell top-left position in pixels
+/// * `cell_w`, `cell_h` - Cell dimensions in pixels
+/// * `fg` - Foreground color [r, g, b, a]
+/// * `bg` - Background color [r, g, b] for blending
 /// * `right` - true for right-pointing (▶), false for left-pointing (◀)
-/// * `width_scale` - 1.0 = full width, 0.5 = thin variant
+/// * `width_scale` - 1.0 = full cell width, 0.5 = thin variant
 fn draw_powerline_triangle(
     x: f32,
     y: f32,
@@ -319,7 +382,29 @@ fn draw_powerline_triangle(
 }
 
 /// Draw powerline triangle outline (E0B1/E0B3).
-/// Renders only the diagonal edges of the triangle shape.
+///
+/// Renders only the diagonal edges of the triangle shape (not filled).
+///
+/// # Glyph Mapping
+/// - U+E0B1 (▷): Right-pointing outline triangle
+/// - U+E0B3 (◁): Left-pointing outline triangle
+///
+/// # Algorithm
+/// 1. Define triangle vertices: base on one side, tip (apex) on the opposite
+/// 2. For each pixel, compute distance to both diagonal edges
+/// 3. Use minimum distance for anti-aliased rendering
+///
+/// # Triangle Vertices
+/// ```text
+/// Right-pointing (▷):        Left-pointing (◁):
+///       /|                         |\
+///      / |                         | \
+///     /  |  tip at (w, h/2)       |  \  tip at (0, h/2)
+///     \  |                         |  /
+///      \ |                         | /
+///       \|                         |/
+///   base at x=0               base at x=w
+/// ```
 fn draw_powerline_triangle_outline(
     x: f32,
     y: f32,
@@ -378,9 +463,29 @@ fn draw_powerline_triangle_outline(
 }
 
 /// Draw powerline semicircle (E0B4/E0B6 solid).
-/// Renders a filled semicircle for rounded powerline separators.
+///
+/// Renders a filled semicircle (half-ellipse) for rounded powerline separators.
+///
+/// # Glyph Mapping
+/// - U+E0B4: Right-pointing solid semicircle (bulge extends right)
+/// - U+E0B6: Left-pointing solid semicircle (bulge extends left)
+///
+/// # Algorithm
+/// Uses ellipse SDF (Signed Distance Field) for smooth rendering:
+/// 1. Compute normalized coordinates relative to ellipse center
+/// 2. Calculate approximate SDF using gradient-based method
+/// 3. Apply smoothstep for anti-aliased edge
+///
+/// # Ellipse Parameters
+/// - Horizontal radius (rx): cell width × width_scale
+/// - Vertical radius (ry): cell height / 2
+/// - Center: (0, cell_height/2) for right-pointing, (cell_width, cell_height/2) for left
 ///
 /// # Arguments
+/// * `x`, `y` - Cell top-left position
+/// * `cell_w`, `cell_h` - Cell dimensions
+/// * `fg` - Foreground color for the semicircle
+/// * `bg` - Background color for blending
 /// * `right` - true for right-pointing, false for left-pointing
 /// * `width_scale` - 1.0 = full width, 0.5 = thin variant
 fn draw_powerline_semicircle(
@@ -685,6 +790,7 @@ OPTIONS:
     -h, --help              Print this help message
     -V, --version           Print version information
     -t, --test              Test mode (verify build without DRM)
+    --backend=MODE          Backend selection: auto | seatd | vt
     --init-config[=PRESET]  Generate config file with optional preset
     -f, --force             Overwrite config file without confirmation
     --test-shaper           Test font shaping (debug mode)
@@ -833,13 +939,8 @@ fn handle_selection_key(term: &mut terminal::Terminal, keycode: u32, cols: usize
         end_col: cur_col,
     });
 
-    // evdev keycodes
-    const KEY_LEFT: u32 = 105;
-    const KEY_RIGHT: u32 = 106;
-    const KEY_UP: u32 = 103;
-    const KEY_DOWN: u32 = 108;
-    const KEY_HOME: u32 = 102;
-    const KEY_END: u32 = 107;
+    // Use evdev keycodes from the keycodes module
+    use input::keycodes::{KEY_DOWN, KEY_END, KEY_HOME, KEY_LEFT, KEY_RIGHT, KEY_UP};
 
     match keycode {
         KEY_LEFT => {
@@ -974,6 +1075,27 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Backend selection: auto (default), seatd, or vt
+    let backend_mode = parse_backend_mode(&args).unwrap_or(BackendMode::Auto);
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    let seatd_available = true;
+    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+    let seatd_available = false;
+
+    let mut use_seatd = match backend_mode {
+        BackendMode::Seatd => {
+            if !seatd_available {
+                return Err(anyhow!("seatd backend requested but not available in this build"));
+            }
+            true
+        }
+        BackendMode::Vt => false,
+        BackendMode::Auto => {
+            // Prefer seatd when running inside a user session, otherwise use VT_PROCESS.
+            has_user_session() && seatd_available
+        }
+    };
+
     // Config file generation mode
     // --init-config or --init-config=PRESET (default, emacs-like, vim-like)
     let init_config_arg = args.iter().find(|a| a.starts_with("--init-config"));
@@ -1085,78 +1207,79 @@ fn main() -> Result<()> {
     drm::setup_sigterm_handler();
 
     // Phase 0: Session management
-    // - With seatd feature: Use libseat for rootless operation
-    // - Without seatd: Use VtSwitcher (requires root)
+    // - seatd: Use libseat for rootless operation (user session)
+    // - vt: Use VtSwitcher (system service / console)
 
-    // Determine target VT from stdin (systemd's TTYPath sets this)
+    // Determine target VT from systemd metadata or stdin (TTYPath sets this).
     let target_vt = drm::get_target_vt();
     if let Some(vt) = target_vt {
-        info!("Target VT from stdin: tty{}", vt);
+        info!("Target VT: tty{}", vt);
     } else {
-        info!("Could not determine target VT from stdin");
+        info!("Could not determine target VT");
     }
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let seat_session = {
+    let mut seat_session: Option<Rc<RefCell<session::SeatSession>>> = None;
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    if use_seatd {
         // Note: With libseat, we don't manually wait for VT.
         // libseat handles session management - it will send Enable event
         // when the session becomes active.
         info!("Opening libseat session...");
-        Rc::new(RefCell::new(
-            session::SeatSession::open().context("Failed to open libseat session")?,
-        ))
-    };
+        match session::SeatSession::open() {
+            Ok(s) => {
+                seat_session = Some(Rc::new(RefCell::new(s)));
+            }
+            Err(e) => {
+                warn!("libseat unavailable, falling back to VT backend: {}", e);
+                use_seatd = false;
+            }
+        }
+    }
 
-    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-    let mut vt_switcher = {
+    #[cfg(target_os = "linux")]
+    let mut vt_switcher = if !use_seatd {
         // VtSwitcher sets up process-controlled VT switching via VT_SETMODE
         // The kernel sends SIGUSR1/SIGUSR2 signals for VT switch requests
-        drm::VtSwitcher::new().context("Failed to initialize VT switcher")?
+        Some(drm::VtSwitcher::new().context("Failed to initialize VT switcher")?)
+    } else {
+        None
     };
 
     // Phase 1: DRM/KMS initialization
     let drm_path = find_drm_device()?;
     info!("DRM device: {}", drm_path);
 
-    #[cfg(all(target_os = "linux", feature = "seatd"))]
     let drm_device = {
-        let seat_drm_device = seat_session
-            .borrow_mut()
-            .open_device(&drm_path)
-            .context("Cannot open DRM device via libseat")?;
-        drm::Device::from_fd(seat_drm_device.as_raw_fd())
-            .context("Cannot create DRM device from libseat fd")?
-    };
-
-    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-    let drm_device = drm::Device::open(&drm_path)
-        .context("Cannot open DRM device. Root privileges may be required.")?;
-
-    // Acquire DRM master only if VT is active
-    // This prevents bcon from "stealing" the display when started on an inactive VT
-    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-    let mut initial_drm_master = if vt_switcher.is_focused() {
-        match drm_device.set_master() {
-            Ok(()) => {
-                info!("VT is active, DRM master acquired");
-                true
-            }
-            Err(e) => {
-                warn!("VT is active but failed to acquire DRM master: {}", e);
-                false
-            }
+        #[cfg(all(target_os = "linux", feature = "seatd"))]
+        if let Some(ref seat_session) = seat_session {
+            let seat_drm_device = seat_session
+                .borrow_mut()
+                .open_device(&drm_path)
+                .context("Cannot open DRM device via libseat")?;
+            drm::Device::from_fd(seat_drm_device.as_raw_fd())
+                .context("Cannot create DRM device from libseat fd")?
+        } else {
+            drm::Device::open(&drm_path)
+                .context("Cannot open DRM device. Root privileges may be required.")?
         }
-    } else {
-        info!("VT is not active, deferring DRM master acquisition");
-        false
+        #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+        {
+            drm::Device::open(&drm_path)
+                .context("Cannot open DRM device. Root privileges may be required.")?
+        }
     };
+
+    // Acquire DRM master only if the active backend is actually in the foreground.
+    // This prevents bcon from stealing the visible console at boot.
+    let mut initial_drm_master = false;
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let mut initial_drm_master = {
+    if let Some(ref seat_session) = seat_session {
         // With libseat, poll for initial session state.
         // Dispatch events to see if we get an Enable event.
         let mut libseat_active = false;
-        // First dispatch, then drop the mutable borrow before trying to receive events
+        // First dispatch, then drop the mutable borrow before trying to receive events.
         let dispatched = seat_session.borrow_mut().dispatch();
         if let Ok(true) = dispatched {
             while let Some(event) = seat_session.borrow().try_recv_event() {
@@ -1168,7 +1291,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // Also verify the VT is actually active (libseat might enable even on inactive VT)
+        // Also verify the VT is actually active (libseat might enable even on inactive VT).
         let vt_active = match target_vt {
             Some(vt) => {
                 let active = drm::is_vt_active(vt);
@@ -1178,7 +1301,7 @@ fn main() -> Result<()> {
                 active
             }
             None => {
-                // Can't determine target VT, don't risk stealing display
+                // Can't determine target VT, don't risk stealing display.
                 info!("Cannot determine target VT, deferring mode set");
                 false
             }
@@ -1192,8 +1315,27 @@ fn main() -> Result<()> {
         } else {
             info!("libseat: session not yet active, deferring rendering");
         }
-        active
-    };
+        initial_drm_master = active;
+    }
+
+    #[cfg(target_os = "linux")]
+    if !initial_drm_master {
+        if let Some(ref vt_switcher) = vt_switcher {
+            if vt_switcher.is_focused() {
+                match drm_device.set_master() {
+                    Ok(()) => {
+                        info!("VT is active, DRM master acquired");
+                        initial_drm_master = true;
+                    }
+                    Err(e) => {
+                        warn!("VT is active but failed to acquire DRM master: {}", e);
+                    }
+                }
+            } else {
+                info!("VT is not active, deferring DRM master acquisition");
+            }
+        }
+    }
 
     // Detect display configuration (prefer external monitors if configured)
     let mut display_config =
@@ -1247,11 +1389,7 @@ fn main() -> Result<()> {
     // Note: This may fail if we don't have DRM master, but that's OK
     let saved_crtc = drm::SavedCrtc::save(&drm_device, &display_config).ok();
 
-    // Render first frame and set mode (only if we have DRM master)
-    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-    let mut needs_initial_mode_set = !initial_drm_master;
-
-    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    // Render first frame and set mode (only if we have DRM master).
     let mut needs_initial_mode_set = !initial_drm_master;
 
     let (initial_bo, initial_fb) = if initial_drm_master {
@@ -1262,15 +1400,15 @@ fn main() -> Result<()> {
             needs_initial_mode_set = true;
             (None, None)
         } else {
-        let init_bg = cfg.appearance.background_rgb();
-        renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
-        egl_context.swap_buffers()?;
+            let init_bg = cfg.appearance.background_rgb();
+            renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
+            egl_context.swap_buffers()?;
 
-        let bo = gbm_surface.lock_front_buffer()?;
-        let fb = drm::DrmFramebuffer::from_bo(&drm_device, &bo)?;
-        drm::set_crtc(&drm_device, &display_config, &fb)?;
-        info!("Phase 1 initialization complete");
-        (Some(bo), Some(fb))
+            let bo = gbm_surface.lock_front_buffer()?;
+            let fb = drm::DrmFramebuffer::from_bo(&drm_device, &bo)?;
+            drm::set_crtc(&drm_device, &display_config, &fb)?;
+            info!("Phase 1 initialization complete");
+            (Some(bo), Some(fb))
         }
     } else {
         info!("Phase 1 initialization complete (VT not active, mode set deferred)");
@@ -1488,53 +1626,72 @@ fn main() -> Result<()> {
     // Set custom ANSI 16 colors palette from config
     term.grid.set_ansi_palette(cfg.colors.to_palette());
 
-    // Display /etc/issue (like getty does) if running as root
-    // Note: When using libseat (seatd feature), we don't run as root
-    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
+    // Display /etc/issue (like getty does) if running as root on a VT.
+    // In seatd mode this usually isn't needed, but in VT mode it improves login UX.
+    #[cfg(target_os = "linux")]
     if unsafe { libc::getuid() } == 0 {
-        let tty_name = format!("tty{}", vt_switcher.target_vt());
-        if let Some(issue) = terminal::pty::read_issue(&tty_name) {
-            // Process issue text through terminal to display it
-            term.process_output(issue.as_bytes());
-            // Ensure cursor is at column 0 for login prompt
-            term.process_output(b"\r\n");
-            info!("Displayed /etc/issue for {}", tty_name);
+        if let Some(ref vt_switcher) = vt_switcher {
+            let tty_name = format!("tty{}", vt_switcher.target_vt());
+            if let Some(issue) = terminal::pty::read_issue(&tty_name) {
+                // Process issue text through terminal to display it.
+                term.process_output(issue.as_bytes());
+                // Ensure cursor is at column 0 for login prompt.
+                term.process_output(b"\r\n");
+                info!("Displayed /etc/issue for {}", tty_name);
+            }
         }
     }
 
     // Phase 4: Keyboard input initialization
     // TTY keyboard (may fail when running from GDM without a TTY)
-    #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let keyboard: Option<input::Keyboard> = match input::Keyboard::new() {
-        Ok(kb) => {
-            info!("TTY keyboard initialized");
-            Some(kb)
+    let keyboard: Option<input::Keyboard> = if use_seatd {
+        match input::Keyboard::new() {
+            Ok(kb) => {
+                info!("TTY keyboard initialized");
+                Some(kb)
+            }
+            Err(e) => {
+                // In seatd mode, TTY keyboard can be unavailable (non-TTY session).
+                info!("TTY keyboard unavailable (seatd mode): {}", e);
+                None
+            }
         }
-        Err(e) => {
-            info!("TTY keyboard unavailable (libseat mode): {}", e);
-            None
-        }
+    } else {
+        Some(input::Keyboard::new().context("Failed to initialize keyboard")?)
     };
-
-    #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-    let keyboard: Option<input::Keyboard> =
-        Some(input::Keyboard::new().context("Failed to initialize keyboard")?);
 
     // evdev input (keyboard + mouse, continue with SSH stdin if unavailable)
     #[cfg(all(target_os = "linux", feature = "seatd"))]
-    let mut evdev_keyboard = match input::EvdevKeyboard::new_with_seat(
-        display_config.width,
-        display_config.height,
-        seat_session.clone(),
-        &cfg.keyboard,
-    ) {
-        Ok(kb) => {
-            info!("evdev input initialized via libseat (keyboard + mouse)");
-            Some(kb)
+    let mut evdev_keyboard = if let Some(ref seat_session) = seat_session {
+        match input::EvdevKeyboard::new_with_seat(
+            display_config.width,
+            display_config.height,
+            seat_session.clone(),
+            &cfg.keyboard,
+        ) {
+            Ok(kb) => {
+                info!("evdev input initialized via libseat (keyboard + mouse)");
+                Some(kb)
+            }
+            Err(e) => {
+                info!("evdev input unavailable (continuing with SSH stdin): {}", e);
+                None
+            }
         }
-        Err(e) => {
-            info!("evdev input unavailable (continuing with SSH stdin): {}", e);
-            None
+    } else {
+        match input::EvdevKeyboard::new(
+            display_config.width,
+            display_config.height,
+            &cfg.keyboard,
+        ) {
+            Ok(kb) => {
+                info!("evdev input initialized (keyboard + mouse)");
+                Some(kb)
+            }
+            Err(e) => {
+                info!("evdev input unavailable (continuing with SSH stdin): {}", e);
+                None
+            }
         }
     };
 
@@ -1599,16 +1756,13 @@ fn main() -> Result<()> {
     let mut click_count = 0u8;
     let mut last_click_col = 0usize;
     let mut last_click_row = 0usize;
-    const DOUBLE_CLICK_MS: u128 = 300;
 
     // Bell flash
     let mut bell_flash_until: Option<std::time::Instant> = None;
-    const BELL_FLASH_DURATION_MS: u64 = 100;
 
     // Cursor blink
     let mut cursor_blink_visible = true;
     let mut last_blink_toggle = std::time::Instant::now();
-    const CURSOR_BLINK_INTERVAL_MS: u64 = 530; // ~530ms blink interval
 
     // Font size change request (currently log output only)
     let mut font_size_delta: i32 = 0;
@@ -1638,23 +1792,23 @@ fn main() -> Result<()> {
     loop {
         // Poll for session events (VT switching)
         #[cfg(all(target_os = "linux", feature = "seatd"))]
-        {
-            // Dispatch libseat events (drop borrow before processing events)
+        if let Some(ref seat_session) = seat_session {
+            // Dispatch libseat events (drop borrow before processing events).
             let _ = seat_session.borrow_mut().dispatch();
 
-            // Process session events
+            // Process session events.
             while let Some(event) = seat_session.borrow().try_recv_event() {
                 match event {
                     session::SessionEvent::Disable => {
-                        // Session disabled (VT switched away)
+                        // Session disabled (VT switched away).
                         info!("libseat: session disabled");
 
-                        // Send focus out event to terminal applications
+                        // Send focus out event to terminal applications.
                         if let Err(e) = term.send_focus_event(false) {
                             log::debug!("Failed to send FocusOut event: {}", e);
                         }
 
-                        // Suspend input devices
+                        // Suspend input devices.
                         if let Some(ref mut evdev) = evdev_keyboard {
                             evdev.suspend();
                         }
@@ -1669,7 +1823,7 @@ fn main() -> Result<()> {
                         drm_master_held = false;
                     }
                     session::SessionEvent::Enable => {
-                        // Session enabled (VT acquired, or resume from suspend)
+                        // Session enabled (VT acquired, or resume from suspend).
                         info!("libseat: session enabled");
 
                         // Ensure our target VT is actually active before taking DRM master.
@@ -1702,7 +1856,7 @@ fn main() -> Result<()> {
                             continue;
                         }
 
-                        // Resume input devices (only when active)
+                        // Resume input devices (only when active).
                         if let Some(ref mut evdev) = evdev_keyboard {
                             evdev.resume();
                         }
@@ -1719,7 +1873,7 @@ fn main() -> Result<()> {
                         needs_redraw = true;
 
                         // If mode setting was deferred (session wasn't active at startup),
-                        // do it now
+                        // do it now.
                         if needs_initial_mode_set && drm_master_held {
                             info!("Performing deferred mode setting");
                             let init_bg = cfg.appearance.background_rgb();
@@ -1729,7 +1883,9 @@ fn main() -> Result<()> {
                             }
                             if let Ok(bo) = gbm_surface.lock_front_buffer() {
                                 if let Ok(fb) = drm::DrmFramebuffer::from_bo(&drm_device, &bo) {
-                                    if let Err(e) = drm::set_crtc(&drm_device, &display_config, &fb) {
+                                    if let Err(e) =
+                                        drm::set_crtc(&drm_device, &display_config, &fb)
+                                    {
                                         log::warn!("Failed to set CRTC: {}", e);
                                     } else {
                                         needs_initial_mode_set = false;
@@ -1739,13 +1895,13 @@ fn main() -> Result<()> {
                             }
                         }
 
-                        // Invalidate GPU textures (may have been lost during suspend)
+                        // Invalidate GPU textures (may have been lost during suspend).
                         glyph_atlas.invalidate();
                         emoji_atlas.invalidate();
                         image_renderer.invalidate_all(gl);
                         info!("GPU textures invalidated for re-upload");
 
-                        // Send focus in event to terminal applications
+                        // Send focus in event to terminal applications.
                         if let Err(e) = term.send_focus_event(true) {
                             log::debug!("Failed to send FocusIn event: {}", e);
                         }
@@ -1754,21 +1910,21 @@ fn main() -> Result<()> {
             }
         }
 
-        #[cfg(not(all(target_os = "linux", feature = "seatd")))]
-        {
-            // Poll for VT switch signals (SIGUSR1/SIGUSR2 via signalfd)
+        #[cfg(target_os = "linux")]
+        if let Some(ref mut vt_switcher) = vt_switcher {
+            // Poll for VT switch signals (SIGUSR1/SIGUSR2 via signalfd).
             while let Some(event) = vt_switcher.poll() {
                 match event {
                     drm::VtEvent::Release => {
-                        // Kernel requests us to release the VT
+                        // Kernel requests us to release the VT.
                         info!("VT release requested");
 
-                        // Send focus out event to terminal applications
+                        // Send focus out event to terminal applications.
                         if let Err(e) = term.send_focus_event(false) {
                             log::debug!("Failed to send FocusOut event: {}", e);
                         }
 
-                        // Suspend input devices before releasing VT
+                        // Suspend input devices before releasing VT.
                         if let Some(ref mut evdev) = evdev_keyboard {
                             evdev.suspend();
                         }
@@ -1780,16 +1936,16 @@ fn main() -> Result<()> {
                                 drm_master_held = false;
                             }
                         }
-                        // Acknowledge release - this allows the VT switch to proceed
+                        // Acknowledge release - this allows the VT switch to proceed.
                         if let Err(e) = vt_switcher.ack_release() {
                             log::warn!("Failed to acknowledge VT release: {}", e);
                         }
                     }
                     drm::VtEvent::Acquire => {
-                        // Kernel grants us the VT (or resume from suspend)
+                        // Kernel grants us the VT (or resume from suspend).
                         info!("VT acquire");
 
-                        // Resume input devices
+                        // Resume input devices.
                         if let Some(ref mut evdev) = evdev_keyboard {
                             evdev.resume();
                         }
@@ -1802,13 +1958,13 @@ fn main() -> Result<()> {
                                 needs_redraw = true;
                             }
                         }
-                        // Acknowledge acquire
+                        // Acknowledge acquire.
                         if let Err(e) = vt_switcher.ack_acquire() {
                             log::warn!("Failed to acknowledge VT acquire: {}", e);
                         }
 
                         // If mode setting was deferred (VT wasn't active at startup),
-                        // do it now that we have DRM master
+                        // do it now that we have DRM master.
                         if needs_initial_mode_set && drm_master_held {
                             info!("Performing deferred mode setting");
                             let init_bg = cfg.appearance.background_rgb();
@@ -1818,7 +1974,9 @@ fn main() -> Result<()> {
                             }
                             if let Ok(bo) = gbm_surface.lock_front_buffer() {
                                 if let Ok(fb) = drm::DrmFramebuffer::from_bo(&drm_device, &bo) {
-                                    if let Err(e) = drm::set_crtc(&drm_device, &display_config, &fb) {
+                                    if let Err(e) =
+                                        drm::set_crtc(&drm_device, &display_config, &fb)
+                                    {
                                         log::warn!("Failed to set CRTC: {}", e);
                                     } else {
                                         needs_initial_mode_set = false;
@@ -1828,13 +1986,13 @@ fn main() -> Result<()> {
                             }
                         }
 
-                        // Invalidate GPU textures (may have been lost during suspend)
+                        // Invalidate GPU textures (may have been lost during suspend).
                         glyph_atlas.invalidate();
                         emoji_atlas.invalidate();
                         image_renderer.invalidate_all(gl);
                         info!("GPU textures invalidated for re-upload");
 
-                        // Send focus in event to terminal applications
+                        // Send focus in event to terminal applications.
                         if let Err(e) = term.send_focus_event(true) {
                             log::debug!("Failed to send FocusIn event: {}", e);
                         }
@@ -1990,22 +2148,32 @@ fn main() -> Result<()> {
             for raw in &key_events {
                 // Check for VT switch key combination (Ctrl+Alt+Fn)
                 // In KD_GRAPHICS mode, kernel doesn't see keypresses, so we must handle this
-                #[cfg(not(all(target_os = "linux", feature = "seatd")))]
                 if let Some(target) = input::evdev::check_vt_switch(raw) {
-                    if target != vt_switcher.target_vt() {
-                        if let Err(e) = vt_switcher.switch_to(target) {
+                    let mut handled = false;
+
+                    #[cfg(all(target_os = "linux", feature = "seatd"))]
+                    if let Some(ref seat_session) = seat_session {
+                        if let Err(e) = seat_session.borrow_mut().switch_session(target as i32) {
                             warn!("Failed to switch to VT{}: {}", target, e);
                         }
+                        handled = true;
                     }
-                    continue;
-                }
 
-                #[cfg(all(target_os = "linux", feature = "seatd"))]
-                if let Some(target) = input::evdev::check_vt_switch(raw) {
-                    if let Err(e) = seat_session.borrow_mut().switch_session(target as i32) {
-                        warn!("Failed to switch to VT{}: {}", target, e);
+                    #[cfg(target_os = "linux")]
+                    if !handled {
+                        if let Some(ref mut vt_switcher) = vt_switcher {
+                            if target != vt_switcher.target_vt() {
+                                if let Err(e) = vt_switcher.switch_to(target) {
+                                    warn!("Failed to switch to VT{}: {}", target, e);
+                                }
+                            }
+                            handled = true;
+                        }
                     }
-                    continue;
+
+                    if handled {
+                        continue;
+                    }
                 }
 
                 // Update Ctrl state (for URL click detection)
@@ -2373,7 +2541,7 @@ fn main() -> Result<()> {
                             let same_pos = col == last_click_col && row == last_click_row;
 
                             // Double/triple click detection
-                            if elapsed < DOUBLE_CLICK_MS && same_pos {
+                            if elapsed < DOUBLE_CLICK_THRESHOLD_MS && same_pos {
                                 click_count = (click_count + 1).min(3);
                             } else {
                                 click_count = 1;
@@ -2547,9 +2715,9 @@ fn main() -> Result<()> {
                     } => {
                         if !is_release {
                             // Extract modifiers from xkb state
-                            let mods_ctrl = (state & 0x4) != 0; // Control
-                            let mods_alt = (state & 0x8) != 0; // Mod1 (Alt)
-                            let mods_shift = (state & 0x1) != 0; // Shift
+                            let mods_ctrl = (state & XKB_MOD_CONTROL) != 0;
+                            let mods_alt = (state & XKB_MOD_ALT) != 0;
+                            let mods_shift = (state & XKB_MOD_SHIFT) != 0;
 
                             let sym = xkbcommon::xkb::Keysym::new(keysym);
                             // keysym_to_utf8 may contain NUL terminator, filter it out
@@ -3195,8 +3363,8 @@ fn main() -> Result<()> {
                     let cp = first_char as u32;
                     if is_transition_char(first_char) {
                         let cell_pixel_w = cell.width as f32 * cell_w;
-                        let is_powerline = (0xE0B0..=0xE0D4).contains(&cp);
-                        let is_block_element = (0x2580..=0x259F).contains(&cp);
+                        let is_powerline = constants::is_powerline(cp);
+                        let is_block_element = constants::is_block_element(cp);
 
                         // Draw per-cell background for block elements (Pass1 skipped)
                         // Block elements need explicit background to fill the "empty" portion

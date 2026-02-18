@@ -5,6 +5,7 @@ pub mod display;
 pub mod hdr;
 #[cfg(target_os = "linux")]
 pub mod hotplug;
+pub mod ioctl_helpers;
 
 #[allow(unused_imports)]
 pub use device::{

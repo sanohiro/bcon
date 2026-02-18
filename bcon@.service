@@ -27,6 +27,7 @@ ConditionPathExists=/dev/%I
 
 [Service]
 Type=simple
+Environment=BCON_BACKEND=vt
 ExecStart=/usr/local/bin/bcon
 WorkingDirectory=/root
 StandardInput=tty
