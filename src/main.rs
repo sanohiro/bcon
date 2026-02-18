@@ -1480,11 +1480,11 @@ Make sure seatd/logind is running and you're on an active VT."
     info!("Phase 2: fonts & shaders...");
     let gl = renderer.gl();
 
-    // Load font
+    // Load font (supports both file paths and font family names via fontconfig)
     let font_data: &'static [u8] = if !cfg.font.main.is_empty() {
         Box::leak(
-            std::fs::read(&cfg.font.main)
-                .with_context(|| format!("Failed to read font: {}", cfg.font.main))?
+            font::fontconfig::resolve_font(&cfg.font.main)
+                .with_context(|| format!("Failed to resolve font: {}", cfg.font.main))?
                 .into_boxed_slice(),
         )
     } else {
@@ -1505,18 +1505,18 @@ Make sure seatd/logind is running and you're on an active VT."
         );
     }
 
-    // Load CJK font (continue on failure)
+    // Load CJK font (supports file paths and font names, continue on failure)
     let cjk_font_data: Option<&[u8]> = if !cfg.font.cjk.is_empty() {
-        std::fs::read(&cfg.font.cjk)
+        font::fontconfig::resolve_font(&cfg.font.cjk)
             .ok()
             .map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
     } else {
         font::atlas::load_cjk_font().map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
     };
 
-    // Load symbols/Nerd Font (for yazi, etc. - continue on failure)
+    // Load symbols/Nerd Font (supports file paths and font names, continue on failure)
     let symbols_font_data: Option<&[u8]> = if !cfg.font.symbols.is_empty() {
-        std::fs::read(&cfg.font.symbols)
+        font::fontconfig::resolve_font(&cfg.font.symbols)
             .ok()
             .map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
     } else {
@@ -1556,12 +1556,26 @@ Make sure seatd/logind is running and you're on an active VT."
         hinting_mode
     );
 
-    // Create emoji atlas
-    let emoji_font_path = if !cfg.font.emoji.is_empty() {
-        Some(cfg.font.emoji.as_str())
+    // Create emoji atlas (resolve font name to path if needed)
+    let emoji_resolved_path: Option<String> = if !cfg.font.emoji.is_empty() {
+        let p = std::path::Path::new(&cfg.font.emoji);
+        if p.exists() {
+            Some(cfg.font.emoji.clone())
+        } else {
+            // Try resolving as font family name via fontconfig
+            let finder = font::fontconfig::FontFinder::new().ok();
+            finder
+                .and_then(|f| f.find_font(&cfg.font.emoji))
+                .map(|m| m.path.to_string_lossy().to_string())
+                .or_else(|| {
+                    warn!("Emoji font not found: {}", cfg.font.emoji);
+                    None
+                })
+        }
     } else {
-        Some("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf")
+        None
     };
+    let emoji_font_path = emoji_resolved_path.as_deref();
     let mut emoji_atlas =
         font::emoji::EmojiAtlas::new(emoji_font_path, glyph_atlas.cell_height as u32);
     if emoji_atlas.is_available() {
@@ -2776,10 +2790,9 @@ Make sure seatd/logind is running and you're on an active VT."
                         let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
                         let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
 
-                        // Send to PTY if ButtonEvent/AnyEvent + SGR is enabled
-                        // Don't send wheel events in X10 mode
-                        let use_mouse_wheel = term.mouse_mode_enabled()
-                            && term.grid.modes.mouse_mode != terminal::grid::MouseMode::X10;
+                        // Send wheel to PTY if any mouse mode is active
+                        // (xterm sends wheel events even in X10 mode)
+                        let use_mouse_wheel = term.mouse_mode_enabled();
 
                         if use_mouse_wheel {
                             let d = if *delta < 0.0 { -1i8 } else { 1i8 };
@@ -4128,29 +4141,6 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
 
-        // === Pass 3: Sixel image rendering ===
-        image_renderer.begin();
-        for placement in &term.grid.image_placements {
-            if let Some(image) = term.images.get(placement.id) {
-                // Upload texture if not already uploaded
-                if !image_renderer.has_texture(placement.id) {
-                    image_renderer.upload_image(gl, image);
-                }
-                // Drawing coordinates (accounting for scroll offset)
-                let img_row = placement.row as isize - term.scroll_offset as isize;
-                if img_row + placement.height_cells as isize <= 0 {
-                    continue; // Off-screen (above)
-                }
-                if img_row >= grid_rows as isize {
-                    continue; // Off-screen (below)
-                }
-                let x = margin_x + placement.col as f32 * cell_w;
-                let y = margin_y + img_row as f32 * cell_h;
-                image_renderer.draw(placement.id, x, y, image.width as f32, image.height as f32);
-            }
-        }
-        image_renderer.flush(gl, screen_w, screen_h);
-
         // === Pass 3.5: Curly line rendering (SDF + smoothstep) ===
         curly_renderer.flush(gl, screen_w, screen_h);
 
@@ -4263,6 +4253,40 @@ Make sure seatd/logind is running and you're on an active VT."
         // text_renderer disables blending for LCD compositing, so emoji must be drawn after
         emoji_atlas.upload_if_dirty(gl);
         emoji_renderer.flush(gl, &emoji_atlas, screen_w, screen_h);
+
+        // === Pass 3: Sixel/Kitty image rendering (after text+emoji, so images overlay text) ===
+        // Re-upload textures for images whose data was updated (same ID, new content)
+        for dirty_id in term.dirty_image_ids.drain(..) {
+            if image_renderer.has_texture(dirty_id) {
+                image_renderer.remove_texture(gl, dirty_id);
+            }
+        }
+        image_renderer.begin();
+        if !term.grid.image_placements.is_empty() {
+            trace!("Image render: {} placements", term.grid.image_placements.len());
+        }
+        for placement in &term.grid.image_placements {
+            if let Some(image) = term.images.get(placement.id) {
+                // Upload texture if not already uploaded
+                if !image_renderer.has_texture(placement.id) {
+                    image_renderer.upload_image(gl, image);
+                }
+                // Drawing coordinates (accounting for scroll offset)
+                let img_row = placement.row as isize - term.scroll_offset as isize;
+                if img_row + placement.height_cells as isize <= 0 {
+                    continue; // Off-screen (above)
+                }
+                if img_row >= grid_rows as isize {
+                    continue; // Off-screen (below)
+                }
+                let x = margin_x + placement.col as f32 * cell_w;
+                let y = margin_y + img_row as f32 * cell_h;
+                let draw_w = placement.width_cells as f32 * cell_w;
+                let draw_h = placement.height_cells as f32 * cell_h;
+                image_renderer.draw(placement.id, x, y, draw_w, draw_h);
+            }
+        }
+        image_renderer.flush(gl, screen_w, screen_h);
 
         // === Candidate window rendering (3 passes: UI background -> candidate text) ===
         if let Some(ref cands) = candidate_state {

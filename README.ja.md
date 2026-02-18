@@ -200,9 +200,10 @@ bcon --init-config=vim,jp    # ~/.config/bcon/config.toml に保存
 
 ```toml
 [font]
-main = "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf"
-cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-emoji = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
+main = "FiraCode"                   # フォント名 (fontconfig で自動解決)
+cjk = "Noto Sans CJK JP"           # またはフルパス: "/usr/share/fonts/.../X.ttf"
+emoji = "Noto Color Emoji"
+symbols = "Hack Nerd Font Mono"
 size = 16.0
 render_mode = "lcd"
 lcd_filter = "light"
@@ -244,14 +245,15 @@ rm Hack.tar.xz
 fc-cache -fv
 ```
 
-`config.toml` で設定:
+`config.toml` で設定 — フォント名でもファイルパスでも指定可能:
 
 ```toml
 [font]
-symbols = "~/.local/share/fonts/HackNerdFontMono-Regular.ttf"
+symbols = "Hack Nerd Font Mono"    # フォント名で指定 (推奨)
+# symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"  # パスでも可
 ```
 
-**systemd 経由（root サービス）**で起動する場合は、フォントを system-wide に置いて `/etc/bcon/config.toml` を編集してください:
+**systemd 経由（root サービス）**で起動する場合は、フォントを system-wide にインストール:
 
 ```bash
 sudo mkdir -p /usr/local/share/fonts
@@ -259,12 +261,7 @@ sudo cp ~/.local/share/fonts/HackNerdFont*.ttf /usr/local/share/fonts/
 sudo fc-cache -fv
 ```
 
-```toml
-[font]
-symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"
-```
-
-`symbols` フォントは Powerline グリフ (U+E000-U+F8FF) や Nerd Font アイコンのフォールバックとして使用されます。指定しない場合は main フォントがすべてに使用されます。
+`symbols` フォントは Powerline グリフ (U+E000-U+F8FF) や Nerd Font アイコンのフォールバックとして使用されます。指定しない場合、bcon は fontconfig 経由でインストール済みの Nerd Font を自動検出します。
 
 注: Powerline 矢印グリフ (E0B0-E0B7) はフォントに関係なくプログラムでピクセルパーフェクトに描画されます。
 

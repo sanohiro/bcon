@@ -370,7 +370,6 @@ impl ImageRenderer {
     }
 
     /// Delete texture
-    #[allow(dead_code)]
     pub fn remove_texture(&mut self, gl: &glow::Context, id: u32) {
         if let Some(texture) = self.textures.remove(&id) {
             unsafe {

@@ -60,7 +60,14 @@ pub struct LcdGlyphAtlas {
     font_main: FtFont,
     font_symbols: Option<FtFont>,
     font_cjk: Option<FtFont>,
+    /// Dynamically loaded fallback fonts (from fontconfig, keyed by file path)
+    font_fallbacks: Vec<(String, FtFont)>,
     font_size: u32,
+    /// LCD settings (stored for creating fallback fonts)
+    lcd_mode: LcdMode,
+    lcd_filter: LcdFilterMode,
+    lcd_weights: Option<[u8; 5]>,
+    hinting_mode: HintingMode,
 
     // Shelf packing
     cursor_x: u32,
@@ -319,7 +326,12 @@ impl LcdGlyphAtlas {
             font_main,
             font_symbols,
             font_cjk,
+            font_fallbacks: Vec::new(),
             font_size,
+            lcd_mode,
+            lcd_filter,
+            lcd_weights,
+            hinting_mode,
             cursor_x,
             cursor_y,
             row_height,
@@ -329,9 +341,67 @@ impl LcdGlyphAtlas {
         })
     }
 
+    /// Try to rasterize a character from the static font chain (main → symbols → CJK)
+    fn rasterize_from_static_fonts(&self, ch: char) -> Option<FtGlyph> {
+        if let Some(g) = self.font_main.rasterize(ch) {
+            return Some(g);
+        }
+        if let Some(ref symbols) = self.font_symbols {
+            if let Some(g) = symbols.rasterize(ch) {
+                return Some(g);
+            }
+        }
+        if let Some(ref cjk) = self.font_cjk {
+            if let Some(g) = cjk.rasterize(ch) {
+                return Some(g);
+            }
+        }
+        None
+    }
+
+    /// Try to rasterize from already-loaded fontconfig fallback fonts
+    fn rasterize_from_fallbacks(&self, ch: char) -> Option<FtGlyph> {
+        for (_path, font) in &self.font_fallbacks {
+            if let Some(g) = font.rasterize(ch) {
+                return Some(g);
+            }
+        }
+        None
+    }
+
+    /// Load a new fallback font via fontconfig for a specific character
+    fn load_fontconfig_fallback(&mut self, ch: char) -> Option<FtGlyph> {
+        let path = super::fontconfig::find_font_for_char(ch)?;
+        let path_str = path.to_string_lossy().to_string();
+
+        // Skip if already loaded
+        if self.font_fallbacks.iter().any(|(p, _)| *p == path_str) {
+            return None;
+        }
+
+        let font_data = std::fs::read(&path).ok()?;
+        let font = FtFont::from_bytes(
+            &font_data,
+            self.font_size,
+            self.lcd_mode,
+            self.lcd_filter,
+            self.lcd_weights,
+            self.hinting_mode,
+        )
+        .ok()?;
+
+        let glyph = font.rasterize(ch);
+        info!(
+            "Fontconfig fallback loaded: {} (for U+{:04X} '{}')",
+            path_str, ch as u32, ch
+        );
+        self.font_fallbacks.push((path_str, font));
+        glyph
+    }
+
     /// Ensure glyph for character
     /// Caches all 3 phases if subpixel phase is enabled
-    /// Fallback chain: main -> symbols (Nerd Font) -> CJK -> tofu
+    /// Fallback chain: main -> symbols -> CJK -> cached fallbacks -> fontconfig -> tofu
     pub fn ensure_glyph(&mut self, ch: char) {
         // Tofu character for missing glyphs
         const TOFU: char = '\u{25A1}'; // □ WHITE SQUARE
@@ -342,49 +412,14 @@ impl LcdGlyphAtlas {
 
         // Normal glyph (Phase0 or without phase)
         if !self.glyphs.contains_key(&ch) {
-            let ft_glyph = if let Some(g) = self.font_main.rasterize(ch) {
+            let ft_glyph = if let Some(g) = self.rasterize_from_static_fonts(ch) {
                 g
-            } else if let Some(ref symbols) = self.font_symbols {
-                if let Some(g) = symbols.rasterize(ch) {
-                    g
-                } else if let Some(ref cjk) = self.font_cjk {
-                    if let Some(g) = cjk.rasterize(ch) {
-                        g
-                    } else {
-                        // Glyph not found - use tofu as fallback
-                        if ch != TOFU {
-                            self.ensure_glyph(TOFU);
-                            if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
-                                self.glyphs.insert(ch, tofu_info);
-                            }
-                        }
-                        return;
-                    }
-                } else {
-                    // Glyph not found - use tofu as fallback
-                    if ch != TOFU {
-                        self.ensure_glyph(TOFU);
-                        if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
-                            self.glyphs.insert(ch, tofu_info);
-                        }
-                    }
-                    return;
-                }
-            } else if let Some(ref cjk) = self.font_cjk {
-                if let Some(g) = cjk.rasterize(ch) {
-                    g
-                } else {
-                    // Glyph not found - use tofu as fallback
-                    if ch != TOFU {
-                        self.ensure_glyph(TOFU);
-                        if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
-                            self.glyphs.insert(ch, tofu_info);
-                        }
-                    }
-                    return;
-                }
+            } else if let Some(g) = self.rasterize_from_fallbacks(ch) {
+                g
+            } else if let Some(g) = self.load_fontconfig_fallback(ch) {
+                g
             } else {
-                // Glyph not found - use tofu as fallback
+                // All fallbacks exhausted - use tofu
                 if ch != TOFU {
                     self.ensure_glyph(TOFU);
                     if let Some(tofu_info) = self.glyphs.get(&TOFU).cloned() {
@@ -573,16 +608,33 @@ impl LcdGlyphAtlas {
         }
 
         // Rasterize with subpixel phase
+        // Fallback chain: main -> symbols -> CJK -> cached fallbacks
         let ft_glyph = if let Some(g) = self.font_main.rasterize_with_phase(ch, phase) {
             g
-        } else if let Some(ref mut cjk) = self.font_cjk {
-            if let Some(g) = cjk.rasterize_with_phase(ch, phase) {
-                g
-            } else {
-                return;
-            }
+        } else if let Some(g) = self
+            .font_symbols
+            .as_mut()
+            .and_then(|f| f.rasterize_with_phase(ch, phase))
+        {
+            g
+        } else if let Some(g) = self
+            .font_cjk
+            .as_mut()
+            .and_then(|f| f.rasterize_with_phase(ch, phase))
+        {
+            g
         } else {
-            return;
+            let mut found = None;
+            for (_path, font) in &mut self.font_fallbacks {
+                if let Some(g) = font.rasterize_with_phase(ch, phase) {
+                    found = Some(g);
+                    break;
+                }
+            }
+            match found {
+                Some(g) => g,
+                None => return,
+            }
         };
 
         if let Some(info) =

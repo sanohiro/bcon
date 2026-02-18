@@ -38,7 +38,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
 use bitflags::bitflags;
-use log::trace;
 use smol_str::SmolStr;
 use unicode_normalization::UnicodeNormalization;
 use unicode_width::UnicodeWidthChar;
@@ -117,6 +116,8 @@ pub struct ImagePlacement {
     pub pixel_width: u32,
     /// Image pixel height
     pub pixel_height: u32,
+    /// Overlay mode (C=1): image is not removed by text writes
+    pub overlay: bool,
 }
 
 /// Text color
@@ -1127,8 +1128,9 @@ impl Grid {
                 for cell in &mut self.cells {
                     *cell = blank.clone();
                 }
-                // Also clear image placements
-                self.image_placements.clear();
+                // Clear non-overlay image placements
+                // Overlay images (C=1) are only removed by explicit Kitty delete command
+                self.image_placements.retain(|p| p.overlay);
                 // Mark all rows dirty
                 self.mark_all_dirty();
             }
@@ -1196,8 +1198,12 @@ impl Grid {
     }
 
     /// Delete images overlapping specified row
+    /// Overlay images (C=1) are not removed by text/row operations
     fn remove_images_at_row(&mut self, row: usize) {
         self.image_placements.retain(|p| {
+            if p.overlay {
+                return true;
+            }
             // Image range: p.row to p.row + p.height_cells - 1
             let img_end = p.row + p.height_cells.saturating_sub(1);
             // Keep if row is outside this range
@@ -1206,12 +1212,17 @@ impl Grid {
     }
 
     /// Delete images overlapping specified cell range
+    /// Overlay images (C=1) are not removed by text writes
     fn remove_images_at_cell(&mut self, row: usize, col: usize, width: usize) {
         if self.image_placements.is_empty() {
             return;
         }
         let col_end = col + width;
         self.image_placements.retain(|p| {
+            // Overlay images are not removed by text writes
+            if p.overlay {
+                return true;
+            }
             // Image row range
             let img_row_end = p.row + p.height_cells;
             // Image col range
@@ -1271,8 +1282,11 @@ impl Grid {
         }
 
         // Adjust image placement rows (delete scrolled out ones)
-        // Images within scroll region that would scroll out of top are removed
+        // Overlay images (C=1) are not affected by scroll - they stay at fixed screen position
         self.image_placements.retain_mut(|p| {
+            if p.overlay {
+                return true;
+            }
             if p.row >= top && p.row <= bottom {
                 // Image at row r scrolls to row r - n
                 if p.row < top + n {
@@ -1583,8 +1597,11 @@ impl Grid {
         }
 
         // Adjust image placement rows (delete scrolled out ones)
-        // Images within scroll region that would scroll out of bottom are removed
+        // Overlay images (C=1) are not affected by scroll
         self.image_placements.retain_mut(|p| {
+            if p.overlay {
+                return true;
+            }
             if p.row >= top && p.row <= bottom {
                 // Image at row r scrolls to row r + n
                 let new_row = p.row + n;
@@ -1739,9 +1756,10 @@ impl Grid {
         pixel_height: u32,
         cell_width: u32,
         cell_height: u32,
+        do_not_move_cursor: bool,
     ) {
         if cell_width == 0 || cell_height == 0 {
-            trace!("place_image: cell size not set, skipping placement");
+            log::warn!("place_image: cell size not set, skipping placement");
             return;
         }
 
@@ -1749,37 +1767,74 @@ impl Grid {
         let width_cells = ((pixel_width + cell_width - 1) / cell_width) as usize;
         let height_cells = ((pixel_height + cell_height - 1) / cell_height) as usize;
 
-        let placement = ImagePlacement {
-            id,
-            row: self.cursor_row,
-            col: self.cursor_col,
-            width_cells,
-            height_cells,
-            pixel_width,
-            pixel_height,
-        };
-
-        trace!(
-            "place_image: id={} at ({},{}) {}x{} cells",
+        log::info!(
+            "place_image: id={} at ({},{}) {}x{} cells, C={}",
             id,
             self.cursor_row,
             self.cursor_col,
             width_cells,
-            height_cells
+            height_cells,
+            if do_not_move_cursor { 1 } else { 0 }
         );
 
-        self.image_placements.push(placement);
-
-        // Move cursor below image
-        // May need to scroll for height_cells rows
-        for _ in 0..height_cells {
-            self.cursor_row += 1;
-            if self.cursor_row >= self.rows {
-                self.scroll_up(1); // image_placements rows also adjusted in scroll_up
+        if do_not_move_cursor {
+            // C=1: place image at cursor position, do not move cursor
+            // Overlay mode: text writes don't remove this image
+            let placement = ImagePlacement {
+                id,
+                row: self.cursor_row,
+                col: self.cursor_col,
+                width_cells,
+                height_cells,
+                pixel_width,
+                pixel_height,
+                overlay: true,
+            };
+            self.image_placements.push(placement);
+        } else {
+            // Default: place image and move cursor below it
+            // For large images that exceed screen, scroll first, then place
+            let rows_below = self.rows - self.cursor_row;
+            if height_cells > rows_below {
+                // Need to scroll to make room; scroll before placing
+                // so the placement doesn't get deleted by scroll_up
+                let scroll_needed = height_cells - rows_below;
+                for _ in 0..scroll_needed {
+                    self.scroll_up(1);
+                }
+                // Image starts at adjusted position
+                let start_row = self.rows.saturating_sub(height_cells);
+                let placement = ImagePlacement {
+                    id,
+                    row: start_row,
+                    col: self.cursor_col,
+                    width_cells,
+                    height_cells,
+                    pixel_width,
+                    pixel_height,
+                    overlay: false,
+                };
+                self.image_placements.push(placement);
                 self.cursor_row = self.rows - 1;
+            } else {
+                let placement = ImagePlacement {
+                    id,
+                    row: self.cursor_row,
+                    col: self.cursor_col,
+                    width_cells,
+                    height_cells,
+                    pixel_width,
+                    pixel_height,
+                    overlay: false,
+                };
+                self.image_placements.push(placement);
+                self.cursor_row += height_cells;
+                if self.cursor_row >= self.rows {
+                    self.cursor_row = self.rows - 1;
+                }
             }
+            self.cursor_col = 0;
         }
-        self.cursor_col = 0;
     }
 
     /// Delete image placements that scrolled out of screen

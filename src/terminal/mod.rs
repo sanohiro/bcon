@@ -381,6 +381,8 @@ pub struct Terminal {
     pub current_directory: Option<String>,
     /// PTY response buffer (reused across parser calls)
     pty_response: Vec<u8>,
+    /// Image IDs whose GPU textures need re-upload (image data changed for existing ID)
+    pub dirty_image_ids: Vec<u32>,
 }
 
 impl Terminal {
@@ -431,6 +433,7 @@ impl Terminal {
             clipboard_path: default_clipboard_path(),
             current_directory: None,
             pty_response: Vec::with_capacity(256),
+            dirty_image_ids: Vec::new(),
         })
     }
 
@@ -672,7 +675,7 @@ impl Terminal {
         }
 
         let payload = &self.apc_buffer[1..];
-        log::debug!("Kitty APC received: {} bytes payload", payload.len());
+        log::info!("Kitty APC received: {} bytes payload", payload.len());
 
         // Create new decoder if none exists
         if self.kitty_decoder.is_none() {
@@ -701,17 +704,19 @@ impl Terminal {
             let params = decoder.params();
             let action = params.action;
             let quiet = params.quiet;
+            let no_cursor_move = params.do_not_move_cursor;
             let id = if params.id != 0 {
                 params.id
             } else {
                 self.images.next_id
             };
 
-            log::debug!(
-                "Kitty finish_decode: action={:?}, id={}, quiet={}, size={}x{}",
+            log::info!(
+                "Kitty finish_decode: action={:?}, id={}, quiet={}, C={}, size={}x{}",
                 action,
                 id,
                 quiet,
+                if no_cursor_move { 1 } else { 0 },
                 params.width,
                 params.height
             );
@@ -740,6 +745,7 @@ impl Terminal {
                             image.height,
                             self.cell_width,
                             self.cell_height,
+                            no_cursor_move,
                         );
                     }
                 }
@@ -782,9 +788,11 @@ impl Terminal {
 
         match result {
             KittyDecodeResult::Image(kitty_img) => {
+                let no_cursor_move = kitty_img.do_not_move_cursor;
                 info!(
-                    "Kitty image decode complete: {}x{} (id={})",
-                    kitty_img.width, kitty_img.height, kitty_img.id
+                    "Kitty image decode complete: {}x{} (id={}, C={})",
+                    kitty_img.width, kitty_img.height, kitty_img.id,
+                    if no_cursor_move { 1 } else { 0 }
                 );
                 let term_img = TerminalImage {
                     id: kitty_img.id,
@@ -800,11 +808,21 @@ impl Terminal {
                 let img_id = term_img.id;
                 let width = term_img.width;
                 let height = term_img.height;
+
+                // If image with same ID already exists, mark texture for re-upload
+                if self.images.get(img_id).is_some() {
+                    self.dirty_image_ids.push(img_id);
+                    // Remove old placements for this ID (will be replaced)
+                    self.grid.image_placements.retain(|p| p.id != img_id);
+                }
                 self.images.insert(term_img);
 
                 if action == KittyAction::TransmitAndDisplay {
-                    self.grid
-                        .place_image(img_id, width, height, self.cell_width, self.cell_height);
+                    self.grid.place_image(
+                        img_id, width, height,
+                        self.cell_width, self.cell_height,
+                        no_cursor_move,
+                    );
                 }
 
                 if quiet < 2 {
@@ -1283,9 +1301,11 @@ impl Terminal {
         if self.grid.modes.mouse_sgr {
             let suffix = if press { 'M' } else { 'm' };
             let seq = format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix);
+            trace!("Mouse event → PTY (SGR): cb={} col={} row={} {}", cb, cx, cy, suffix);
             self.pty.write(seq.as_bytes())?;
         } else {
             let bytes = [0x1b, b'[', b'M', cb + 32, (cx as u8) + 32, (cy as u8) + 32];
+            trace!("Mouse event → PTY (X10): cb={} col={} row={}", cb, cx, cy);
             self.pty.write(&bytes)?;
         }
         Ok(())
@@ -1303,10 +1323,7 @@ impl Terminal {
 
     /// Send mouse button release event to PTY
     pub fn send_mouse_release(&self, button: u8, col: usize, row: usize) -> Result<()> {
-        // X10 mode doesn't send release events
-        if self.grid.modes.mouse_mode == grid::MouseMode::None
-            || self.grid.modes.mouse_mode == grid::MouseMode::X10
-        {
+        if self.grid.modes.mouse_mode == grid::MouseMode::None {
             return Ok(());
         }
 
@@ -1340,10 +1357,7 @@ impl Terminal {
     /// Send mouse wheel event to PTY
     /// delta: positive=down, negative=up
     pub fn send_mouse_wheel(&self, delta: i8, col: usize, row: usize) -> Result<()> {
-        // X10 mode doesn't send wheel events
-        if self.grid.modes.mouse_mode == grid::MouseMode::None
-            || self.grid.modes.mouse_mode == grid::MouseMode::X10
-        {
+        if self.grid.modes.mouse_mode == grid::MouseMode::None {
             return Ok(());
         }
 

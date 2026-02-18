@@ -187,7 +187,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "bcon"
-version = "0.2.37"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bitflags 2.10.0",

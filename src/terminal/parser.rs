@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 use vte::{Params, Perform};
 
 // ============================================================================
@@ -404,12 +404,20 @@ impl<'a> Perform for Performer<'a> {
                 self.grid.set_scroll_region(top, bottom);
             }
             ('h', [b'?']) => {
-                // DECSET (Set Private Mode)
-                self.handle_decset(param0, true);
+                // DECSET (Set Private Mode) - supports multiple params: CSI ? Pm ; Pm ; ... h
+                for p in &flat_params {
+                    if let Some(&mode) = p.first() {
+                        self.handle_decset(mode, true);
+                    }
+                }
             }
             ('l', [b'?']) => {
-                // DECRST (Reset Private Mode)
-                self.handle_decset(param0, false);
+                // DECRST (Reset Private Mode) - supports multiple params: CSI ? Pm ; Pm ; ... l
+                for p in &flat_params {
+                    if let Some(&mode) = p.first() {
+                        self.handle_decset(mode, false);
+                    }
+                }
             }
             ('q', [b' ']) => {
                 // DECSCUSR - Set Cursor Style (Ps SP q)
@@ -582,6 +590,7 @@ impl<'a> Perform for Performer<'a> {
                                 image.height,
                                 self.cell_width,
                                 self.cell_height,
+                                false, // Sixel always moves cursor
                             );
                         }
                     }
@@ -650,7 +659,7 @@ impl<'a> Performer<'a> {
             // === Mouse Tracking (mutually exclusive) ===
             1000 | 1002 | 1003 => {
                 use super::grid::MouseMode;
-                self.grid.modes.mouse_mode = if enable {
+                let new_mode = if enable {
                     match mode {
                         1000 => MouseMode::X10,         // X10 compatibility (button press only)
                         1002 => MouseMode::ButtonEvent, // Report button press/release/motion with button
@@ -660,6 +669,8 @@ impl<'a> Performer<'a> {
                 } else {
                     MouseMode::None
                 };
+                debug!("Mouse mode: ?{} {} → {:?}", mode, if enable { "h" } else { "l" }, new_mode);
+                self.grid.modes.mouse_mode = new_mode;
             }
             1006 => {
                 // SGR Extended Mouse Mode

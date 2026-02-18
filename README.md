@@ -203,9 +203,10 @@ Config file locations:
 
 ```toml
 [font]
-main = "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf"
-cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-emoji = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
+main = "FiraCode"                   # Font family name (resolved via fontconfig)
+cjk = "Noto Sans CJK JP"           # or full path: "/usr/share/fonts/.../X.ttf"
+emoji = "Noto Color Emoji"
+symbols = "Hack Nerd Font Mono"
 size = 16.0
 render_mode = "lcd"
 lcd_filter = "light"
@@ -247,14 +248,15 @@ rm Hack.tar.xz
 fc-cache -fv
 ```
 
-Configure in `config.toml`:
+Configure in `config.toml` — font name or file path both work:
 
 ```toml
 [font]
-symbols = "~/.local/share/fonts/HackNerdFontMono-Regular.ttf"
+symbols = "Hack Nerd Font Mono"    # by name (recommended)
+# symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"  # by path
 ```
 
-If running via **systemd** (root service), install fonts system-wide and edit `/etc/bcon/config.toml`:
+If running via **systemd** (root service), install fonts system-wide:
 
 ```bash
 sudo mkdir -p /usr/local/share/fonts
@@ -262,12 +264,7 @@ sudo cp ~/.local/share/fonts/HackNerdFont*.ttf /usr/local/share/fonts/
 sudo fc-cache -fv
 ```
 
-```toml
-[font]
-symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"
-```
-
-The `symbols` font is used as fallback for Powerline glyphs (U+E000-U+F8FF) and Nerd Font icons. If not specified, bcon uses the main font for everything.
+The `symbols` font is used as fallback for Powerline glyphs (U+E000-U+F8FF) and Nerd Font icons. If not specified, bcon auto-detects installed Nerd Fonts via fontconfig.
 
 Note: Powerline arrow glyphs (E0B0-E0B7) are drawn programmatically for pixel-perfect rendering regardless of font.
 

@@ -74,6 +74,8 @@ pub struct KittyImage {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>, // RGBA - root frame data (frame 1)
+    /// Do not move cursor after display (C=1)
+    pub do_not_move_cursor: bool,
 }
 
 /// Frame data result from a=f action
@@ -278,12 +280,14 @@ pub struct KittyParams {
     pub frame_y: u32,
     /// Background color (Y) - for frame composition
     pub bgcolor: u32,
+    /// Do not move cursor (C=1 for display actions)
+    pub do_not_move_cursor: bool,
 }
 
 /// Kitty decoder
 pub struct KittyDecoder {
-    /// Accumulated data (multi-chunk support)
-    data_buffer: Vec<u8>,
+    /// Accumulated raw base64 payload (decoded in finish())
+    payload_buffer: Vec<u8>,
     /// Current parameters
     params: KittyParams,
     /// Whether this is the first chunk
@@ -293,7 +297,7 @@ pub struct KittyDecoder {
 impl KittyDecoder {
     pub fn new() -> Self {
         Self {
-            data_buffer: Vec::new(),
+            payload_buffer: Vec::new(),
             params: KittyParams::default(),
             first_chunk: true,
         }
@@ -334,23 +338,18 @@ impl KittyDecoder {
             }
         }
 
-        // Decode and accumulate Base64 payload (with size limit)
+        // Accumulate raw base64 payload (decoded later in finish())
+        // Must accumulate raw text to avoid corruption at non-4-char chunk boundaries
         if !payload.is_empty() {
-            if let Some(decoded) = base64_decode(payload.as_bytes()) {
-                // Check size limit before extending
-                if self.data_buffer.len() + decoded.len() <= MAX_IMAGE_DATA_SIZE {
-                    self.data_buffer.extend(decoded);
-                } else {
-                    warn!(
-                        "Kitty: image data exceeds {}MB limit, truncating",
-                        MAX_IMAGE_DATA_SIZE / 1024 / 1024
-                    );
-                    // Truncate to limit
-                    let remaining = MAX_IMAGE_DATA_SIZE.saturating_sub(self.data_buffer.len());
-                    if remaining > 0 {
-                        self.data_buffer.extend(&decoded[..remaining]);
-                    }
-                }
+            let new_len = self.payload_buffer.len() + payload.len();
+            // Approximate decoded size check (base64 is ~4/3 of binary)
+            if new_len * 3 / 4 <= MAX_IMAGE_DATA_SIZE {
+                self.payload_buffer.extend_from_slice(payload.as_bytes());
+            } else {
+                warn!(
+                    "Kitty: image data exceeds {}MB limit, truncating",
+                    MAX_IMAGE_DATA_SIZE / 1024 / 1024
+                );
             }
         }
 
@@ -460,7 +459,10 @@ impl KittyDecoder {
                         self.params.bgcolor = v;
                     }
                     "C" => {
-                        self.params.compose_mode = value.parse().unwrap_or(0);
+                        let v: u8 = value.parse().unwrap_or(0);
+                        self.params.compose_mode = v;
+                        // C=1 also means "do not move cursor" for display actions
+                        self.params.do_not_move_cursor = v == 1;
                     }
                     _ => {
                         // For animation, 'c' also means other_frame_number
@@ -485,8 +487,21 @@ impl KittyDecoder {
     /// Decode complete, generate result based on action
     pub fn finish(self, next_id: u32) -> Result<KittyDecodeResult, String> {
         let params = self.params;
-        let raw_data = self.data_buffer;
         let id = if params.id != 0 { params.id } else { next_id };
+
+        // Decode accumulated base64 payload
+        let raw_data = if self.payload_buffer.is_empty() {
+            Vec::new()
+        } else {
+            let decoded = base64_decode(&self.payload_buffer)
+                .ok_or_else(|| "invalid base64 data".to_string())?;
+            info!(
+                "Kitty: base64 decoded {} chars -> {} bytes",
+                self.payload_buffer.len(),
+                decoded.len()
+            );
+            decoded
+        };
 
         // Handle non-data actions first
         match params.action {
@@ -562,6 +577,7 @@ impl KittyDecoder {
             width,
             height,
             data: rgba,
+            do_not_move_cursor: params.do_not_move_cursor,
         }))
     }
 
@@ -684,12 +700,64 @@ fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
     Some(output)
 }
 
+/// Recalculate PNG chunk CRCs for compatibility with non-conforming PNGs.
+/// Many image generators produce PNGs with incorrect CRCs; real terminals
+/// (Kitty, etc.) silently accept them. We do the same by fixing CRCs before decode.
+fn fix_png_checksums(data: &[u8]) -> Vec<u8> {
+    const PNG_SIG: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if data.len() < 12 || data[..8] != PNG_SIG {
+        return data.to_vec();
+    }
+
+    let mut fixed = Vec::with_capacity(data.len());
+    fixed.extend_from_slice(&data[..8]); // PNG signature
+    let mut any_fixed = false;
+
+    let mut pos = 8;
+    while pos + 12 <= data.len() {
+        let chunk_len =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        if pos + 12 + chunk_len > data.len() {
+            fixed.extend_from_slice(&data[pos..]);
+            return fixed;
+        }
+
+        // Copy length + type + data
+        fixed.extend_from_slice(&data[pos..pos + 8 + chunk_len]);
+
+        // Recalculate CRC over type + data
+        let mut crc = flate2::Crc::new();
+        crc.update(&data[pos + 4..pos + 8 + chunk_len]);
+        let correct_crc = crc.sum();
+        fixed.extend_from_slice(&correct_crc.to_be_bytes());
+
+        // Check if CRC was wrong
+        let stored_crc =
+            u32::from_be_bytes([data[pos + 8 + chunk_len], data[pos + 9 + chunk_len],
+                                data[pos + 10 + chunk_len], data[pos + 11 + chunk_len]]);
+        if stored_crc != correct_crc {
+            any_fixed = true;
+        }
+
+        pos += 12 + chunk_len;
+    }
+
+    if any_fixed {
+        trace!("Kitty: fixed PNG chunk CRCs");
+    }
+
+    fixed
+}
+
 /// PNG decode
 fn decode_png(data: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     use image::io::Reader as ImageReader;
     use std::io::Cursor;
 
-    let reader = ImageReader::new(Cursor::new(data))
+    // Fix CRCs for compatibility with non-conforming PNGs
+    let data = fix_png_checksums(data);
+
+    let reader = ImageReader::new(Cursor::new(&data))
         .with_guessed_format()
         .map_err(|e| format!("PNG format error: {}", e))?;
 

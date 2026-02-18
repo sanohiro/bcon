@@ -639,12 +639,11 @@ impl GlyphAtlas {
     }
 }
 
-/// Search and load system font
+/// Search and load system monospace font
 ///
 /// Search order:
-/// 1. BCON_FONT environment variable
-/// 2. Known paths (hardcoded)
-/// 3. fontconfig (fallback)
+/// 1. BCON_FONT environment variable (file path)
+/// 2. fontconfig (automatic best-match selection)
 pub fn load_system_font() -> Result<Vec<u8>> {
     // Custom font can be specified via BCON_FONT environment variable
     if let Ok(path) = std::env::var("BCON_FONT") {
@@ -654,80 +653,22 @@ pub fn load_system_font() -> Result<Vec<u8>> {
         return Ok(data);
     }
 
-    let candidates = [
-        // Linux
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
-        // macOS (development/testing)
-        "/System/Library/Fonts/Menlo.ttc",
-        "/System/Library/Fonts/Monaco.ttf",
-        "/System/Library/Fonts/Courier.ttc",
-        "/Library/Fonts/Courier New.ttf",
-    ];
-
-    for path in &candidates {
-        if let Ok(data) = std::fs::read(path) {
-            info!("Font loaded: {}", path);
-            return Ok(data);
-        }
-    }
-
-    // Fallback to fontconfig
-    debug!("Not found in hardcoded paths, trying fontconfig");
+    // Use fontconfig to find the best monospace font
     if let Ok(data) = super::fontconfig::load_system_font_fc() {
         return Ok(data);
     }
 
     Err(anyhow!(
-        "System font not found. Please check the following paths:\n{}",
-        candidates.join("\n")
+        "Monospace font not found. Install a monospace font (e.g. fonts-dejavu-core) or set BCON_FONT."
     ))
 }
 
-/// Search and load CJK font
-///
-/// Search order:
-/// 1. Known paths (hardcoded)
-/// 2. fontconfig (fallback)
+/// Search and load CJK font via fontconfig
 pub fn load_cjk_font() -> Option<Vec<u8>> {
-    let candidates = [
-        // Noto Sans CJK (Debian/Ubuntu fonts-noto-cjk package)
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
-        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-        // IPA Gothic
-        "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
-        "/usr/share/fonts/ipa-gothic/ipag.ttf",
-        "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
-        // VL Gothic
-        "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf",
-        // Takao
-        "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
-        // macOS (development/testing)
-        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        "/Library/Fonts/Arial Unicode.ttf",
-    ];
-
-    for path in &candidates {
-        if let Ok(data) = std::fs::read(path) {
-            info!("CJK font loaded: {}", path);
-            return Some(data);
-        }
-    }
-
-    // Fallback to fontconfig
-    debug!("Not found in hardcoded paths, trying fontconfig");
     if let Some(data) = super::fontconfig::load_cjk_font_fc() {
         return Some(data);
     }
 
-    warn!("CJK font not found. Japanese display will be unavailable.");
+    warn!("CJK font not found. Install a CJK font (e.g. fonts-noto-cjk) for Japanese display.");
     None
 }

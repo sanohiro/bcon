@@ -87,7 +87,6 @@ impl FontFinder {
     }
 
     /// Search for color emoji font
-    #[allow(dead_code)]
     pub fn find_emoji(&self) -> Option<FontMatch> {
         let candidates = [
             "Noto Color Emoji",
@@ -145,6 +144,39 @@ impl FontFinder {
 /// Load font file
 pub fn load_font_file(path: &std::path::Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|e| anyhow!("Failed to read font file: {} ({})", path.display(), e))
+}
+
+/// Resolve a font specifier: if it's a valid file path, read it directly.
+/// Otherwise, treat it as a font family name and search via fontconfig.
+pub fn resolve_font(specifier: &str) -> Result<Vec<u8>> {
+    let path = std::path::Path::new(specifier);
+    if path.is_absolute() && path.exists() {
+        info!("Font loaded from path: {}", specifier);
+        return load_font_file(path);
+    }
+
+    // Try as font family name via fontconfig
+    let finder = FontFinder::new()?;
+    if let Some(font_match) = finder.find_font(specifier) {
+        info!(
+            "Font resolved by name: \"{}\" → {} ({})",
+            specifier,
+            font_match.family,
+            font_match.path.display()
+        );
+        return load_font_file(&font_match.path);
+    }
+
+    // Last resort: try as relative path
+    if path.exists() {
+        info!("Font loaded from relative path: {}", specifier);
+        return load_font_file(path);
+    }
+
+    Err(anyhow!(
+        "Font not found: \"{}\" (not a valid path or font name)",
+        specifier
+    ))
 }
 
 /// Search and load system font using fontconfig
@@ -206,6 +238,36 @@ pub fn load_emoji_font_fc() -> Option<Vec<u8>> {
     }
 
     None
+}
+
+/// Find a font that supports a specific Unicode codepoint using fontconfig.
+/// Uses `fc-match` command with charset query.
+/// Returns the font file path if found.
+pub fn find_font_for_char(ch: char) -> Option<PathBuf> {
+    use std::process::Command;
+
+    let charset_query = format!(":charset={:04X}", ch as u32);
+    let output = Command::new("fc-match")
+        .args(["-f", "%{file}", &charset_query])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let path_str = String::from_utf8(output.stdout).ok()?;
+    let path_str = path_str.trim();
+    if path_str.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(path_str);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 /// Search and load Nerd Font (symbol/icon font) using fontconfig

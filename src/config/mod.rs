@@ -43,13 +43,13 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FontConfig {
-    /// Main font path (searches system fonts if empty)
+    /// Main font: family name or file path (searches system fonts if empty)
     pub main: String,
-    /// Symbol/icon font path for Nerd Font icons (searches system fonts if empty)
+    /// Symbol/icon font: family name or file path (searches system fonts if empty)
     pub symbols: String,
-    /// CJK font path (searches system fonts if empty)
+    /// CJK font: family name or file path (searches system fonts if empty)
     pub cjk: String,
-    /// Emoji font path (searches system fonts if empty)
+    /// Emoji font: family name or file path (searches system fonts if empty)
     pub emoji: String,
     /// Font size
     pub size: f32,
@@ -671,9 +671,6 @@ impl Config {
             }
         }
 
-        // Auto-detect Nerd Font for symbols/icons (yazi, etc.)
-        let nerd_font_path = detect_nerd_font_path();
-
         // Generate preset name (exclude "system" from display)
         let display_presets: Vec<&str> = presets
             .iter()
@@ -696,25 +693,41 @@ impl Config {
         // Serialize only keybinds (font settings use system defaults)
         let keybinds_toml = toml::to_string_pretty(&keybinds)?;
 
-        // Build font section based on detected fonts
+        // Build font section with auto-detected font names via fontconfig
+        // Detected fonts are active, undetected ones are commented out with hints
         let font_section = {
-            let mut lines = Vec::new();
-            if nerd_font_path.is_some() || include_japanese {
-                lines.push("[font]".to_string());
+            let finder = crate::font::fontconfig::FontFinder::new().ok();
+            let mut lines = vec!["[font]".to_string()];
+
+            // Main monospace font
+            match finder.as_ref().and_then(|f| f.find_monospace()) {
+                Some(m) => lines.push(format!("main = \"{}\"", m.family)),
+                None => lines.push("# main = \"\"                    # Monospace font name or path (e.g. \"FiraCode\")".to_string()),
             }
-            if let Some(ref nerd_path) = nerd_font_path {
-                lines.push(format!("symbols = \"{}\"", nerd_path));
+
+            // Symbols / Nerd Font
+            let nerd_font = finder.as_ref()
+                .and_then(|f| f.find_nerd_font())
+                .map(|m| m.family)
+                .or_else(detect_nerd_font_path);
+            match nerd_font {
+                Some(name) => lines.push(format!("symbols = \"{}\"", name)),
+                None => lines.push("# symbols = \"\"                 # Nerd Font for icons (e.g. \"Hack Nerd Font Mono\")".to_string()),
             }
-            if include_japanese {
-                lines.push(
-                    "cjk = \"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc\"".to_string(),
-                );
+
+            // CJK font
+            match finder.as_ref().and_then(|f| f.find_cjk()) {
+                Some(m) => lines.push(format!("cjk = \"{}\"", m.family)),
+                None => lines.push("# cjk = \"\"                     # CJK font for Japanese/Chinese/Korean (e.g. \"Noto Sans CJK JP\")".to_string()),
             }
-            if !lines.is_empty() {
-                lines.join("\n") + "\n"
-            } else {
-                String::new()
+
+            // Emoji font
+            match finder.as_ref().and_then(|f| f.find_emoji()) {
+                Some(m) => lines.push(format!("emoji = \"{}\"", m.family)),
+                None => lines.push("# emoji = \"\"                   # Color emoji font (e.g. \"Noto Color Emoji\")".to_string()),
             }
+
+            lines.join("\n") + "\n"
         };
 
         // Japanese/CJK terminal settings
@@ -735,6 +748,7 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 #
 # Font settings are commented out by default.
 # bcon will automatically find system fonts via fontconfig.
+# You can specify fonts by family name (e.g. "FiraCode") or file path.
 
 [keybinds]
 {keybinds_toml}
@@ -745,6 +759,10 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # By default, bcon automatically finds fonts via fontconfig.
 # Uncomment and customize if you want to use specific fonts.
 #
+# You can specify fonts by family name OR file path:
+#   main = "FiraCode"                    # by name (resolved via fontconfig)
+#   main = "/usr/share/fonts/.../X.ttf"  # by path (direct)
+#
 # Recommended monospace fonts:
 #   1. FiraCode - ligature support, great for coding
 #   2. JetBrains Mono - designed for developers
@@ -753,9 +771,10 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 #
 # [font]
 # size = 16.0
-# main = "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf"
-# cjk = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-# emoji = "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"
+# main = "FiraCode"
+# cjk = "Noto Sans CJK JP"
+# emoji = "Noto Color Emoji"
+# symbols = "Hack Nerd Font Mono"
 #
 # Install on Ubuntu/Debian:
 #   sudo apt install fonts-firacode fonts-noto-color-emoji fonts-noto-cjk
