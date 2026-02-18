@@ -60,7 +60,15 @@ struct SeatInputInterface {
 #[cfg(all(target_os = "linux", feature = "seatd"))]
 impl LibinputInterface for SeatInputInterface {
     fn open_restricted(&mut self, path: &Path, _flags: i32) -> std::result::Result<OwnedFd, i32> {
-        let mut session = self.session.borrow_mut();
+        let mut session = match self.session.try_borrow_mut() {
+            Ok(session) => session,
+            Err(_) => {
+                // Avoid panicking if another part of the program temporarily
+                // holds a mutable borrow. libinput may retry later.
+                warn!("libseat: SeatSession busy while opening {:?}", path);
+                return Err(-libc::EBUSY);
+            }
+        };
         match session.open_device(path) {
             Ok(device) => Ok(device.fd),
             Err(e) => {

@@ -251,23 +251,34 @@ async fn ime_async_main(
     ready_tx: mpsc::Sender<Result<()>>,
 ) -> Result<()> {
     // Connect to D-Bus session bus
+    let dbus_addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
+    info!("IME: connecting to D-Bus session (addr={})", if dbus_addr.is_empty() { "<not set>" } else { &dbus_addr });
     let connection = match zbus::Connection::session().await {
-        Ok(c) => c,
+        Ok(c) => {
+            info!("IME: D-Bus session connected");
+            c
+        }
         Err(e) => {
-            let _ = ready_tx.send(Err(anyhow!(
-                "Failed to connect to D-Bus session bus: {}",
-                e
-            )));
+            let msg = if dbus_addr.is_empty() {
+                format!("Failed to connect to D-Bus session bus (DBUS_SESSION_BUS_ADDRESS not set): {}", e)
+            } else {
+                format!("Failed to connect to D-Bus session bus (addr={}): {}", dbus_addr, e)
+            };
+            let _ = ready_tx.send(Err(anyhow!(msg)));
             return Ok(());
         }
     };
 
     // fcitx5 Controller proxy
+    info!("IME: connecting to fcitx5 InputMethod...");
     let controller = match FcitxInputMethodProxy::new(&connection).await {
-        Ok(c) => c,
+        Ok(c) => {
+            info!("IME: fcitx5 InputMethod proxy connected");
+            c
+        }
         Err(e) => {
             let _ = ready_tx.send(Err(anyhow!(
-                "Failed to connect to fcitx5 InputMethod: {}",
+                "Failed to connect to fcitx5 InputMethod (is fcitx5 running?): {}",
                 e
             )));
             return Ok(());

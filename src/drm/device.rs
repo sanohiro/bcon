@@ -17,10 +17,16 @@ use nix::sys::signalfd::{SfdFlags, SignalFd};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
+use std::time::Duration;
 
-/// Global flag for SIGTERM received (checked in main loop)
-static SIGTERM_RECEIVED: AtomicBool = AtomicBool::new(false);
+/// Global flag for shutdown requested via signal (SIGTERM/SIGINT/SIGHUP)
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Global TTY fd for panic hook recovery.
+/// When set (>= 0), the panic hook will restore KD_TEXT and VT_AUTO
+/// to prevent the console from being stuck in KD_GRAPHICS mode.
+static PANIC_RECOVERY_TTY_FD: AtomicI32 = AtomicI32::new(-1);
 
 /// Fallback flags for VT switch signals (SIGUSR1/SIGUSR2)
 ///
@@ -32,23 +38,60 @@ static VT_SIG_PENDING: AtomicU8 = AtomicU8::new(0);
 const VT_SIG_ACQUIRE: u8 = 0b01;
 const VT_SIG_RELEASE: u8 = 0b10;
 
-/// Check if SIGTERM was received
-pub fn sigterm_received() -> bool {
-    SIGTERM_RECEIVED.load(Ordering::Relaxed)
+/// Check if shutdown was requested (SIGTERM, SIGINT, or SIGHUP)
+pub fn shutdown_requested() -> bool {
+    SHUTDOWN_REQUESTED.load(Ordering::Relaxed)
 }
 
-/// Set up SIGTERM handler (call once at startup)
-pub fn setup_sigterm_handler() {
+/// Set up signal handlers for graceful shutdown (call once at startup)
+///
+/// Handles SIGTERM (systemd stop), SIGINT (Ctrl+C), and SIGHUP (terminal hangup).
+pub fn setup_signal_handlers() {
     unsafe {
         libc::signal(
             libc::SIGTERM,
-            sigterm_handler as *const () as libc::sighandler_t,
+            shutdown_signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGINT,
+            shutdown_signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGHUP,
+            shutdown_signal_handler as *const () as libc::sighandler_t,
         );
     }
 }
 
-extern "C" fn sigterm_handler(_signo: libc::c_int) {
-    SIGTERM_RECEIVED.store(true, Ordering::Relaxed);
+extern "C" fn shutdown_signal_handler(_signo: libc::c_int) {
+    SHUTDOWN_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+/// Install a panic hook that restores the console to text mode.
+///
+/// Even with `panic = "abort"`, `std::panic::set_hook` runs before the abort.
+/// This ensures KD_TEXT and VT_AUTO are restored so the console is usable.
+pub fn setup_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let fd = PANIC_RECOVERY_TTY_FD.load(Ordering::Relaxed);
+        if fd >= 0 {
+            // Restore KD_TEXT
+            unsafe { libc::ioctl(fd, KDSETMODE, KD_TEXT) };
+            // Restore VT_AUTO
+            let mode = VtMode {
+                mode: VT_AUTO,
+                waitv: 0,
+                relsig: 0,
+                acqsig: 0,
+                frsig: 0,
+            };
+            unsafe { libc::ioctl(fd, VT_SETMODE, &mode) };
+        }
+        // Print panic info to stderr so it's visible on the restored console
+        eprintln!("[bcon] PANIC: {}", info);
+        prev(info);
+    }));
 }
 
 /// Set up fallback handlers for VT switch signals.
@@ -476,28 +519,38 @@ impl VtSwitcher {
         // are delivered outside signalfd (should be rare, but it's safer).
         setup_vt_signal_handlers();
 
-        // Wait for VT to become active
-        // This blocks until our target VT becomes the active console.
-        // If started via systemd on an inactive VT, this will wait until
-        // the user switches to that VT (Ctrl+Alt+Fn).
-        // If already active (e.g., user ran bcon directly from shell), returns immediately.
+        // Wait for VT to become active.
+        // Use a polling loop instead of VT_WAITACTIVE so signals can stop the service.
+        // VT_WAITACTIVE can be uninterruptible when signals are handled with SA_RESTART.
+        // Timeout after 10 seconds to prevent indefinite blocking.
         info!("Waiting for VT{} to become active...", target_vt);
+        let vt_wait_start = std::time::Instant::now();
+        const VT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
         let vt_wait_success = loop {
-            let ret = unsafe { libc::ioctl(tty_fd, VT_WAITACTIVE, target_vt as libc::c_int) };
-            if ret >= 0 {
-                break true; // Success
+            if shutdown_requested() {
+                info!("Shutdown signal received while waiting for VT{}, exiting", target_vt);
+                break false;
             }
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EINTR) {
-                // Interrupted by signal - check if we should exit
-                if sigterm_received() {
-                    info!("SIGTERM received during VT_WAITACTIVE, exiting");
-                    break false;
-                }
-                continue;
+            if vt_wait_start.elapsed() >= VT_WAIT_TIMEOUT {
+                warn!("Timed out waiting for VT{} to become active ({}s)", target_vt, VT_WAIT_TIMEOUT.as_secs());
+                break false;
             }
-            warn!("VT_WAITACTIVE failed: {}", err);
-            break false;
+            #[repr(C)]
+            struct VtStat {
+                v_active: libc::c_ushort,
+                v_signal: libc::c_ushort,
+                v_state: libc::c_ushort,
+            }
+            let mut stat = VtStat {
+                v_active: 0,
+                v_signal: 0,
+                v_state: 0,
+            };
+            let ret = unsafe { libc::ioctl(tty_fd, VT_GETSTATE, &mut stat) };
+            if ret >= 0 && stat.v_active == target_vt {
+                break true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
         };
 
         if !vt_wait_success {
@@ -544,6 +597,9 @@ impl VtSwitcher {
             );
         } else {
             info!("Set KD_GRAPHICS mode");
+            // Register tty_fd for panic hook recovery.
+            // From this point, any panic will restore KD_TEXT before aborting.
+            PANIC_RECOVERY_TTY_FD.store(tty_fd, Ordering::Relaxed);
         }
 
         // Flush input buffer to clear any stale events
@@ -776,6 +832,9 @@ impl VtSwitcher {
 
 impl Drop for VtSwitcher {
     fn drop(&mut self) {
+        // Clear panic recovery fd (we're cleaning up properly)
+        PANIC_RECOVERY_TTY_FD.store(-1, Ordering::Relaxed);
+
         // Restore original keyboard mode (KD_TEXT)
         let ret = unsafe { libc::ioctl(self.tty_fd, KDSETMODE, self.original_kd_mode) };
         if ret < 0 {
@@ -976,10 +1035,10 @@ pub fn wait_for_vt(target_vt: u16) -> anyhow::Result<()> {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EINTR) {
             // Interrupted by signal - check if we should exit
-            if sigterm_received() {
-                info!("SIGTERM received during VT_WAITACTIVE, exiting");
+            if shutdown_requested() {
+                info!("Shutdown signal received during VT_WAITACTIVE, exiting");
                 unsafe { libc::close(fd) };
-                return Err(anyhow::anyhow!("VT_WAITACTIVE interrupted by SIGTERM"));
+                return Err(anyhow::anyhow!("VT_WAITACTIVE interrupted by shutdown signal"));
             }
             continue;
         }

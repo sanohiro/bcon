@@ -27,8 +27,8 @@ mod utils;
 
 use anyhow::{anyhow, Context, Result};
 use glow::HasContext;
-use log::{debug, info, trace, warn};
-use std::time::Duration;
+use log::{info, trace, warn};
+use std::time::{Duration, Instant};
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
 use std::cell::RefCell;
@@ -1081,6 +1081,7 @@ fn main() -> Result<()> {
     let seatd_available = true;
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let seatd_available = false;
+    let is_root = unsafe { libc::getuid() } == 0;
 
     let mut use_seatd = match backend_mode {
         BackendMode::Seatd => {
@@ -1091,10 +1092,16 @@ fn main() -> Result<()> {
         }
         BackendMode::Vt => false,
         BackendMode::Auto => {
-            // Prefer seatd when running inside a user session, otherwise use VT_PROCESS.
-            has_user_session() && seatd_available
+            // Prefer seatd for unprivileged users or when inside a user session.
+            // VT_PROCESS requires root, so auto should avoid VT when not root.
+            seatd_available && (!is_root || has_user_session())
         }
     };
+
+    info!(
+        "Backend selection: mode={:?}, is_root={}, seatd_available={}, use_seatd={}",
+        backend_mode, is_root, seatd_available, use_seatd
+    );
 
     // Config file generation mode
     // --init-config or --init-config=PRESET (default, emacs-like, vim-like)
@@ -1203,8 +1210,12 @@ fn main() -> Result<()> {
         return test_shaper_mode();
     }
 
-    // Set up SIGTERM handler for graceful shutdown (systemd stop)
-    drm::setup_sigterm_handler();
+    // Set up signal handlers for graceful shutdown (SIGTERM/SIGINT/SIGHUP)
+    drm::setup_signal_handlers();
+    // Set up panic hook to restore KD_TEXT on panic (prevents frozen console)
+    drm::setup_panic_hook();
+
+    info!("Signal handlers ready");
 
     // Phase 0: Session management
     // - seatd: Use libseat for rootless operation (user session)
@@ -1226,17 +1237,54 @@ fn main() -> Result<()> {
         // libseat handles session management - it will send Enable event
         // when the session becomes active.
         info!("Opening libseat session...");
+        info!("Opening libseat session...");
         match session::SeatSession::open() {
             Ok(s) => {
+                info!("libseat session opened successfully");
                 seat_session = Some(Rc::new(RefCell::new(s)));
             }
             Err(e) => {
+                warn!("libseat session failed: {}", e);
+                if backend_mode == BackendMode::Seatd {
+                    return Err(anyhow!("libseat unavailable: {}", e));
+                }
+                if !is_root {
+                    return Err(anyhow!(
+                        "libseat unavailable and running unprivileged; cannot use VT backend. \
+Install seatd/logind or run as root (or set BCON_BACKEND=vt when root). Error: {}",
+                        e
+                    ));
+                }
                 warn!("libseat unavailable, falling back to VT backend: {}", e);
                 use_seatd = false;
             }
         }
     }
 
+    #[cfg(all(target_os = "linux", feature = "seatd"))]
+    if use_seatd {
+        if let Some(ref seat_session) = seat_session {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut active = seat_session.borrow().is_active();
+            while !active && Instant::now() < deadline {
+                let _ = seat_session.borrow_mut().dispatch();
+                active = seat_session.borrow().is_active();
+                if active {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            if !active {
+                return Err(anyhow!(
+                    "libseat session did not become active. \
+Make sure seatd/logind is running and you're on an active VT."
+                ));
+            }
+        }
+    }
+
+    info!("Backend: use_seatd={}", use_seatd);
+    info!("VT switcher setup...");
     #[cfg(target_os = "linux")]
     let mut vt_switcher = if !use_seatd {
         // VtSwitcher sets up process-controlled VT switching via VT_SETMODE
@@ -1245,8 +1293,10 @@ fn main() -> Result<()> {
     } else {
         None
     };
+    info!("VT switcher ready");
 
     // Phase 1: DRM/KMS initialization
+    info!("Phase 1: DRM/KMS initialization...");
     let drm_path = find_drm_device()?;
     info!("DRM device: {}", drm_path);
 
@@ -1276,22 +1326,15 @@ fn main() -> Result<()> {
 
     #[cfg(all(target_os = "linux", feature = "seatd"))]
     if let Some(ref seat_session) = seat_session {
-        // With libseat, poll for initial session state.
-        // Dispatch events to see if we get an Enable event.
-        let mut libseat_active = false;
-        // First dispatch, then drop the mutable borrow before trying to receive events.
-        let dispatched = seat_session.borrow_mut().dispatch();
-        if let Ok(true) = dispatched {
-            while let Some(event) = seat_session.borrow().try_recv_event() {
-                if event == session::SessionEvent::Enable {
-                    libseat_active = true;
-                    info!("libseat: session enabled");
-                    break;
-                }
-            }
-        }
+        // With libseat, the session is already confirmed active by the 3s wait above.
+        // Use is_active() which reflects the actual state after dispatch.
+        let libseat_active = seat_session.borrow().is_active();
 
-        // Also verify the VT is actually active (libseat might enable even on inactive VT).
+        // Drain any pending events so they don't pile up.
+        let _ = seat_session.borrow_mut().dispatch();
+        while let Some(_event) = seat_session.borrow().try_recv_event() {}
+
+        // Also verify the VT is actually active.
         let vt_active = match target_vt {
             Some(vt) => {
                 let active = drm::is_vt_active(vt);
@@ -1308,12 +1351,17 @@ fn main() -> Result<()> {
         };
 
         let active = libseat_active && vt_active;
+        info!(
+            "libseat initial state: session_active={}, vt_active={}, initial_drm_master={}",
+            libseat_active, vt_active, active
+        );
         if active {
-            info!("libseat: session initially active and VT is foreground");
-        } else if libseat_active && !vt_active {
-            info!("libseat: session enabled but VT not active, deferring rendering");
+            info!("libseat: session active and VT is foreground");
         } else {
-            info!("libseat: session not yet active, deferring rendering");
+            info!(
+                "libseat: deferring (session_active={}, vt_active={})",
+                libseat_active, vt_active
+            );
         }
         initial_drm_master = active;
     }
@@ -1363,6 +1411,7 @@ fn main() -> Result<()> {
         drm::hotplug::snapshot_connectors(&drm_device).unwrap_or_default();
 
     // Create GBM device (shares fd with DRM)
+    info!("Creating GBM device...");
     let gbm_file = drm_device.dup_fd()?;
     let gbm_device = gpu::GbmDevice::new(gbm_file)?;
 
@@ -1374,9 +1423,11 @@ fn main() -> Result<()> {
     )?;
 
     // Create EGL context
+    info!("Creating EGL context...");
     let egl_context = gpu::EglContext::new(gbm_device.device(), gbm_surface.surface())?;
 
     // Create OpenGL ES renderer
+    info!("Creating OpenGL ES renderer...");
     let renderer = gpu::GlRenderer::new(&egl_context)?;
     renderer.set_viewport(
         0,
@@ -1392,14 +1443,20 @@ fn main() -> Result<()> {
     // Render first frame and set mode (only if we have DRM master).
     let mut needs_initial_mode_set = !initial_drm_master;
 
+    // With libseat, DRM master is managed by the seat daemon - skip set_master()/drop_master().
+    let seatd_manages_drm = use_seatd;
+
     let (initial_bo, initial_fb) = if initial_drm_master {
         // Ensure we actually hold DRM master before the first modeset.
-        if let Err(e) = drm_device.set_master() {
-            warn!("Failed to acquire DRM master for initial modeset: {}", e);
-            initial_drm_master = false;
-            needs_initial_mode_set = true;
-            (None, None)
-        } else {
+        if !seatd_manages_drm {
+            if let Err(e) = drm_device.set_master() {
+                warn!("Failed to acquire DRM master for initial modeset: {}", e);
+                initial_drm_master = false;
+                needs_initial_mode_set = true;
+            }
+        }
+        if initial_drm_master {
+            info!("First swap_buffers + set_crtc...");
             let init_bg = cfg.appearance.background_rgb();
             renderer.clear(init_bg.0, init_bg.1, init_bg.2, 1.0);
             egl_context.swap_buffers()?;
@@ -1408,14 +1465,19 @@ fn main() -> Result<()> {
             let fb = drm::DrmFramebuffer::from_bo(&drm_device, &bo)?;
             drm::set_crtc(&drm_device, &display_config, &fb)?;
             info!("Phase 1 initialization complete");
+            info!("Phase 1 complete (display active)");
             (Some(bo), Some(fb))
+        } else {
+            (None, None)
         }
     } else {
         info!("Phase 1 initialization complete (VT not active, mode set deferred)");
+        info!("Phase 1 complete (mode set deferred)");
         (None, None)
     };
 
     // Phase 2: Text rendering initialization (FreeType + LCD subpixel)
+    info!("Phase 2: fonts & shaders...");
     let gl = renderer.gl();
 
     // Load font
@@ -1471,6 +1533,7 @@ fn main() -> Result<()> {
     let hinting_mode = font::freetype::HintingMode::from_str(&cfg.font.lcd_hinting);
 
     // Create FreeType + LCD subpixel rendering atlas
+    info!("Creating FreeType LCD atlas...");
     let mut glyph_atlas = font::lcd_atlas::LcdGlyphAtlas::new(
         gl,
         font_data,
@@ -1509,6 +1572,7 @@ fn main() -> Result<()> {
 
     // Create LCD text renderer (FreeType + linear color space compositing)
     // Uses GPU instancing: 1 draw call per flush, 66% less data transfer
+    info!("Compiling GPU shaders...");
     let mut text_renderer =
         gpu::LcdTextRendererInstanced::new(gl).context("Failed to initialize LCD text renderer")?;
     text_renderer.set_subpixel_bgr(subpixel_bgr);
@@ -1546,8 +1610,10 @@ fn main() -> Result<()> {
         .context("Failed to initialize FBO")?;
 
     info!("Phase 2 initialization complete");
+    info!("Phase 2 complete");
 
     // Phase 3: Terminal initialization
+    info!("Phase 3: terminal/PTY...");
     let screen_w = display_config.width;
     let screen_h = display_config.height;
     // Cell dimensions from font metrics (always positive, but guard against edge cases)
@@ -1571,6 +1637,27 @@ fn main() -> Result<()> {
     let base_font_size = font_size;
 
     // Japanese IME support: ensure D-Bus session is available
+    info!("D-Bus/IME diagnostics: ime_disabled_apps={:?}", cfg.terminal.ime_disabled_apps);
+    if let Ok(addr) = std::env::var("DBUS_SESSION_BUS_ADDRESS") {
+        info!("D-Bus env: DBUS_SESSION_BUS_ADDRESS={}", addr);
+    } else {
+        info!("D-Bus env: DBUS_SESSION_BUS_ADDRESS not set");
+    }
+    // Check if fcitx5 is available in PATH
+    let fcitx5_available = std::process::Command::new("which")
+        .arg("fcitx5")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    info!("D-Bus/IME: fcitx5 in PATH: {}", fcitx5_available);
+    // Check if fcitx5 is currently running
+    let fcitx5_running = std::process::Command::new("pgrep")
+        .arg("fcitx5")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    info!("D-Bus/IME: fcitx5 running: {}", fcitx5_running);
+
     let extra_env: Vec<(String, String)> = if !cfg.terminal.ime_disabled_apps.is_empty() {
         // First check if D-Bus session is already available (e.g., from systemd user session)
         if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok() {
@@ -1578,23 +1665,33 @@ fn main() -> Result<()> {
             Vec::new()
         } else {
             // Start a D-Bus session daemon (console-friendly, unlike dbus-launch which is X11)
+            // Use spawn + wait_with_output with timeout to avoid indefinite blocking.
             match std::process::Command::new("dbus-daemon")
                 .args(["--session", "--fork", "--print-address=1"])
-                .output()
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
             {
-                Ok(output) => {
-                    let addr = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if !addr.is_empty() {
-                        info!("Started D-Bus session: {}", addr);
-                        vec![("DBUS_SESSION_BUS_ADDRESS".to_string(), addr)]
-                    } else {
-                        debug!("dbus-daemon returned empty address");
-                        Vec::new()
+                Ok(child) => {
+                    match child.wait_with_output() {
+                        Ok(output) => {
+                            let addr = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                            if !addr.is_empty() {
+                                info!("Started D-Bus session: {}", addr);
+                                vec![("DBUS_SESSION_BUS_ADDRESS".to_string(), addr)]
+                            } else {
+                                info!("dbus-daemon started but returned empty address");
+                                Vec::new()
+                            }
+                        }
+                        Err(e) => {
+                            info!("dbus-daemon wait failed: {}", e);
+                            Vec::new()
+                        }
                     }
                 }
                 Err(e) => {
-                    // D-Bus is optional for IME - only log at debug level
-                    debug!("D-Bus session not available (IME may not work): {}", e);
+                    info!("D-Bus session daemon not available (IME will not work): {}", e);
                     Vec::new()
                 }
             }
@@ -1608,6 +1705,7 @@ fn main() -> Result<()> {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
+    info!("PTY fork...");
     let mut term = terminal::Terminal::with_scrollback_env(
         grid_cols,
         grid_rows,
@@ -1643,6 +1741,7 @@ fn main() -> Result<()> {
     }
 
     // Phase 4: Keyboard input initialization
+    info!("Phase 4: keyboard/evdev...");
     // TTY keyboard (may fail when running from GDM without a TTY)
     let keyboard: Option<input::Keyboard> = if use_seatd {
         match input::Keyboard::new() {
@@ -1715,8 +1814,10 @@ fn main() -> Result<()> {
     }
 
     info!("Phase 4 initialization complete");
+    info!("Phase 4 complete");
 
     // Phase 5d: fcitx5 IME initialization (optional)
+    info!("Phase 5: IME (fcitx5)...");
     let ime_client = match input::ime::ImeClient::try_new() {
         Ok(c) => {
             info!("fcitx5 IME connected");
@@ -1734,6 +1835,7 @@ fn main() -> Result<()> {
     let mut candidate_state: Option<input::ime::CandidateState> = None;
 
     info!("Terminal loop started");
+    info!("All phases complete, entering main loop");
 
     // Notify systemd that we're ready
     let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Ready]);
@@ -1781,6 +1883,8 @@ fn main() -> Result<()> {
 
     // DRM master state (for VT switching)
     let mut drm_master_held = initial_drm_master;
+    let mut drm_master_ever_held = initial_drm_master;
+    let drm_master_wait_start = Instant::now();
 
     // Appearance colors (from config, may be overridden by OSC 10/11)
     let config_bg = cfg.appearance.background_rgb();
@@ -1796,8 +1900,18 @@ fn main() -> Result<()> {
             // Dispatch libseat events (drop borrow before processing events).
             let _ = seat_session.borrow_mut().dispatch();
 
-            // Process session events.
-            while let Some(event) = seat_session.borrow().try_recv_event() {
+            // Drain events first to avoid holding a RefCell borrow while handling them.
+            let mut seat_events = Vec::new();
+            loop {
+                let event = { seat_session.borrow().try_recv_event() };
+                if let Some(event) = event {
+                    seat_events.push(event);
+                } else {
+                    break;
+                }
+            }
+
+            for event in seat_events {
                 match event {
                     session::SessionEvent::Disable => {
                         // Session disabled (VT switched away).
@@ -1814,8 +1928,8 @@ fn main() -> Result<()> {
                         }
 
                         // Drop DRM master on Disable so other VTs (e.g., getty@tty1) can render.
-                        // Keeping master during Disable can black-screen the active VT.
-                        if drm_master_held {
+                        // With libseat, master is managed by the seat daemon automatically.
+                        if drm_master_held && !seatd_manages_drm {
                             if let Err(e) = drm_device.drop_master() {
                                 log::warn!("Failed to drop DRM master: {}", e);
                             }
@@ -1850,8 +1964,10 @@ fn main() -> Result<()> {
                             // Keep input suspended until we're actually active.
                             // Do not hold DRM master or modeset while inactive.
                             drm_master_held = false;
-                            if let Err(e) = drm_device.drop_master() {
-                                log::debug!("Failed to drop DRM master: {}", e);
+                            if !seatd_manages_drm {
+                                if let Err(e) = drm_device.drop_master() {
+                                    log::debug!("Failed to drop DRM master: {}", e);
+                                }
                             }
                             continue;
                         }
@@ -1862,14 +1978,20 @@ fn main() -> Result<()> {
                         }
 
                         if !drm_master_held {
-                            // Acquire DRM master only when VT is foreground.
-                            if let Err(e) = drm_device.set_master() {
-                                log::warn!("Failed to acquire DRM master: {}", e);
-                                drm_master_held = false;
-                                continue;
+                            if seatd_manages_drm {
+                                // libseat manages DRM master - just mark as held.
+                                info!("libseat: session active, DRM master assumed");
+                            } else {
+                                // Acquire DRM master only when VT is foreground.
+                                if let Err(e) = drm_device.set_master() {
+                                    log::warn!("Failed to acquire DRM master: {}", e);
+                                    drm_master_held = false;
+                                    continue;
+                                }
                             }
                         }
                         drm_master_held = true;
+                        drm_master_ever_held = true;
                         needs_redraw = true;
 
                         // If mode setting was deferred (session wasn't active at startup),
@@ -1955,6 +2077,7 @@ fn main() -> Result<()> {
                                 log::warn!("Failed to acquire DRM master: {}", e);
                             } else {
                                 drm_master_held = true;
+                                drm_master_ever_held = true;
                                 needs_redraw = true;
                             }
                         }
@@ -2001,16 +2124,30 @@ fn main() -> Result<()> {
             }
         }
 
-        // Check for SIGTERM (graceful shutdown from systemd)
-        if drm::sigterm_received() {
-            info!("Received SIGTERM, shutting down gracefully...");
+        // Check for shutdown signal (SIGTERM/SIGINT/SIGHUP)
+        if drm::shutdown_requested() {
+            info!("Received shutdown signal, shutting down gracefully...");
             let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Stopping]);
             break;
         }
 
         // Skip most processing if we don't have DRM master (VT switched away)
         if !drm_master_held {
+            // If DRM master was never acquired, check for timeout.
+            // This prevents indefinite freeze when running without proper privileges.
+            if !drm_master_ever_held && drm_master_wait_start.elapsed() > Duration::from_secs(5) {
+                eprintln!("[bcon] ERROR: Cannot acquire DRM master (Permission denied).");
+                eprintln!("[bcon] Either run as root (sudo) or use --backend=seatd with logind/seatd.");
+                return Err(anyhow!(
+                    "Cannot acquire DRM master after 5s. \
+                     Run as root or use --backend=seatd with an active logind/seatd session."
+                ));
+            }
             std::thread::sleep(Duration::from_millis(100));
+            if drm::shutdown_requested() {
+                info!("Shutdown signal received while VT inactive, exiting...");
+                break;
+            }
             continue;
         }
         // Cursor blink update
@@ -2806,6 +2943,10 @@ fn main() -> Result<()> {
         // Sleep briefly if no changes (reduce CPU load)
         if !needs_redraw {
             std::thread::sleep(Duration::from_millis(8));
+            if drm::shutdown_requested() {
+                info!("Shutdown signal received, exiting...");
+                break;
+            }
             continue;
         }
         needs_redraw = false;
