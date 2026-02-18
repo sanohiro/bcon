@@ -251,6 +251,19 @@ fc-cache -fv
 symbols = "~/.local/share/fonts/HackNerdFontMono-Regular.ttf"
 ```
 
+**systemd 経由（root サービス）**で起動する場合は、フォントを system-wide に置いて `/etc/bcon/config.toml` を編集してください:
+
+```bash
+sudo mkdir -p /usr/local/share/fonts
+sudo cp ~/.local/share/fonts/HackNerdFont*.ttf /usr/local/share/fonts/
+sudo fc-cache -fv
+```
+
+```toml
+[font]
+symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"
+```
+
 `symbols` フォントは Powerline グリフ (U+E000-U+F8FF) や Nerd Font アイコンのフォールバックとして使用されます。指定しない場合は main フォントがすべてに使用されます。
 
 注: Powerline 矢印グリフ (E0B0-E0B7) はフォントに関係なくプログラムでピクセルパーフェクトに描画されます。

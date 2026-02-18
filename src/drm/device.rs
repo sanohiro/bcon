@@ -17,10 +17,20 @@ use nix::sys::signalfd::{SfdFlags, SignalFd};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// Global flag for SIGTERM received (checked in main loop)
 static SIGTERM_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+/// Fallback flags for VT switch signals (SIGUSR1/SIGUSR2)
+///
+/// Normally we receive VT switch events via signalfd with SIGUSR1/2 blocked.
+/// If the signals ever leak past the mask (e.g., an unexpected thread mask),
+/// a default SIGUSR2 would terminate the process. This handler keeps the
+/// process alive and lets us recover in the main loop.
+static VT_SIG_PENDING: AtomicU8 = AtomicU8::new(0);
+const VT_SIG_ACQUIRE: u8 = 0b01;
+const VT_SIG_RELEASE: u8 = 0b10;
 
 /// Check if SIGTERM was received
 pub fn sigterm_received() -> bool {
@@ -39,6 +49,46 @@ pub fn setup_sigterm_handler() {
 
 extern "C" fn sigterm_handler(_signo: libc::c_int) {
     SIGTERM_RECEIVED.store(true, Ordering::Relaxed);
+}
+
+/// Set up fallback handlers for VT switch signals.
+///
+/// This should not replace signalfd-based handling. It only prevents the
+/// default action (terminate) if SIGUSR1/2 are delivered unexpectedly.
+fn setup_vt_signal_handlers() {
+    unsafe {
+        libc::signal(
+            libc::SIGUSR1,
+            vt_signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGUSR2,
+            vt_signal_handler as *const () as libc::sighandler_t,
+        );
+    }
+}
+
+extern "C" fn vt_signal_handler(signo: libc::c_int) {
+    match signo {
+        libc::SIGUSR1 => {
+            VT_SIG_PENDING.fetch_or(VT_SIG_ACQUIRE, Ordering::Relaxed);
+        }
+        libc::SIGUSR2 => {
+            VT_SIG_PENDING.fetch_or(VT_SIG_RELEASE, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+}
+
+fn take_pending_vt_event() -> Option<VtEvent> {
+    // Prefer Release over Acquire if both are pending.
+    if (VT_SIG_PENDING.fetch_and(!VT_SIG_RELEASE, Ordering::Relaxed) & VT_SIG_RELEASE) != 0 {
+        return Some(VtEvent::Release);
+    }
+    if (VT_SIG_PENDING.fetch_and(!VT_SIG_ACQUIRE, Ordering::Relaxed) & VT_SIG_ACQUIRE) != 0 {
+        return Some(VtEvent::Acquire);
+    }
+    None
 }
 
 /// DRM device wrapper
@@ -422,6 +472,10 @@ impl VtSwitcher {
         let signal_fd = SignalFd::with_flags(&mask, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
             .context("Failed to create signalfd")?;
 
+        // Install a fallback handler to avoid process termination if SIGUSR1/2
+        // are delivered outside signalfd (should be rare, but it's safer).
+        setup_vt_signal_handlers();
+
         // Wait for VT to become active
         // This blocks until our target VT becomes the active console.
         // If started via systemd on an inactive VT, this will wait until
@@ -604,6 +658,9 @@ impl VtSwitcher {
     /// Call this in the event loop to check for VT switch requests.
     /// Returns Some(VtEvent) if a switch event occurred.
     pub fn poll(&mut self) -> Option<VtEvent> {
+        if let Some(event) = take_pending_vt_event() {
+            return Some(event);
+        }
         match self.signal_fd.read_signal() {
             Ok(Some(siginfo)) => {
                 let signo = siginfo.ssi_signo as i32;

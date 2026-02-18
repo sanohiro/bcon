@@ -254,6 +254,19 @@ Configure in `config.toml`:
 symbols = "~/.local/share/fonts/HackNerdFontMono-Regular.ttf"
 ```
 
+If running via **systemd** (root service), install fonts system-wide and edit `/etc/bcon/config.toml`:
+
+```bash
+sudo mkdir -p /usr/local/share/fonts
+sudo cp ~/.local/share/fonts/HackNerdFont*.ttf /usr/local/share/fonts/
+sudo fc-cache -fv
+```
+
+```toml
+[font]
+symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"
+```
+
 The `symbols` font is used as fallback for Powerline glyphs (U+E000-U+F8FF) and Nerd Font icons. If not specified, bcon uses the main font for everything.
 
 Note: Powerline arrow glyphs (E0B0-E0B7) are drawn programmatically for pixel-perfect rendering regardless of font.
