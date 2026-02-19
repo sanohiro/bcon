@@ -25,6 +25,8 @@ extern "C" {
         matrix: *const freetype::ffi::FT_Matrix,
         delta: *const freetype::ffi::FT_Vector,
     );
+
+    fn FT_GlyphSlot_Embolden(slot: freetype::ffi::FT_GlyphSlot);
 }
 
 /// Subpixel phase (0, 1/3, 2/3 pixel offset)
@@ -393,11 +395,7 @@ impl FtFont {
         // This prevents integer overflow and OOM from malformed fonts
         const MAX_GLYPH_DIMENSION: u32 = 4096;
         if width > MAX_GLYPH_DIMENSION || height > MAX_GLYPH_DIMENSION {
-            log::warn!(
-                "FreeType: glyph too large ({}x{}), skipping",
-                width,
-                height
-            );
+            log::warn!("FreeType: glyph too large ({}x{}), skipping", width, height);
             return None;
         }
 
@@ -689,9 +687,291 @@ impl FtFont {
         })
     }
 
+    /// Rasterize with synthetic bold (FT_GlyphSlot_Embolden)
+    pub fn rasterize_bold(&self, ch: char) -> Option<FtGlyph> {
+        self.rasterize_styled(ch, true, false)
+    }
+
+    /// Rasterize bold with subpixel phase
+    pub fn rasterize_bold_with_phase(&mut self, ch: char, phase: SubpixelPhase) -> Option<FtGlyph> {
+        self.rasterize_styled_with_phase(ch, phase, true, false)
+    }
+
+    /// Rasterize with synthetic italic (shear transform, tan(12°) ≈ 0.21)
+    pub fn rasterize_italic(&mut self, ch: char) -> Option<FtGlyph> {
+        self.rasterize_styled(ch, false, true)
+    }
+
+    /// Rasterize italic with subpixel phase
+    pub fn rasterize_italic_with_phase(
+        &mut self,
+        ch: char,
+        phase: SubpixelPhase,
+    ) -> Option<FtGlyph> {
+        self.rasterize_styled_with_phase(ch, phase, false, true)
+    }
+
+    /// Rasterize with synthetic bold + italic
+    pub fn rasterize_bold_italic(&mut self, ch: char) -> Option<FtGlyph> {
+        self.rasterize_styled(ch, true, true)
+    }
+
+    /// Rasterize bold+italic with subpixel phase
+    pub fn rasterize_bold_italic_with_phase(
+        &mut self,
+        ch: char,
+        phase: SubpixelPhase,
+    ) -> Option<FtGlyph> {
+        self.rasterize_styled_with_phase(ch, phase, true, true)
+    }
+
+    /// Internal: rasterize with optional bold/italic transforms
+    /// Note: uses same &self as rasterize()/load_char() — FreeType's C API mutates face
+    /// state through const-appearing pointers (same pattern as freetype-rs's load_char)
+    pub fn rasterize_styled(&self, ch: char, bold: bool, italic: bool) -> Option<FtGlyph> {
+        let glyph_index = self.face.get_char_index(ch as usize);
+        if glyph_index.is_none() || glyph_index == Some(0) {
+            return None;
+        }
+
+        // Get face pointer for FFI calls (const-to-mut cast matches freetype-rs pattern)
+        let face_ptr =
+            self.face.raw() as *const freetype::ffi::FT_FaceRec as *mut freetype::ffi::FT_FaceRec;
+
+        // Apply italic shear matrix if needed (must be set before load_char)
+        if italic {
+            // tan(12°) ≈ 0.2126, use 0x3646 in 16.16 fixed-point
+            let matrix = freetype::ffi::FT_Matrix {
+                xx: 0x10000, // 1.0
+                xy: 0x3646,  // tan(12°) ≈ 0.2126
+                yx: 0,
+                yy: 0x10000, // 1.0
+            };
+            unsafe {
+                FT_Set_Transform(face_ptr, &matrix, std::ptr::null());
+            }
+        }
+
+        let load_flags = LoadFlag::DEFAULT | self.hinting_mode.to_load_flag();
+        if self.face.load_char(ch as usize, load_flags).is_err() {
+            if italic {
+                unsafe {
+                    FT_Set_Transform(face_ptr, std::ptr::null(), std::ptr::null());
+                }
+            }
+            return None;
+        }
+
+        // Apply embolden after loading but before rendering
+        if bold {
+            unsafe {
+                let glyph_slot = (*face_ptr).glyph;
+                FT_GlyphSlot_Embolden(glyph_slot);
+            }
+        }
+
+        let glyph = self.face.glyph();
+        let render_mode = match self.lcd_mode {
+            LcdMode::Grayscale => RenderMode::Normal,
+            LcdMode::LcdHorizontal => RenderMode::Lcd,
+            LcdMode::LcdVertical => RenderMode::LcdV,
+        };
+
+        if glyph.render_glyph(render_mode).is_err() {
+            if italic {
+                unsafe {
+                    FT_Set_Transform(face_ptr, std::ptr::null(), std::ptr::null());
+                }
+            }
+            return None;
+        }
+
+        let result = self.extract_glyph_data(&glyph);
+
+        // Reset transform
+        if italic {
+            unsafe {
+                FT_Set_Transform(face_ptr, std::ptr::null(), std::ptr::null());
+            }
+        }
+
+        result
+    }
+
+    /// Internal: rasterize with phase + optional bold/italic
+    fn rasterize_styled_with_phase(
+        &mut self,
+        ch: char,
+        phase: SubpixelPhase,
+        bold: bool,
+        italic: bool,
+    ) -> Option<FtGlyph> {
+        let glyph_index = self.face.get_char_index(ch as usize);
+        if glyph_index.is_none() || glyph_index == Some(0) {
+            return None;
+        }
+
+        // Build transform combining phase offset and optional italic shear
+        let delta = freetype::ffi::FT_Vector {
+            x: phase.fixed_offset(),
+            y: 0,
+        };
+
+        if italic {
+            let matrix = freetype::ffi::FT_Matrix {
+                xx: 0x10000,
+                xy: 0x3646, // tan(12°)
+                yx: 0,
+                yy: 0x10000,
+            };
+            unsafe {
+                FT_Set_Transform(self.face.raw_mut() as *mut _, &matrix, &delta);
+            }
+        } else {
+            unsafe {
+                FT_Set_Transform(self.face.raw_mut() as *mut _, std::ptr::null(), &delta);
+            }
+        }
+
+        let load_flags = LoadFlag::DEFAULT | self.hinting_mode.to_load_flag();
+        if self.face.load_char(ch as usize, load_flags).is_err() {
+            unsafe {
+                FT_Set_Transform(
+                    self.face.raw_mut() as *mut _,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                );
+            }
+            return None;
+        }
+
+        if bold {
+            unsafe {
+                FT_GlyphSlot_Embolden((*self.face.raw()).glyph);
+            }
+        }
+
+        let glyph = self.face.glyph();
+        let render_mode = match self.lcd_mode {
+            LcdMode::Grayscale => RenderMode::Normal,
+            LcdMode::LcdHorizontal => RenderMode::Lcd,
+            LcdMode::LcdVertical => RenderMode::LcdV,
+        };
+
+        if glyph.render_glyph(render_mode).is_err() {
+            unsafe {
+                FT_Set_Transform(
+                    self.face.raw_mut() as *mut _,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                );
+            }
+            return None;
+        }
+
+        let result = self.extract_glyph_data(&glyph);
+
+        // Reset transform
+        unsafe {
+            FT_Set_Transform(
+                self.face.raw_mut() as *mut _,
+                std::ptr::null(),
+                std::ptr::null(),
+            );
+        }
+
+        result
+    }
+
+    /// Extract bitmap data from a rendered glyph slot
+    fn extract_glyph_data(&self, glyph: &freetype::GlyphSlot) -> Option<FtGlyph> {
+        let bitmap = glyph.bitmap();
+        let metrics = glyph.metrics();
+
+        let raw_width = bitmap.width() as u32;
+        let raw_height = bitmap.rows() as u32;
+
+        let width = match self.lcd_mode {
+            LcdMode::Grayscale => raw_width,
+            LcdMode::LcdHorizontal => raw_width / 3,
+            LcdMode::LcdVertical => raw_width,
+        };
+        let height = match self.lcd_mode {
+            LcdMode::Grayscale => raw_height,
+            LcdMode::LcdHorizontal => raw_height,
+            LcdMode::LcdVertical => raw_height / 3,
+        };
+
+        if width == 0 || height == 0 {
+            return Some(FtGlyph {
+                bitmap: vec![],
+                width: 0,
+                height: 0,
+                bearing_x: (metrics.horiBearingX >> 6) as i32,
+                bearing_y: (metrics.horiBearingY >> 6) as i32,
+                advance: (metrics.horiAdvance >> 6) as f32,
+            });
+        }
+
+        const MAX_GLYPH_DIMENSION: u32 = 4096;
+        if width > MAX_GLYPH_DIMENSION || height > MAX_GLYPH_DIMENSION {
+            return None;
+        }
+
+        let buffer = bitmap.buffer();
+        let pitch = bitmap.pitch().unsigned_abs() as usize;
+
+        let data = match self.lcd_mode {
+            LcdMode::Grayscale => {
+                let mut data = Vec::with_capacity((width * height) as usize);
+                for y in 0..height as usize {
+                    for x in 0..width as usize {
+                        data.push(buffer[y * pitch + x]);
+                    }
+                }
+                data
+            }
+            LcdMode::LcdHorizontal => {
+                let mut data = Vec::with_capacity((width * height * 3) as usize);
+                for y in 0..height as usize {
+                    for x in 0..width as usize {
+                        let idx = y * pitch + x * 3;
+                        data.push(buffer[idx]);
+                        data.push(buffer[idx + 1]);
+                        data.push(buffer[idx + 2]);
+                    }
+                }
+                data
+            }
+            LcdMode::LcdVertical => {
+                let mut data = Vec::with_capacity((width * height * 3) as usize);
+                for y in 0..height as usize {
+                    for x in 0..width as usize {
+                        let y3 = y * 3;
+                        data.push(buffer[y3 * pitch + x]);
+                        data.push(buffer[(y3 + 1) * pitch + x]);
+                        data.push(buffer[(y3 + 2) * pitch + x]);
+                    }
+                }
+                data
+            }
+        };
+
+        Some(FtGlyph {
+            bitmap: data,
+            width,
+            height,
+            bearing_x: (metrics.horiBearingX >> 6) as i32,
+            bearing_y: (metrics.horiBearingY >> 6) as i32,
+            advance: (metrics.horiAdvance >> 6) as f32,
+        })
+    }
+
     /// Get line metrics
     pub fn line_metrics(&self) -> (f32, f32, f32) {
-        let size_metrics = self.face.size_metrics()
+        let size_metrics = self
+            .face
+            .size_metrics()
             .expect("FreeType size not set - call set_size() first");
         let ascender = (size_metrics.ascender >> 6) as f32;
         let descender = (size_metrics.descender >> 6) as f32;

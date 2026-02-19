@@ -30,13 +30,26 @@ impl FontFinder {
     }
 
     /// Search by font name
+    /// Verifies that the returned font actually matches the requested family name
+    /// (fontconfig always returns the "closest" match, even if completely unrelated)
     pub fn find_font(&self, family: &str) -> Option<FontMatch> {
         // Use fontconfig's find method
         if let Some(font) = self.fc.find(family, None) {
-            return Some(FontMatch {
-                path: font.path,
-                family: font.name,
-            });
+            // Verify the returned font name matches the request
+            // fontconfig returns "best match" which may be completely unrelated
+            let req = family.to_ascii_lowercase();
+            let got = font.name.to_ascii_lowercase();
+            if got.contains(&req) || req.contains(&got) {
+                return Some(FontMatch {
+                    path: font.path,
+                    family: font.name,
+                });
+            }
+            warn!(
+                "fontconfig: rejected false match for \"{}\": got \"{}\"",
+                family, font.name
+            );
+            return None;
         }
         None
     }

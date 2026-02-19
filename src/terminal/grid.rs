@@ -75,26 +75,66 @@ pub struct Hyperlink {
 /// Maximum scrollback lines
 const MAX_SCROLLBACK: usize = 10000;
 
-/// Check if codepoint should be forced to width=2 (emoji)
+/// Check if codepoint should be treated as emoji (width=2 + color emoji rendering)
 ///
-/// This is conservative - only forcing width=2 for:
-/// 1. Main emoji blocks (SMP emoji that unicode-width returns 1 for)
-/// 2. Regional Indicator Symbols (flags)
-///
-/// Characters in BMP (U+0000-U+FFFF) use unicode-width's result directly.
-/// This matches Ghostty's behavior and avoids width mismatches with applications.
+/// Only includes codepoints with Emoji_Presentation=Yes from Unicode spec.
+/// Text-default emoji (Emoji_Presentation=No) like ♠♥☀✂ are NOT included —
+/// they should be width=1 unless followed by VS16 (U+FE0F).
+/// This matches Ghostty/kitty behavior and avoids width mismatches with applications.
 fn is_emoji_codepoint(cp: u32) -> bool {
     matches!(cp,
-        // === SMP Emoji blocks (U+1F000+) ===
-        // These are actual emoji that need width=2 for proper rendering
+        // === BMP: Emoji_Presentation=Yes only ===
+        // Individual codepoints/small ranges that default to color emoji rendering
+        0x231A..=0x231B |    // ⌚⌛ Watch, Hourglass done
+        0x23E9..=0x23EC |    // ⏩⏪⏫⏬ Fast-forward/rewind buttons
+        0x23F0 |             // ⏰ Alarm clock
+        0x23F3 |             // ⏳ Hourglass not done
+        0x25FD..=0x25FE |    // ◽◾ Medium-small squares
+        0x2614..=0x2615 |    // ☔☕ Umbrella with rain, Hot beverage
+        0x2648..=0x2653 |    // ♈..♓ Zodiac signs
+        0x267F |             // ♿ Wheelchair symbol
+        0x2693 |             // ⚓ Anchor
+        0x26A1 |             // ⚡ High voltage
+        0x26AA..=0x26AB |    // ⚪⚫ White/Black circles
+        0x26BD..=0x26BE |    // ⚽⚾ Soccer/Baseball
+        0x26C4..=0x26C5 |    // ⛄⛅ Snowman, Sun behind cloud
+        0x26CE |             // ⛎ Ophiuchus
+        0x26D4 |             // ⛔ No entry
+        0x26EA |             // ⛪ Church
+        0x26F2..=0x26F3 |    // ⛲⛳ Fountain, Flag in hole
+        0x26F5 |             // ⛵ Sailboat
+        0x26FA |             // ⛺ Tent
+        0x26FD |             // ⛽ Fuel pump
+        0x2705 |             // ✅ Check mark button
+        0x270A..=0x270B |    // ✊✋ Raised fist/hand
+        0x2728 |             // ✨ Sparkles
+        0x274C |             // ❌ Cross mark
+        0x274E |             // ❎ Cross mark button
+        0x2753..=0x2755 |    // ❓❔❕ Question/exclamation marks
+        0x2757 |             // ❗ Red exclamation
+        0x2795..=0x2797 |    // ➕➖➗ Plus, Minus, Divide
+        0x27B0 |             // ➰ Curly loop
+        0x27BF |             // ➿ Double curly loop
+        0x2B1B..=0x2B1C |    // ⬛⬜ Black/White large squares
+        0x2B50 |             // ⭐ Star
+        0x2B55 |             // ⭕ Hollow red circle
+        // === SMP: Emoji_Presentation=Yes ===
+        0x1F004 |            // 🀄 Mahjong Red Dragon
+        0x1F0CF |            // 🃏 Playing Card Black Joker
+        0x1F18E |            // 🆎 AB button
+        0x1F191..=0x1F19A |  // 🆑..🆚 Squared Latin symbols
+        0x1F1E0..=0x1F1FF |  // 🇦..🇿 Regional Indicator Symbols (flags)
+        0x1F200..=0x1F202 |  // 🈀🈁🈂 Squared Katakana
+        0x1F210..=0x1F23B |  // 🈐..🈻 Squared CJK Ideographs
+        0x1F240..=0x1F248 |  // 🉀..🉈 Tortoise shell bracket CJK
+        0x1F250..=0x1F251 |  // 🉐🉑 Circled Ideographs
+        0x1F260..=0x1F265 |  // 🉠..🉥 Rounded symbols
         0x1F300..=0x1F5FF |  // Miscellaneous Symbols and Pictographs
         0x1F600..=0x1F64F |  // Emoticons (😀😁...)
         0x1F680..=0x1F6FF |  // Transport and Map Symbols
+        0x1F7E0..=0x1F7FF |  // Geometric Shapes Extended (🟠🟡🟢🟣🟤)
         0x1F900..=0x1F9FF |  // Supplemental Symbols and Pictographs
-        0x1FA00..=0x1FAFF |  // Symbols and Pictographs Extended
-        0x1F1E0..=0x1F1FF    // Regional Indicator Symbols (flags)
-        // Note: BMP characters (U+2xxx etc.) use unicode-width directly
-        // This avoids breaking applications like carbonyl that expect width=1
+        0x1FA00..=0x1FAFF    // Symbols and Pictographs Extended
     )
 }
 

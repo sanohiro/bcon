@@ -520,7 +520,11 @@ fn draw_powerline_semicircle(
 
         for px in 0..=rx_i {
             let px_rel = px as f32 + 0.5;
-            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
+            let px_f = if right {
+                px_rel
+            } else {
+                (max_w_px + 0.5) - px_rel
+            };
 
             // Normalized ellipse coordinates
             let nx = px_f / rx;
@@ -529,7 +533,7 @@ fn draw_powerline_semicircle(
 
             // SDF: negative inside ellipse, positive outside
             let sdf = ellipse_sdf(nx, ny, rx, ry, len);
-            let d = -sdf;  // Flip: positive inside for aa_alpha_from_distance
+            let d = -sdf; // Flip: positive inside for aa_alpha_from_distance
 
             let alpha = aa_alpha_from_distance(d, AA_WIDTH_SOLID);
             if alpha > ALPHA_THRESHOLD {
@@ -566,7 +570,11 @@ fn draw_powerline_semicircle_outline(
 
         for px in 0..=rx_i {
             let px_rel = px as f32 + 0.5;
-            let px_f = if right { px_rel } else { (max_w_px + 0.5) - px_rel };
+            let px_f = if right {
+                px_rel
+            } else {
+                (max_w_px + 0.5) - px_rel
+            };
 
             // Normalized ellipse coordinates
             let nx = px_f / rx;
@@ -574,7 +582,7 @@ fn draw_powerline_semicircle_outline(
             let len = (nx * nx + ny * ny).sqrt();
 
             let sdf = ellipse_sdf(nx, ny, rx, ry, len);
-            let d = sdf.abs();  // Distance to ellipse edge
+            let d = sdf.abs(); // Distance to ellipse edge
 
             // Skip pixels far from the outline
             if d > OUTLINE_STROKE_HALF + AA_WIDTH_OUTLINE {
@@ -1086,7 +1094,9 @@ fn main() -> Result<()> {
     let mut use_seatd = match backend_mode {
         BackendMode::Seatd => {
             if !seatd_available {
-                return Err(anyhow!("seatd backend requested but not available in this build"));
+                return Err(anyhow!(
+                    "seatd backend requested but not available in this build"
+                ));
             }
             true
         }
@@ -1196,9 +1206,8 @@ fn main() -> Result<()> {
     // Config file change watcher (Linux only)
     // Watch the actual loaded config path, not just the default path
     #[cfg(target_os = "linux")]
-    let config_watcher = config::Config::config_path().and_then(|path| {
-        config::ConfigWatcher::new(&path).ok()
-    });
+    let config_watcher =
+        config::Config::config_path().and_then(|path| config::ConfigWatcher::new(&path).ok());
     #[cfg(target_os = "linux")]
     if config_watcher.is_some() {
         info!("Config hot-reload enabled");
@@ -1339,7 +1348,11 @@ Make sure seatd/logind is running and you're on an active VT."
             Some(vt) => {
                 let active = drm::is_vt_active(vt);
                 if !active {
-                    info!("VT{} is not active (current: {:?})", vt, drm::get_active_vt());
+                    info!(
+                        "VT{} is not active (current: {:?})",
+                        vt,
+                        drm::get_active_vt()
+                    );
                 }
                 active
             }
@@ -1496,7 +1509,10 @@ Make sure seatd/logind is running and you're on an active VT."
     };
 
     // Apply display scale factor to font size
-    let scale_factor = cfg.appearance.scale.clamp(MIN_DISPLAY_SCALE, MAX_DISPLAY_SCALE);
+    let scale_factor = cfg
+        .appearance
+        .scale
+        .clamp(MIN_DISPLAY_SCALE, MAX_DISPLAY_SCALE);
     let font_size = (cfg.font.size * scale_factor) as u32;
     if (scale_factor - 1.0).abs() > 0.01 {
         info!(
@@ -1650,74 +1666,10 @@ Make sure seatd/logind is running and you're on an active VT."
     // Base font size (for reset)
     let base_font_size = font_size;
 
-    // Japanese IME support: ensure D-Bus session is available
-    info!("D-Bus/IME diagnostics: ime_disabled_apps={:?}", cfg.terminal.ime_disabled_apps);
-    if let Ok(addr) = std::env::var("DBUS_SESSION_BUS_ADDRESS") {
-        info!("D-Bus env: DBUS_SESSION_BUS_ADDRESS={}", addr);
-    } else {
-        info!("D-Bus env: DBUS_SESSION_BUS_ADDRESS not set");
+    // IME: ensure D-Bus session and fcitx5 are available (before PTY fork so child inherits env)
+    if cfg.terminal.ime {
+        input::ime::ensure_ime_environment();
     }
-    // Check if fcitx5 is available in PATH
-    let fcitx5_available = std::process::Command::new("which")
-        .arg("fcitx5")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    info!("D-Bus/IME: fcitx5 in PATH: {}", fcitx5_available);
-    // Check if fcitx5 is currently running
-    let fcitx5_running = std::process::Command::new("pgrep")
-        .arg("fcitx5")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    info!("D-Bus/IME: fcitx5 running: {}", fcitx5_running);
-
-    let extra_env: Vec<(String, String)> = if !cfg.terminal.ime_disabled_apps.is_empty() {
-        // First check if D-Bus session is already available (e.g., from systemd user session)
-        if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok() {
-            info!("D-Bus session already available from environment");
-            Vec::new()
-        } else {
-            // Start a D-Bus session daemon (console-friendly, unlike dbus-launch which is X11)
-            // Use spawn + wait_with_output with timeout to avoid indefinite blocking.
-            match std::process::Command::new("dbus-daemon")
-                .args(["--session", "--fork", "--print-address=1"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
-                Ok(child) => {
-                    match child.wait_with_output() {
-                        Ok(output) => {
-                            let addr = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                            if !addr.is_empty() {
-                                info!("Started D-Bus session: {}", addr);
-                                vec![("DBUS_SESSION_BUS_ADDRESS".to_string(), addr)]
-                            } else {
-                                info!("dbus-daemon started but returned empty address");
-                                Vec::new()
-                            }
-                        }
-                        Err(e) => {
-                            info!("dbus-daemon wait failed: {}", e);
-                            Vec::new()
-                        }
-                    }
-                }
-                Err(e) => {
-                    info!("D-Bus session daemon not available (IME will not work): {}", e);
-                    Vec::new()
-                }
-            }
-        }
-    } else {
-        Vec::new()
-    };
-
-    let extra_env_refs: Vec<(&str, &str)> = extra_env
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
 
     info!("PTY fork...");
     let mut term = terminal::Terminal::with_scrollback_env(
@@ -1725,7 +1677,7 @@ Make sure seatd/logind is running and you're on an active VT."
         grid_rows,
         cfg.terminal.scrollback_lines,
         &cfg.terminal.term_env,
-        &extra_env_refs,
+        &[],
     )
     .context("Failed to initialize terminal")?;
 
@@ -1792,11 +1744,8 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
     } else {
-        match input::EvdevKeyboard::new(
-            display_config.width,
-            display_config.height,
-            &cfg.keyboard,
-        ) {
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard)
+        {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");
                 Some(kb)
@@ -1830,20 +1779,26 @@ Make sure seatd/logind is running and you're on an active VT."
     info!("Phase 4 initialization complete");
     info!("Phase 4 complete");
 
-    // Phase 5d: fcitx5 IME initialization (optional)
+    // Phase 5d: fcitx5 IME initialization (optional, requires terminal.ime = true)
     info!("Phase 5: IME (fcitx5)...");
-    let ime_client = match input::ime::ImeClient::try_new() {
-        Ok(c) => {
-            info!("fcitx5 IME connected");
-            Some(c)
+    let ime_client = if cfg.terminal.ime {
+        input::ime::ensure_ime_environment();
+        match input::ime::ImeClient::try_new() {
+            Ok(c) => {
+                info!("fcitx5 IME connected");
+                Some(c)
+            }
+            Err(e) => {
+                info!(
+                    "fcitx5 IME unavailable (continuing with direct input): {}",
+                    e
+                );
+                None
+            }
         }
-        Err(e) => {
-            info!(
-                "fcitx5 IME unavailable (continuing with direct input): {}",
-                e
-            );
-            None
-        }
+    } else {
+        info!("IME disabled (terminal.ime = false)");
+        None
     };
     let mut preedit = input::ime::PreeditState::new();
     let mut candidate_state: Option<input::ime::CandidateState> = None;
@@ -2019,8 +1974,7 @@ Make sure seatd/logind is running and you're on an active VT."
                             }
                             if let Ok(bo) = gbm_surface.lock_front_buffer() {
                                 if let Ok(fb) = drm::DrmFramebuffer::from_bo(&drm_device, &bo) {
-                                    if let Err(e) =
-                                        drm::set_crtc(&drm_device, &display_config, &fb)
+                                    if let Err(e) = drm::set_crtc(&drm_device, &display_config, &fb)
                                     {
                                         log::warn!("Failed to set CRTC: {}", e);
                                     } else {
@@ -2111,8 +2065,7 @@ Make sure seatd/logind is running and you're on an active VT."
                             }
                             if let Ok(bo) = gbm_surface.lock_front_buffer() {
                                 if let Ok(fb) = drm::DrmFramebuffer::from_bo(&drm_device, &bo) {
-                                    if let Err(e) =
-                                        drm::set_crtc(&drm_device, &display_config, &fb)
+                                    if let Err(e) = drm::set_crtc(&drm_device, &display_config, &fb)
                                     {
                                         log::warn!("Failed to set CRTC: {}", e);
                                     } else {
@@ -2151,7 +2104,9 @@ Make sure seatd/logind is running and you're on an active VT."
             // This prevents indefinite freeze when running without proper privileges.
             if !drm_master_ever_held && drm_master_wait_start.elapsed() > Duration::from_secs(5) {
                 eprintln!("[bcon] ERROR: Cannot acquire DRM master (Permission denied).");
-                eprintln!("[bcon] Either run as root (sudo) or use --backend=seatd with logind/seatd.");
+                eprintln!(
+                    "[bcon] Either run as root (sudo) or use --backend=seatd with logind/seatd."
+                );
                 return Err(anyhow!(
                     "Cannot acquire DRM master after 5s. \
                      Run as root or use --backend=seatd with an active logind/seatd session."
@@ -3420,24 +3375,18 @@ Make sure seatd/logind is running and you're on an active VT."
 
                 // Overline rendering (CSI 53 m)
                 if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
-                    let fg = if is_inverse {
+                    let mut fg = if is_inverse {
                         effective_bg(&cell.bg)
                     } else {
                         effective_fg(&cell.fg)
                     };
+                    if cell.attrs.contains(terminal::grid::CellAttrs::DIM) {
+                        fg = [fg[0] * 0.5, fg[1] * 0.5, fg[2] * 0.5, fg[3]];
+                    }
                     text_renderer.push_rect(x, y, cell_pixel_w, 1.0, fg, &glyph_atlas);
                 }
 
-                // Strikethrough rendering (CSI 9 m)
-                if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
-                    let fg = if is_inverse {
-                        effective_bg(&cell.bg)
-                    } else {
-                        effective_fg(&cell.fg)
-                    };
-                    let strike_y = y + cell_h / 2.0;
-                    text_renderer.push_rect(x, strike_y, cell_pixel_w, 1.0, fg, &glyph_atlas);
-                }
+                // Strikethrough: deferred to after glyph rendering (drawn on top of text)
 
                 let grapheme = &cell.grapheme;
                 let first_ch = grapheme.chars().next().unwrap_or(' ');
@@ -3464,11 +3413,16 @@ Make sure seatd/logind is running and you're on an active VT."
                 }
                 if !grapheme.is_empty() && grapheme != " " {
                     // Handle INVERSE attribute (SGR 7): swap fg and bg (is_inverse defined above)
-                    let fg = if is_inverse {
+                    let mut fg = if is_inverse {
                         effective_bg(&cell.bg)
                     } else {
                         effective_fg(&cell.fg)
                     };
+
+                    // DIM (SGR 2): reduce foreground brightness by 50%
+                    if cell.attrs.contains(terminal::grid::CellAttrs::DIM) {
+                        fg = [fg[0] * 0.5, fg[1] * 0.5, fg[2] * 0.5, fg[3]];
+                    }
 
                     // Calculate final background color (needed for LCD subpixel compositing)
                     // Composite in order: cell BG -> selection highlight -> search highlight
@@ -4088,9 +4042,20 @@ Make sure seatd/logind is running and you're on an active VT."
                         }
                     }
                     if !emoji_drawn {
+                        // Determine font style from cell attributes
+                        let font_style = match (
+                            cell.attrs.contains(terminal::grid::CellAttrs::BOLD),
+                            cell.attrs.contains(terminal::grid::CellAttrs::ITALIC),
+                        ) {
+                            (true, true) => font::lcd_atlas::FontStyle::BoldItalic,
+                            (true, false) => font::lcd_atlas::FontStyle::Bold,
+                            (false, true) => font::lcd_atlas::FontStyle::Italic,
+                            (false, false) => font::lcd_atlas::FontStyle::Regular,
+                        };
+
                         // Ensure all glyphs in grapheme are in atlas
                         for ch in grapheme.chars() {
-                            glyph_atlas.ensure_glyph(ch);
+                            glyph_atlas.ensure_glyph_styled(ch, font_style);
                         }
                         let baseline_y = (y + ascent).round();
 
@@ -4126,17 +4091,56 @@ Make sure seatd/logind is running and you're on an active VT."
                         lcd_mix = lcd_mix.max(bright * 0.75);
                         lcd_mix = lcd_mix.clamp(0.0, 0.85);
 
-                        // Render full grapheme (handles combining characters correctly)
-                        text_renderer.push_text_with_bg_lcd(
-                            grapheme,
-                            x,
-                            baseline_y,
-                            fg,
-                            bg,
-                            lcd_mix,
-                            &glyph_atlas,
-                        );
+                        // Render full grapheme with style (bold/italic/regular)
+                        if matches!(font_style, font::lcd_atlas::FontStyle::Regular) {
+                            text_renderer.push_text_with_bg_lcd(
+                                grapheme,
+                                x,
+                                baseline_y,
+                                fg,
+                                bg,
+                                lcd_mix,
+                                &glyph_atlas,
+                            );
+                        } else {
+                            text_renderer.push_text_with_bg_lcd_styled(
+                                grapheme,
+                                x,
+                                baseline_y,
+                                fg,
+                                bg,
+                                lcd_mix,
+                                font_style,
+                                &glyph_atlas,
+                            );
+                        }
                     }
+                }
+
+                // Strikethrough rendering (CSI 9 m) — drawn after glyphs so line is visible on top
+                if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
+                    let mut strike_fg = if is_inverse {
+                        effective_bg(&cell.bg)
+                    } else {
+                        effective_fg(&cell.fg)
+                    };
+                    if cell.attrs.contains(terminal::grid::CellAttrs::DIM) {
+                        strike_fg = [
+                            strike_fg[0] * 0.5,
+                            strike_fg[1] * 0.5,
+                            strike_fg[2] * 0.5,
+                            strike_fg[3],
+                        ];
+                    }
+                    let strike_y = y + cell_h / 2.0;
+                    text_renderer.push_rect(
+                        x,
+                        strike_y,
+                        cell_pixel_w,
+                        1.0,
+                        strike_fg,
+                        &glyph_atlas,
+                    );
                 }
             }
         }
@@ -4203,10 +4207,12 @@ Make sure seatd/logind is running and you're on an active VT."
             offset_col = 0;
             for seg in &preedit.segments {
                 let is_highlight = (seg.format & 16) != 0;
-                let fg = if is_highlight {
-                    [0.0, 0.0, 0.0, 1.0] // Black (on highlight background)
+                let (fg, pe_bg, lcd_off) = if is_highlight {
+                    // Black text on gray highlight — disable LCD to avoid subpixel artifacts
+                    ([0.0, 0.0, 0.0, 1.0], [0.7, 0.7, 0.7], 1.0)
                 } else {
-                    [1.0, 1.0, 1.0, 1.0] // White (on terminal background)
+                    // White text on terminal background — LCD enabled
+                    ([1.0, 1.0, 1.0, 1.0], [bg_color.0, bg_color.1, bg_color.2], 0.0)
                 };
 
                 let seg_start = offset_col;
@@ -4217,7 +4223,7 @@ Make sure seatd/logind is running and you're on an active VT."
 
                     // Skip zero-width characters for positioning but still render them
                     glyph_atlas.ensure_glyph(ch);
-                    text_renderer.push_char(ch, char_x, baseline_y, fg, &glyph_atlas);
+                    text_renderer.push_char_with_bg(ch, char_x, baseline_y, fg, pe_bg, lcd_off, &glyph_atlas);
                     offset_col += ch_w;
                 }
 
@@ -4263,7 +4269,10 @@ Make sure seatd/logind is running and you're on an active VT."
         }
         image_renderer.begin();
         if !term.grid.image_placements.is_empty() {
-            trace!("Image render: {} placements", term.grid.image_placements.len());
+            trace!(
+                "Image render: {} placements",
+                term.grid.image_placements.len()
+            );
         }
         for placement in &term.grid.image_placements {
             if let Some(image) = term.images.get(placement.id) {
@@ -4272,15 +4281,17 @@ Make sure seatd/logind is running and you're on an active VT."
                     image_renderer.upload_image(gl, image);
                 }
                 // Drawing coordinates (accounting for scroll offset)
-                let img_row = placement.row as isize - term.scroll_offset as isize;
-                if img_row + placement.height_cells as isize <= 0 {
+                // When scrolling, grid rows shift down by scrollback_rows_shown
+                let scrollback_rows_shown = term.scroll_offset.min(grid_rows) as isize;
+                let display_row = placement.row as isize + scrollback_rows_shown;
+                if display_row + (placement.height_cells as isize) <= 0 {
                     continue; // Off-screen (above)
                 }
-                if img_row >= grid_rows as isize {
+                if display_row >= grid_rows as isize {
                     continue; // Off-screen (below)
                 }
                 let x = margin_x + placement.col as f32 * cell_w;
-                let y = margin_y + img_row as f32 * cell_h;
+                let y = margin_y + display_row as f32 * cell_h;
                 let draw_w = placement.width_cells as f32 * cell_w;
                 let draw_h = placement.height_cells as f32 * cell_h;
                 image_renderer.draw(placement.id, x, y, draw_w, draw_h);

@@ -9,6 +9,95 @@ use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use std::sync::mpsc;
 
+/// Ensure D-Bus session bus and fcitx5 are available.
+///
+/// On headless systems (e.g. Ubuntu Server without GUI), there is no D-Bus
+/// session bus running by default. This function detects the situation and
+/// automatically starts `dbus-daemon` and `fcitx5` so that IME works
+/// out of the box.
+///
+/// Uses a well-known socket path (`/run/user/$UID/bcon-dbus` or `/tmp/bcon-dbus-$UID`)
+/// so that dbus-daemon survives bcon restarts and can be reused.
+///
+/// Must be called from the main thread before any IME threads are spawned.
+pub fn ensure_ime_environment() {
+    // 1. Ensure D-Bus session bus is available
+    if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok() {
+        // Already set (e.g. desktop session) — use as-is
+        return;
+    }
+
+    // Determine a stable socket path for bcon's D-Bus session
+    let uid = unsafe { libc::getuid() };
+    let socket_path = {
+        let xdg_dir = format!("/run/user/{}", uid);
+        if std::path::Path::new(&xdg_dir).is_dir() {
+            format!("{}/bcon-dbus", xdg_dir)
+        } else {
+            format!("/tmp/bcon-dbus-{}", uid)
+        }
+    };
+    let addr = format!("unix:path={}", socket_path);
+
+    // Check if our previously-started dbus-daemon is still alive
+    if std::path::Path::new(&socket_path).exists() {
+        // Try to connect to the existing bus
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &addr);
+        info!("IME: reusing existing D-Bus session: {}", addr);
+    } else {
+        // Start a new dbus-daemon with a well-known address
+        info!("IME: DBUS_SESSION_BUS_ADDRESS not set, starting dbus-daemon...");
+        match std::process::Command::new("dbus-daemon")
+            .args([
+                "--session",
+                "--fork",
+                "--print-address=1",
+                &format!("--address={}", addr),
+            ])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &addr);
+                info!("IME: started D-Bus session daemon: {}", addr);
+            }
+            Ok(output) => {
+                warn!(
+                    "IME: dbus-daemon failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                return;
+            }
+            Err(e) => {
+                info!("IME: dbus-daemon not available: {}", e);
+                return;
+            }
+        }
+    }
+
+    // 2. Ensure fcitx5 is running
+    let fcitx5_running = std::process::Command::new("pgrep")
+        .args(["-x", "fcitx5"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !fcitx5_running {
+        info!("IME: fcitx5 not running, starting...");
+        match std::process::Command::new("fcitx5")
+            .arg("-d")
+            .spawn()
+        {
+            Ok(_) => {
+                info!("IME: started fcitx5 daemon, waiting for initialization...");
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            Err(e) => {
+                info!("IME: fcitx5 not available: {}", e);
+            }
+        }
+    }
+}
+
 // === Type definitions ===
 
 /// Events from IME to main thread

@@ -168,6 +168,9 @@ pub struct TerminalConfig {
     pub bell: String,
     /// TERM environment variable
     pub term_env: String,
+    /// Enable fcitx5 IME (Japanese input)
+    /// When true, bcon will auto-start D-Bus session and fcitx5 if needed
+    pub ime: bool,
     /// List of apps that auto-disable IME
     /// When foreground process name is in this list, IME is automatically disabled
     pub ime_disabled_apps: Vec<String>,
@@ -486,6 +489,7 @@ impl Default for TerminalConfig {
             scrollback_lines: 10000,
             bell: "visual".to_string(),
             term_env: "xterm-256color".to_string(),
+            ime: false,
             // Empty by default - uncomment in config for CJK/IME users
             ime_disabled_apps: vec![],
         }
@@ -734,6 +738,7 @@ impl Config {
         let terminal_section = if include_japanese {
             r#"
 [terminal]
+ime = true
 ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "man", "htop", "top"]
 "#
             .to_string()

@@ -40,6 +40,15 @@ pub struct GlyphInfo {
     pub advance: f32,
 }
 
+/// Font style variant
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FontStyle {
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
 /// LCD subpixel rendering glyph atlas
 #[allow(dead_code)]
 pub struct LcdGlyphAtlas {
@@ -49,6 +58,15 @@ pub struct LcdGlyphAtlas {
     /// Glyphs with subpixel phase (1/3px precision)
     phased_glyphs: HashMap<PhasedGlyphKey, GlyphInfo>,
     glyph_id_map: HashMap<GlyphKey, GlyphInfo>,
+    /// Bold glyphs (synthetic embolden)
+    bold_glyphs: HashMap<char, GlyphInfo>,
+    bold_phased_glyphs: HashMap<PhasedGlyphKey, GlyphInfo>,
+    /// Italic glyphs (synthetic shear)
+    italic_glyphs: HashMap<char, GlyphInfo>,
+    italic_phased_glyphs: HashMap<PhasedGlyphKey, GlyphInfo>,
+    /// Bold+Italic glyphs
+    bold_italic_glyphs: HashMap<char, GlyphInfo>,
+    bold_italic_phased_glyphs: HashMap<PhasedGlyphKey, GlyphInfo>,
     pub atlas_width: u32,
     pub atlas_height: u32,
     pub cell_width: f32,
@@ -317,6 +335,12 @@ impl LcdGlyphAtlas {
             glyphs,
             phased_glyphs: HashMap::new(),
             glyph_id_map: HashMap::new(),
+            bold_glyphs: HashMap::new(),
+            bold_phased_glyphs: HashMap::new(),
+            italic_glyphs: HashMap::new(),
+            italic_phased_glyphs: HashMap::new(),
+            bold_italic_glyphs: HashMap::new(),
+            bold_italic_phased_glyphs: HashMap::new(),
             atlas_width,
             atlas_height,
             cell_width,
@@ -659,6 +683,196 @@ impl LcdGlyphAtlas {
         self.subpixel_positioning
     }
 
+    /// Ensure styled glyph (bold/italic/bold_italic) is cached
+    /// Falls back to regular glyph if styled rasterization fails
+    pub fn ensure_glyph_styled(&mut self, ch: char, style: FontStyle) {
+        if matches!(style, FontStyle::Regular) {
+            self.ensure_glyph(ch);
+            return;
+        }
+        if ch <= ' ' {
+            return;
+        }
+
+        // Non-phased glyph: check if already cached
+        let has_base = self.styled_maps(style).0.contains_key(&ch);
+        if !has_base {
+            let ft_glyph = self.rasterize_styled_from_chain(ch, style);
+            if let Some(g) = ft_glyph {
+                if let Some(info) = self.pack_glyph(&g, &format!("U+{:04X}/{:?}", ch as u32, style))
+                {
+                    self.styled_maps_mut(style).0.insert(ch, info);
+                }
+            } else {
+                // Fallback: ensure regular glyph and copy
+                self.ensure_glyph(ch);
+                if let Some(info) = self.glyphs.get(&ch).cloned() {
+                    self.styled_maps_mut(style).0.insert(ch, info);
+                }
+            }
+        }
+
+        // Phased glyphs
+        if self.subpixel_positioning {
+            for phase in [
+                SubpixelPhase::Phase0,
+                SubpixelPhase::Phase1,
+                SubpixelPhase::Phase2,
+            ] {
+                let key = PhasedGlyphKey {
+                    ch,
+                    phase: phase as u8,
+                };
+                let has_phased = self.styled_maps(style).1.contains_key(&key);
+                if has_phased {
+                    continue;
+                }
+                let ft_glyph = self.rasterize_styled_phased_from_chain(ch, phase, style);
+                if let Some(g) = ft_glyph {
+                    if let Some(info) = self.pack_glyph(
+                        &g,
+                        &format!("U+{:04X}/{:?}@{}", ch as u32, style, phase as u8),
+                    ) {
+                        self.styled_maps_mut(style).1.insert(key, info);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get styled glyph (with subpixel phase)
+    /// Falls back to regular glyph if styled variant not available
+    pub fn get_glyph_styled(&self, ch: char, x_frac: f32, style: FontStyle) -> Option<&GlyphInfo> {
+        if matches!(style, FontStyle::Regular) {
+            return self.get_glyph_phased(ch, x_frac);
+        }
+
+        let (glyphs, phased) = self.styled_maps(style);
+
+        if self.subpixel_positioning {
+            let phase = SubpixelPhase::from_frac(x_frac);
+            let key = PhasedGlyphKey {
+                ch,
+                phase: phase as u8,
+            };
+            if let Some(info) = phased.get(&key) {
+                return Some(info);
+            }
+        }
+
+        glyphs
+            .get(&ch)
+            .or_else(|| self.get_glyph_phased(ch, x_frac))
+    }
+
+    /// Get references to styled glyph maps (immutable)
+    fn styled_maps(
+        &self,
+        style: FontStyle,
+    ) -> (
+        &HashMap<char, GlyphInfo>,
+        &HashMap<PhasedGlyphKey, GlyphInfo>,
+    ) {
+        match style {
+            FontStyle::Regular => (&self.glyphs, &self.phased_glyphs),
+            FontStyle::Bold => (&self.bold_glyphs, &self.bold_phased_glyphs),
+            FontStyle::Italic => (&self.italic_glyphs, &self.italic_phased_glyphs),
+            FontStyle::BoldItalic => (&self.bold_italic_glyphs, &self.bold_italic_phased_glyphs),
+        }
+    }
+
+    /// Get mutable references to styled glyph maps
+    fn styled_maps_mut(
+        &mut self,
+        style: FontStyle,
+    ) -> (
+        &mut HashMap<char, GlyphInfo>,
+        &mut HashMap<PhasedGlyphKey, GlyphInfo>,
+    ) {
+        match style {
+            FontStyle::Regular => (&mut self.glyphs, &mut self.phased_glyphs),
+            FontStyle::Bold => (&mut self.bold_glyphs, &mut self.bold_phased_glyphs),
+            FontStyle::Italic => (&mut self.italic_glyphs, &mut self.italic_phased_glyphs),
+            FontStyle::BoldItalic => (
+                &mut self.bold_italic_glyphs,
+                &mut self.bold_italic_phased_glyphs,
+            ),
+        }
+    }
+
+    /// Rasterize styled glyph from font chain (main → symbols → CJK → fallbacks)
+    fn rasterize_styled_from_chain(&self, ch: char, style: FontStyle) -> Option<FtGlyph> {
+        let rasterize = |font: &FtFont| -> Option<FtGlyph> {
+            match style {
+                FontStyle::Regular => font.rasterize(ch),
+                FontStyle::Bold => font.rasterize_bold(ch),
+                // Italic/BoldItalic need &self for transform, but rasterize_styled uses &self
+                // since it resets the transform. Use rasterize_styled on the font.
+                FontStyle::Italic => font.rasterize_styled(ch, false, true),
+                FontStyle::BoldItalic => font.rasterize_styled(ch, true, true),
+            }
+        };
+
+        if let Some(g) = rasterize(&self.font_main) {
+            return Some(g);
+        }
+        if let Some(ref symbols) = self.font_symbols {
+            if let Some(g) = rasterize(symbols) {
+                return Some(g);
+            }
+        }
+        if let Some(ref cjk) = self.font_cjk {
+            if let Some(g) = rasterize(cjk) {
+                return Some(g);
+            }
+        }
+        for (_path, font) in &self.font_fallbacks {
+            if let Some(g) = rasterize(font) {
+                return Some(g);
+            }
+        }
+        None
+    }
+
+    /// Rasterize styled glyph with phase from font chain
+    fn rasterize_styled_phased_from_chain(
+        &mut self,
+        ch: char,
+        phase: SubpixelPhase,
+        style: FontStyle,
+    ) -> Option<FtGlyph> {
+        macro_rules! try_font {
+            ($font:expr) => {
+                match style {
+                    FontStyle::Regular => $font.rasterize_with_phase(ch, phase),
+                    FontStyle::Bold => $font.rasterize_bold_with_phase(ch, phase),
+                    FontStyle::Italic => $font.rasterize_italic_with_phase(ch, phase),
+                    FontStyle::BoldItalic => $font.rasterize_bold_italic_with_phase(ch, phase),
+                }
+            };
+        }
+
+        if let Some(g) = try_font!(&mut self.font_main) {
+            return Some(g);
+        }
+        if let Some(ref mut symbols) = self.font_symbols {
+            if let Some(g) = try_font!(symbols) {
+                return Some(g);
+            }
+        }
+        if let Some(ref mut cjk) = self.font_cjk {
+            if let Some(g) = try_font!(cjk) {
+                return Some(g);
+            }
+        }
+        for (_path, font) in &mut self.font_fallbacks {
+            if let Some(g) = try_font!(font) {
+                return Some(g);
+            }
+        }
+        None
+    }
+
     pub fn bind(&self, gl: &glow::Context, unit: u32) {
         unsafe {
             gl.active_texture(glow::TEXTURE0 + unit);
@@ -716,6 +930,12 @@ impl LcdGlyphAtlas {
         self.glyphs.clear();
         self.phased_glyphs.clear();
         self.glyph_id_map.clear();
+        self.bold_glyphs.clear();
+        self.bold_phased_glyphs.clear();
+        self.italic_glyphs.clear();
+        self.italic_phased_glyphs.clear();
+        self.bold_italic_glyphs.clear();
+        self.bold_italic_phased_glyphs.clear();
         self.atlas_data.fill(0);
 
         // Replace white pixel

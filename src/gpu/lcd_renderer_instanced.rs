@@ -466,6 +466,48 @@ impl LcdTextRendererInstanced {
         }
     }
 
+    /// Add text string with specific style (bold/italic/bold_italic)
+    pub fn push_text_with_bg_lcd_styled(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        fg: [f32; 4],
+        bg: [f32; 3],
+        lcd_disable: f32,
+        style: crate::font::lcd_atlas::FontStyle,
+        atlas: &LcdGlyphAtlas,
+    ) {
+        let mut cursor_x = x;
+        for ch in text.chars() {
+            let x_frac = cursor_x.fract();
+            let x_frac = if x_frac < 0.0 { x_frac + 1.0 } else { x_frac };
+
+            if let Some(glyph) = atlas.get_glyph_styled(ch, x_frac, style) {
+                let phase_offset = atlas.phase_offset(x_frac);
+
+                if ch == '_' && glyph.bearing_y < 0.0 {
+                    let min_bearing = -(atlas.ascent * 0.06);
+                    let adjusted_bearing = glyph.bearing_y.max(min_bearing);
+                    self.push_glyph_info_with_adjusted_bearing(
+                        glyph,
+                        cursor_x + phase_offset,
+                        y,
+                        adjusted_bearing,
+                        fg,
+                        bg,
+                        lcd_disable,
+                    );
+                } else {
+                    self.push_glyph_info(glyph, cursor_x + phase_offset, y, fg, bg, lcd_disable);
+                }
+                cursor_x += glyph.advance;
+            } else {
+                cursor_x += atlas.cell_width;
+            }
+        }
+    }
+
     /// Add glyph info as instance data
     fn push_glyph_info(
         &mut self,
