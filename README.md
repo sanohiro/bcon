@@ -52,9 +52,11 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 
 ### Terminal
 - **Scrollback**: Configurable scrollback buffer (default: 10,000 lines)
-- **Mouse Support**: Selection, wheel scroll, button events (X10/SGR/URXVT protocols)
+- **Mouse Support**: Selection, wheel scroll, button events (X10/SGR/URXVT/SGR-Pixels protocols)
 - **OSC 52 Clipboard**: Apps can read/write clipboard via escape sequences
 - **Bracketed Paste**: Secure paste mode support
+- **OSC 4/10/11/12**: Dynamic palette, foreground, background, and cursor color changes
+- **Notifications**: OSC 9 (iTerm2) and OSC 99 (Kitty) desktop notification protocols with toast overlay and progress bar
 
 ### Input
 - **Keyboard**: Full keyboard support via evdev + xkbcommon
@@ -67,6 +69,7 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 - **Text Search**: Incremental search in scrollback (Ctrl+Shift+F)
 - **Screenshot**: Save terminal as PNG (PrintScreen or Ctrl+Shift+S)
 - **Font Scaling**: Runtime font size adjustment (Ctrl+Plus/Minus)
+- **Notification Panel**: Browse notification history (Ctrl+Shift+N), mute toggle (Ctrl+Shift+M)
 - **Monitor Hotplug**: Automatic detection and switching of monitors
 - **External Monitor Priority**: Auto-switch to HDMI/DP when connected (laptops)
 - **Visual Bell**: Screen flash on bell character
@@ -230,6 +233,9 @@ xkb_options = "ctrl:nocaps"  # XKB options (Caps Lock as Ctrl)
 prefer_external = true       # Prefer external monitors (HDMI/DP) over internal
 auto_switch = true           # Auto-switch on hotplug connect/disconnect
 
+[notifications]
+enabled = true               # Enable OSC 9/99 notifications (default: true)
+
 [paths]
 screenshot_dir = "~/Pictures"
 ```
@@ -282,6 +288,8 @@ Note: Powerline arrow glyphs (E0B0-E0B7) are drawn programmatically for pixel-pe
 | Font Reset | `Ctrl+0` | same | same | Reset font size |
 | Scroll Up | `Shift+PageUp` | `Ctrl+Shift+U` | `Alt+Shift+V` | Scroll back |
 | Scroll Down | `Shift+PageDown` | `Ctrl+Shift+D` | `Alt+Shift+N` | Scroll forward |
+| Notifications | `Ctrl+Shift+N` | same | same | Toggle notification panel |
+| Mute | `Ctrl+Shift+M` | same | `Alt+Shift+M` | Toggle notification mute |
 
 Multiple keys can be assigned to a single action in config:
 

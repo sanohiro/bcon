@@ -25,6 +25,33 @@ use sixel::SixelDecoder;
 /// Read buffer size
 const READ_BUF_SIZE: usize = 4096;
 
+/// Maximum notification history entries
+const MAX_NOTIFICATIONS: usize = 100;
+
+/// Notification from OSC 9 / OSC 99
+#[derive(Debug, Clone)]
+pub struct Notification {
+    /// OSC 99 identifier (i= parameter)
+    pub id: Option<String>,
+    /// Title (OSC 99 p=title / OSC 9 message)
+    pub title: String,
+    /// Body text (OSC 99 p=body)
+    pub body: String,
+    /// Urgency: 0=low, 1=normal, 2=critical
+    pub urgency: u8,
+    /// When the notification was received
+    pub timestamp: std::time::Instant,
+}
+
+/// Progress state from OSC 9;4
+#[derive(Debug, Clone)]
+pub struct NotificationProgress {
+    /// 0=stop, 1=normal, 2=error, 3=indeterminate, 4=warning
+    pub state: u8,
+    /// 0-100 percent
+    pub percent: u8,
+}
+
 /// Maximum APC buffer size (4MB - for Kitty graphics images)
 /// Prevents memory exhaustion from malicious/corrupt input
 const MAX_APC_BUFFER_SIZE: usize = 4 * 1024 * 1024;
@@ -221,6 +248,8 @@ pub enum DcsHandler {
     Sixel(SixelDecoder),
     /// XTGETTCAP (terminal capability query)
     XtGetTcap(Vec<u8>),
+    /// DECRQSS (request selection or setting)
+    Decrqss(Vec<u8>),
 }
 
 /// Animation state for animated images
@@ -383,6 +412,14 @@ pub struct Terminal {
     pty_response: Vec<u8>,
     /// Image IDs whose GPU textures need re-upload (image data changed for existing ID)
     pub dirty_image_ids: Vec<u32>,
+    /// Notification history (oldest first, max MAX_NOTIFICATIONS)
+    pub notifications: Vec<Notification>,
+    /// Whether notifications are enabled (config: notifications.enabled)
+    pub notifications_enabled: bool,
+    /// Current progress bar state (OSC 9;4)
+    pub active_progress: Option<NotificationProgress>,
+    /// Pending OSC 99 notifications (incomplete, keyed by id)
+    pub pending_notifications: HashMap<String, Notification>,
 }
 
 impl Terminal {
@@ -434,6 +471,10 @@ impl Terminal {
             current_directory: None,
             pty_response: Vec::with_capacity(256),
             dirty_image_ids: Vec::new(),
+            notifications: Vec::new(),
+            notifications_enabled: true,
+            active_progress: None,
+            pending_notifications: HashMap::new(),
         })
     }
 
@@ -573,6 +614,10 @@ impl Terminal {
             &mut self.current_directory,
             &self.clipboard_path,
             &mut self.pty_response,
+            &mut self.notifications,
+            &mut self.active_progress,
+            &mut self.pending_notifications,
+            &self.notifications_enabled,
         );
 
         for i in 0..n {
@@ -658,6 +703,10 @@ impl Terminal {
             &mut self.current_directory,
             &self.clipboard_path,
             &mut self.pty_response,
+            &mut self.notifications,
+            &mut self.active_progress,
+            &mut self.pending_notifications,
+            &self.notifications_enabled,
         );
         self.vt_parser.advance(&mut performer, byte);
 
@@ -791,7 +840,9 @@ impl Terminal {
                 let no_cursor_move = kitty_img.do_not_move_cursor;
                 info!(
                     "Kitty image decode complete: {}x{} (id={}, C={})",
-                    kitty_img.width, kitty_img.height, kitty_img.id,
+                    kitty_img.width,
+                    kitty_img.height,
+                    kitty_img.id,
                     if no_cursor_move { 1 } else { 0 }
                 );
                 let term_img = TerminalImage {
@@ -819,8 +870,11 @@ impl Terminal {
 
                 if action == KittyAction::TransmitAndDisplay {
                     self.grid.place_image(
-                        img_id, width, height,
-                        self.cell_width, self.cell_height,
+                        img_id,
+                        width,
+                        height,
+                        self.cell_width,
+                        self.cell_height,
                         no_cursor_move,
                     );
                 }
@@ -1301,7 +1355,13 @@ impl Terminal {
         if self.grid.modes.mouse_sgr {
             let suffix = if press { 'M' } else { 'm' };
             let seq = format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix);
-            trace!("Mouse event → PTY (SGR): cb={} col={} row={} {}", cb, cx, cy, suffix);
+            trace!(
+                "Mouse event → PTY (SGR): cb={} col={} row={} {}",
+                cb,
+                cx,
+                cy,
+                suffix
+            );
             self.pty.write(seq.as_bytes())?;
         } else {
             let bytes = [0x1b, b'[', b'M', cb + 32, (cx as u8) + 32, (cy as u8) + 32];
@@ -1905,6 +1965,10 @@ impl Terminal {
             &mut self.current_directory,
             &self.clipboard_path,
             &mut self.pty_response,
+            &mut self.notifications,
+            &mut self.active_progress,
+            &mut self.pending_notifications,
+            &self.notifications_enabled,
         );
 
         for &byte in data {

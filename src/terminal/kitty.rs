@@ -732,9 +732,12 @@ fn fix_png_checksums(data: &[u8]) -> Vec<u8> {
         fixed.extend_from_slice(&correct_crc.to_be_bytes());
 
         // Check if CRC was wrong
-        let stored_crc =
-            u32::from_be_bytes([data[pos + 8 + chunk_len], data[pos + 9 + chunk_len],
-                                data[pos + 10 + chunk_len], data[pos + 11 + chunk_len]]);
+        let stored_crc = u32::from_be_bytes([
+            data[pos + 8 + chunk_len],
+            data[pos + 9 + chunk_len],
+            data[pos + 10 + chunk_len],
+            data[pos + 11 + chunk_len],
+        ]);
         if stored_crc != correct_crc {
             any_fixed = true;
         }

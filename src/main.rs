@@ -1055,6 +1055,24 @@ fn save_screenshot(
     Ok(())
 }
 
+/// Truncate a string to fit within `max_cols` display columns.
+/// CJK characters count as 2 columns. Appends "…" if truncated.
+fn truncate_to_width(s: &str, max_cols: usize) -> String {
+    let mut result = String::new();
+    let mut cols = 0;
+    for ch in s.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cols + w > max_cols.saturating_sub(1) {
+            // Reserve 1 col for ellipsis
+            result.push('\u{2026}'); // …
+            return result;
+        }
+        result.push(ch);
+        cols += w;
+    }
+    result
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
@@ -1202,6 +1220,8 @@ fn main() -> Result<()> {
     let mut kb_scroll_up = config::ParsedKeybinds::parse(&cfg.keybinds.scroll_up);
     let mut kb_scroll_down = config::ParsedKeybinds::parse(&cfg.keybinds.scroll_down);
     let mut kb_reset_terminal = config::ParsedKeybinds::parse(&cfg.keybinds.reset_terminal);
+    let mut kb_notification_panel = config::ParsedKeybinds::parse(&cfg.keybinds.notification_panel);
+    let mut kb_notification_mute = config::ParsedKeybinds::parse(&cfg.keybinds.notification_mute);
 
     // Config file change watcher (Linux only)
     // Watch the actual loaded config path, not just the default path
@@ -1690,6 +1710,9 @@ Make sure seatd/logind is running and you're on an active VT."
     // Set custom ANSI 16 colors palette from config
     term.grid.set_ansi_palette(cfg.colors.to_palette());
 
+    // Apply notification settings from config
+    term.notifications_enabled = cfg.notifications.enabled;
+
     // Display /etc/issue (like getty does) if running as root on a VT.
     // In seatd mode this usually isn't needed, but in VT mode it improves login UX.
     #[cfg(target_os = "linux")]
@@ -1846,6 +1869,23 @@ Make sure seatd/logind is running and you're on an active VT."
 
     // Screenshot flag
     let mut take_screenshot = false;
+
+    // Notification panel state
+    let mut notification_panel_open = false;
+    let mut notification_panel_scroll: usize = 0;
+    let mut notification_muted = false;
+
+    // Toast notification entries
+    struct ToastEntry {
+        title: String,
+        body: String,
+        urgency: u8,
+        show_until: std::time::Instant,
+    }
+    let mut toast_notifications: Vec<ToastEntry> = Vec::new();
+    let mut last_notification_count: usize = 0;
+    // Track previous overlay state to force full FBO clear when overlays disappear
+    let mut prev_had_overlays = false;
 
     // IME is always enabled when ime_client is connected
     // User controls input method switching via fcitx5's Ctrl+Space
@@ -2124,10 +2164,9 @@ Make sure seatd/logind is running and you're on an active VT."
         if now.duration_since(last_blink_toggle).as_millis() >= CURSOR_BLINK_INTERVAL_MS as u128 {
             cursor_blink_visible = !cursor_blink_visible;
             last_blink_toggle = now;
-            // Trigger redraw in blink mode
-            if term.grid.cursor.blink {
-                needs_redraw = true;
-            }
+            // Mark all rows dirty so BLINK text gets re-rendered in FBO
+            term.grid.mark_all_dirty();
+            needs_redraw = true;
         }
 
         // Check child process alive
@@ -2156,6 +2195,9 @@ Make sure seatd/logind is running and you're on an active VT."
                 kb_scroll_up = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_up);
                 kb_scroll_down = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_down);
                 kb_reset_terminal = config::ParsedKeybinds::parse(&new_cfg.keybinds.reset_terminal);
+                kb_notification_panel = config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_panel);
+                kb_notification_mute = config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_mute);
+                term.notifications_enabled = new_cfg.notifications.enabled;
 
                 // Update IME disable app list
                 cfg = new_cfg;
@@ -2345,6 +2387,73 @@ Make sure seatd/logind is running and you're on an active VT."
                     info!("Terminal modes reset by user");
                     needs_redraw = true;
                     continue;
+                }
+
+                // Notification mute toggle
+                if kb_notification_mute.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    notification_muted = !notification_muted;
+                    info!("Notifications {}", if notification_muted { "muted" } else { "unmuted" });
+                    needs_redraw = true;
+                    continue;
+                }
+
+                // Notification panel toggle (configurable)
+                // Modal overlay — opens even during copy mode (higher z-order)
+                if kb_notification_panel.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    notification_panel_open = !notification_panel_open;
+                    notification_panel_scroll = 0;
+                    needs_redraw = true;
+                    continue;
+                }
+
+                // Notification panel key handling (modal)
+                // Recognized keys are consumed; unrecognized keys close the panel and fall through
+                if notification_panel_open {
+                    let consumed = match raw.keysym {
+                        xkbcommon::xkb::keysyms::KEY_Escape => {
+                            notification_panel_open = false;
+                            true
+                        }
+                        xkbcommon::xkb::keysyms::KEY_Down => {
+                            let max_scroll = term.notifications.len().saturating_sub(1);
+                            if notification_panel_scroll < max_scroll {
+                                notification_panel_scroll += 1;
+                            }
+                            true
+                        }
+                        xkbcommon::xkb::keysyms::KEY_Up => {
+                            notification_panel_scroll = notification_panel_scroll.saturating_sub(1);
+                            true
+                        }
+                        xkbcommon::xkb::keysyms::KEY_Page_Down => {
+                            let page = (grid_rows / 2).max(1);
+                            let max_scroll = term.notifications.len().saturating_sub(1);
+                            notification_panel_scroll = (notification_panel_scroll + page).min(max_scroll);
+                            true
+                        }
+                        xkbcommon::xkb::keysyms::KEY_Page_Up => {
+                            let page = (grid_rows / 2).max(1);
+                            notification_panel_scroll = notification_panel_scroll.saturating_sub(page);
+                            true
+                        }
+                        xkbcommon::xkb::keysyms::KEY_c => {
+                            term.notifications.clear();
+                            toast_notifications.clear();
+                            last_notification_count = 0;
+                            notification_panel_scroll = 0;
+                            true
+                        }
+                        _ => {
+                            // Unrecognized key: close panel and fall through
+                            notification_panel_open = false;
+                            false
+                        }
+                    };
+                    needs_redraw = true;
+                    if consumed {
+                        continue;
+                    }
+                    // Fall through to normal key handling
                 }
 
                 // Copy mode start (configurable)
@@ -2605,6 +2714,55 @@ Make sure seatd/logind is running and you're on an active VT."
 
             // Mouse event processing
             for mouse in &mouse_events {
+                // Notification panel mouse handling (modal)
+                if notification_panel_open {
+                    let panel_w = (screen_w as f32 * 0.25).max(250.0).min(450.0);
+                    let panel_x = screen_w as f32 - panel_w;
+                    match mouse {
+                        input::MouseEvent::ButtonPress { button, x, .. } => {
+                            if *button == input::BTN_LEFT {
+                                if (*x as f32) < panel_x {
+                                    // Click outside panel: close it
+                                    notification_panel_open = false;
+                                    needs_redraw = true;
+                                }
+                                // Clicks inside the panel are consumed (no fall-through)
+                            }
+                            continue;
+                        }
+                        input::MouseEvent::Scroll { delta, x, .. } => {
+                            if (*x as f32) >= panel_x {
+                                // Scroll inside panel: navigate notifications
+                                let max_scroll = term.notifications.len().saturating_sub(1);
+                                if *delta < 0.0 {
+                                    // Scroll up (toward older)
+                                    notification_panel_scroll = notification_panel_scroll.saturating_sub(1);
+                                } else {
+                                    // Scroll down (toward newer)
+                                    if notification_panel_scroll < max_scroll {
+                                        notification_panel_scroll += 1;
+                                    }
+                                }
+                                needs_redraw = true;
+                            } else {
+                                // Scroll outside panel: close panel
+                                notification_panel_open = false;
+                                needs_redraw = true;
+                            }
+                            continue;
+                        }
+                        input::MouseEvent::Move { x, y, .. } => {
+                            // Always update cursor position for rendering
+                            mouse_x = *x;
+                            mouse_y = *y;
+                            needs_redraw = true;
+                            continue;
+                        }
+                        // Release events are consumed while panel is open
+                        _ => { continue; }
+                    }
+                }
+
                 match mouse {
                     input::MouseEvent::ButtonPress { button, x, y } => {
                         // Account for terminal margin when converting to cell coordinates
@@ -2891,6 +3049,38 @@ Make sure seatd/logind is running and you're on an active VT."
                 bell_flash_until =
                     Some(std::time::Instant::now() + Duration::from_millis(BELL_FLASH_DURATION_MS));
             }
+
+            // Detect new notifications and create toast entries (skip when muted)
+            let current_count = term.notifications.len();
+            if current_count > last_notification_count && !notification_muted {
+                let now = std::time::Instant::now();
+                for i in last_notification_count..current_count {
+                    if let Some(notif) = term.notifications.get(i) {
+                        toast_notifications.push(ToastEntry {
+                            title: notif.title.clone(),
+                            body: notif.body.clone(),
+                            urgency: notif.urgency,
+                            show_until: now + Duration::from_secs(5),
+                        });
+                    }
+                }
+            }
+            last_notification_count = current_count;
+        }
+
+        // Expire old toast notifications
+        {
+            let now = std::time::Instant::now();
+            let had_toasts = !toast_notifications.is_empty();
+            toast_notifications.retain(|t| now < t.show_until);
+            if had_toasts && toast_notifications.is_empty() {
+                needs_redraw = true; // Redraw to clear expired toasts
+            }
+        }
+
+        // Continue redraw if toasts or progress bar are visible
+        if !toast_notifications.is_empty() || term.active_progress.is_some() {
+            needs_redraw = true;
         }
 
         // Continue redraw if bell flash is active
@@ -2937,10 +3127,17 @@ Make sure seatd/logind is running and you're on an active VT."
             || search_mode
             || term.copy_mode.is_some()
             || !preedit.is_empty()  // IME preedit changes without dirty tracking
-            || candidate_state.is_some(); // IME candidate window
+            || candidate_state.is_some() // IME candidate window
+            || notification_panel_open
+            || !toast_notifications.is_empty()
+            || term.active_progress.is_some();
 
-        // Clear FBO: full clear when overlays active or all dirty, otherwise only dirty rows
-        if term.grid.is_all_dirty() || has_overlays {
+        // Force full clear when overlays just disappeared (FBO still has old overlay content)
+        let overlays_just_cleared = prev_had_overlays && !has_overlays;
+        prev_had_overlays = has_overlays;
+
+        // Clear FBO: full clear when overlays active/just-cleared or all dirty, otherwise only dirty rows
+        if term.grid.is_all_dirty() || has_overlays || overlays_just_cleared {
             fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
         } else if term.has_dirty_rows() {
             for row in 0..term.grid.rows() {
@@ -2958,14 +3155,19 @@ Make sure seatd/logind is running and you're on an active VT."
         curly_renderer.begin();
 
         // Effective foreground color: OSC 10 > config > hardcoded white
-        let default_fg = if let Some((r, g, b)) = term.grid.colors.fg {
+        let mut default_fg = if let Some((r, g, b)) = term.grid.colors.fg {
             [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
         } else {
             [config_fg.0, config_fg.1, config_fg.2, 1.0]
         };
 
         // Effective background color: OSC 11 > config > hardcoded black
-        let default_bg = [bg_color.0, bg_color.1, bg_color.2, 1.0];
+        let mut default_bg = [bg_color.0, bg_color.1, bg_color.2, 1.0];
+
+        // DECSCNM (Mode 5): Reverse video — swap default fg/bg for entire screen
+        if term.grid.reverse_video() {
+            std::mem::swap(&mut default_fg, &mut default_bg);
+        }
 
         let grid = &term.grid;
 
@@ -2992,7 +3194,7 @@ Make sure seatd/logind is running and you're on an active VT."
 
         // Determine if partial rendering is possible (no overlays active)
         // When overlays are active, we must render all rows for correctness
-        let partial_render = !has_overlays && !grid.is_all_dirty();
+        let partial_render = !has_overlays && !overlays_just_cleared && !grid.is_all_dirty();
 
         // === Pass 1: Background color (run-length encoded) ===
         // Selection is blended into background here (not in separate pass)
@@ -3373,8 +3575,10 @@ Make sure seatd/logind is running and you're on an active VT."
                 // Check INVERSE for decorations
                 let is_inverse = cell.attrs.contains(terminal::grid::CellAttrs::INVERSE);
 
-                // Overline rendering (CSI 53 m)
-                if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE) {
+                // Overline rendering (CSI 53 m) — skip if HIDDEN
+                if cell.attrs.contains(terminal::grid::CellAttrs::OVERLINE)
+                    && !cell.attrs.contains(terminal::grid::CellAttrs::HIDDEN)
+                {
                     let mut fg = if is_inverse {
                         effective_bg(&cell.bg)
                     } else {
@@ -3393,11 +3597,19 @@ Make sure seatd/logind is running and you're on an active VT."
 
                 // Box-drawing characters: draw programmatically for pixel-perfect alignment
                 {
-                    let fg = if is_inverse {
+                    let mut fg = if is_inverse {
                         effective_bg(&cell.bg)
                     } else {
                         effective_fg(&cell.fg)
                     };
+                    if cell.attrs.contains(terminal::grid::CellAttrs::HIDDEN) {
+                        let bg = if is_inverse {
+                            effective_fg(&cell.fg)
+                        } else {
+                            effective_bg(&cell.bg)
+                        };
+                        fg = bg;
+                    }
                     if draw_box_drawing(
                         first_ch,
                         x,
@@ -3424,6 +3636,13 @@ Make sure seatd/logind is running and you're on an active VT."
                         fg = [fg[0] * 0.5, fg[1] * 0.5, fg[2] * 0.5, fg[3]];
                     }
 
+                    // BLINK (SGR 5): toggle text visibility using cursor blink timer
+                    if cell.attrs.contains(terminal::grid::CellAttrs::BLINK)
+                        && !cursor_blink_visible
+                    {
+                        fg[3] = 0.0;
+                    }
+
                     // Calculate final background color (needed for LCD subpixel compositing)
                     // Composite in order: cell BG -> selection highlight -> search highlight
                     // Blend in linear space to match shader
@@ -3432,6 +3651,11 @@ Make sure seatd/logind is running and you're on an active VT."
                     } else {
                         effective_bg(&cell.bg)
                     };
+
+                    // HIDDEN (SGR 8): make text invisible by setting fg = bg
+                    if cell.attrs.contains(terminal::grid::CellAttrs::HIDDEN) {
+                        fg = bg_rgba;
+                    }
 
                     // Selection highlight - LCD compositing uses same blend as Pass 1
                     if let Some((sel_start, sel_end)) = row_selection {
@@ -4118,7 +4342,10 @@ Make sure seatd/logind is running and you're on an active VT."
                 }
 
                 // Strikethrough rendering (CSI 9 m) — drawn after glyphs so line is visible on top
-                if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE) {
+                // Skip if HIDDEN (text is invisible, strikethrough should be too)
+                if cell.attrs.contains(terminal::grid::CellAttrs::STRIKE)
+                    && !cell.attrs.contains(terminal::grid::CellAttrs::HIDDEN)
+                {
                     let mut strike_fg = if is_inverse {
                         effective_bg(&cell.bg)
                     } else {
@@ -4622,6 +4849,308 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
 
+        // === Toast notifications + progress bar (bottom-right corner) ===
+        if !toast_notifications.is_empty() || term.active_progress.is_some() {
+            let toast_w = (screen_w as f32 * 0.30).min(400.0);
+            let toast_h = cell_h * 2.0 + 12.0;
+            let progress_bar_h = 24.0_f32; // Standalone progress bar height
+            let toast_x = screen_w as f32 - toast_w - 12.0;
+            let mut toast_y = screen_h as f32 - 12.0;
+            if search_mode {
+                toast_y -= cell_h + 8.0; // Avoid search bar overlap
+            }
+
+            // Pass 1: Backgrounds
+            ui_renderer.begin();
+
+            // Standalone progress bar (below toasts)
+            if term.active_progress.is_some() {
+                toast_y -= progress_bar_h + 6.0;
+                ui_renderer.push_shadow_rounded_rect(
+                    toast_x, toast_y, toast_w, progress_bar_h, 6.0,
+                    [0.12, 0.14, 0.20, 0.92], 3.0, [0.0, 0.0, 0.0, 0.4],
+                );
+            }
+
+            for toast in toast_notifications.iter().rev().take(3) {
+                toast_y -= toast_h + 6.0;
+                let bg = match toast.urgency {
+                    2 => [0.5, 0.1, 0.1, 0.92],
+                    _ => [0.15, 0.18, 0.25, 0.92],
+                };
+                ui_renderer.push_shadow_rounded_rect(
+                    toast_x, toast_y, toast_w, toast_h, 6.0,
+                    bg, 3.0, [0.0, 0.0, 0.0, 0.4],
+                );
+            }
+            ui_renderer.flush(gl, screen_w, screen_h);
+
+            // Pass 2: Text
+            text_renderer.begin();
+            let toast_bg = [0.15, 0.18, 0.25]; // Normal toast bg for LCD compositing
+
+            // Reset toast_y for text pass
+            toast_y = screen_h as f32 - 12.0;
+            if search_mode {
+                toast_y -= cell_h + 8.0;
+            }
+
+            // Standalone progress bar rendering
+            if let Some(ref progress) = term.active_progress {
+                toast_y -= progress_bar_h + 6.0;
+                let progress_bg = [0.12, 0.14, 0.20];
+                let bar_color = match progress.state {
+                    1 => [0.2, 0.7, 0.3, 1.0],  // Normal (green)
+                    2 => [0.8, 0.2, 0.2, 1.0],  // Error (red)
+                    3 => [0.4, 0.4, 0.8, 1.0],  // Indeterminate (blue)
+                    4 => [0.8, 0.6, 0.1, 1.0],  // Warning (yellow)
+                    _ => [0.4, 0.4, 0.8, 1.0],
+                };
+                // Percent label (left side)
+                let pct_text = format!("{}%", progress.percent);
+                for ch in pct_text.chars() {
+                    glyph_atlas.ensure_glyph(ch);
+                }
+                let label_x = toast_x + 8.0;
+                let label_baseline = (toast_y + (progress_bar_h + ascent) / 2.0).round();
+                text_renderer.push_text_with_bg(
+                    &pct_text, label_x, label_baseline,
+                    [0.8, 0.8, 0.85, 1.0], progress_bg, &glyph_atlas,
+                );
+                // Bar (right of label) — reserve 5 chars width for "100%"
+                let label_w = cell_w * 5.0;
+                let bar_x = toast_x + 8.0 + label_w;
+                let bar_w = toast_w - 16.0 - label_w;
+                let bar_y = toast_y + (progress_bar_h - 6.0) / 2.0;
+                let fill_w = bar_w * (progress.percent as f32 / 100.0);
+                // Background bar track
+                text_renderer.push_rect(
+                    bar_x, bar_y, bar_w, 6.0,
+                    [0.25, 0.25, 0.3, 0.6], &glyph_atlas,
+                );
+                // Filled portion
+                text_renderer.push_rect(
+                    bar_x, bar_y, fill_w, 6.0,
+                    bar_color, &glyph_atlas,
+                );
+            }
+
+            // Max characters that fit in toast width (with padding)
+            let toast_text_w = toast_w - 16.0; // 8px padding each side
+            let max_chars = (toast_text_w / cell_w).floor() as usize;
+
+            for toast in toast_notifications.iter().rev().take(3) {
+                toast_y -= toast_h + 6.0;
+                let item_bg = match toast.urgency {
+                    2 => [0.5, 0.1, 0.1],
+                    _ => toast_bg,
+                };
+                let title_color = [1.0, 1.0, 1.0, 1.0];
+                let body_color = [0.7, 0.7, 0.75, 1.0];
+
+                // Title (truncate to fit toast width)
+                let title_x = toast_x + 8.0;
+                let title_baseline = (toast_y + 4.0 + ascent).round();
+                let title = truncate_to_width(&toast.title, max_chars);
+                for ch in title.chars() {
+                    glyph_atlas.ensure_glyph(ch);
+                }
+                text_renderer.push_text_with_bg(
+                    &title, title_x, title_baseline,
+                    title_color, item_bg, &glyph_atlas,
+                );
+
+                // Body (second line, truncate to fit)
+                if !toast.body.is_empty() {
+                    let body_baseline = (toast_y + 4.0 + cell_h + ascent).round();
+                    let body = truncate_to_width(&toast.body, max_chars);
+                    for ch in body.chars() {
+                        glyph_atlas.ensure_glyph(ch);
+                    }
+                    text_renderer.push_text_with_bg(
+                        &body, title_x, body_baseline,
+                        body_color, item_bg, &glyph_atlas,
+                    );
+                }
+            }
+            glyph_atlas.upload_if_dirty(gl);
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
+
+        // === Notification panel (right side) ===
+        if notification_panel_open {
+            let panel_w = (screen_w as f32 * 0.25).max(250.0).min(450.0);
+            let panel_x = screen_w as f32 - panel_w;
+            let panel_h = screen_h as f32;
+            let padding = 8.0_f32;
+            let header_h = cell_h + padding * 2.0;
+            let footer_h = cell_h + padding;
+            let content_h = panel_h - header_h - footer_h;
+
+            // Background
+            ui_renderer.begin();
+            // Panel body
+            ui_renderer.push_rounded_rect(
+                panel_x, 0.0, panel_w, panel_h, 0.0,
+                [0.1, 0.1, 0.14, 0.95],
+            );
+            // Header
+            ui_renderer.push_rounded_rect(
+                panel_x, 0.0, panel_w, header_h, 0.0,
+                [0.15, 0.15, 0.2, 0.98],
+            );
+            // Footer
+            ui_renderer.push_rounded_rect(
+                panel_x, panel_h - footer_h, panel_w, footer_h, 0.0,
+                [0.15, 0.15, 0.2, 0.98],
+            );
+            ui_renderer.flush(gl, screen_w, screen_h);
+
+            // Text
+            text_renderer.begin();
+            let panel_bg = [0.1, 0.1, 0.14];
+            let header_bg = [0.15, 0.15, 0.2];
+
+            // Header: "Notifications"
+            let header_text = "Notifications";
+            for ch in header_text.chars() {
+                glyph_atlas.ensure_glyph(ch);
+            }
+            text_renderer.push_text_with_bg(
+                header_text,
+                panel_x + padding,
+                (padding + ascent).round(),
+                [1.0, 1.0, 1.0, 1.0],
+                header_bg,
+                &glyph_atlas,
+            );
+
+            // Count badge
+            let count_text = format!("{}", term.notifications.len());
+            for ch in count_text.chars() {
+                glyph_atlas.ensure_glyph(ch);
+            }
+            let count_cols: usize = count_text.chars()
+                .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+                .sum();
+            let count_x = panel_x + panel_w - padding - count_cols as f32 * cell_w;
+            text_renderer.push_text_with_bg(
+                &count_text,
+                count_x,
+                (padding + ascent).round(),
+                [0.6, 0.6, 0.65, 1.0],
+                header_bg,
+                &glyph_atlas,
+            );
+
+            // Notification list
+            let item_h = cell_h * 2.0 + 4.0; // timestamp+title line + body line + gap
+            let max_visible = (content_h / item_h).floor() as usize;
+            let notifs = &term.notifications;
+            let total = notifs.len();
+
+            // Show newest first (reverse order)
+            let start: isize = if total == 0 {
+                -1 // Skip loop
+            } else if total > notification_panel_scroll {
+                (total - 1 - notification_panel_scroll) as isize
+            } else {
+                0
+            };
+
+            let mut y = header_h;
+            let mut drawn = 0;
+            let mut idx = start;
+            while idx >= 0 && drawn < max_visible {
+                let notif = &notifs[idx as usize];
+                let item_y = y;
+
+                // Timestamp (seconds since notification)
+                let elapsed = notif.timestamp.elapsed().as_secs();
+                let time_str = if elapsed < 60 {
+                    format!("{}s", elapsed)
+                } else if elapsed < 3600 {
+                    format!("{}m", elapsed / 60)
+                } else {
+                    format!("{}h", elapsed / 3600)
+                };
+                for ch in time_str.chars() {
+                    glyph_atlas.ensure_glyph(ch);
+                }
+                let time_color = [0.45, 0.45, 0.5, 1.0];
+                text_renderer.push_text_with_bg(
+                    &time_str,
+                    panel_x + padding,
+                    (item_y + ascent).round(),
+                    time_color,
+                    panel_bg,
+                    &glyph_atlas,
+                );
+
+                // Title (after timestamp)
+                let time_cols: usize = time_str.chars()
+                    .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+                    .sum();
+                let title_x = panel_x + padding + (time_cols as f32 + 1.0) * cell_w;
+                let max_title_cols = ((panel_w - padding * 2.0 - (time_cols as f32 + 1.0) * cell_w) / cell_w) as usize;
+                let title = truncate_to_width(&notif.title, max_title_cols);
+                for ch in title.chars() {
+                    glyph_atlas.ensure_glyph(ch);
+                }
+                let title_color = match notif.urgency {
+                    2 => [1.0, 0.4, 0.4, 1.0],
+                    _ => [0.95, 0.95, 1.0, 1.0],
+                };
+                text_renderer.push_text_with_bg(
+                    &title,
+                    title_x,
+                    (item_y + ascent).round(),
+                    title_color,
+                    panel_bg,
+                    &glyph_atlas,
+                );
+
+                // Body (second line, indented)
+                if !notif.body.is_empty() {
+                    let body_y = item_y + cell_h;
+                    let max_body_cols = ((panel_w - padding * 3.0) / cell_w) as usize;
+                    let body = truncate_to_width(&notif.body, max_body_cols);
+                    for ch in body.chars() {
+                        glyph_atlas.ensure_glyph(ch);
+                    }
+                    text_renderer.push_text_with_bg(
+                        &body,
+                        panel_x + padding * 2.0,
+                        (body_y + ascent).round(),
+                        [0.65, 0.65, 0.7, 1.0],
+                        panel_bg,
+                        &glyph_atlas,
+                    );
+                }
+
+                y += item_h;
+                idx -= 1;
+                drawn += 1;
+            }
+
+            // Footer: "[c]lear  [Esc]"
+            let footer_text = "[c]lear  [Esc]";
+            for ch in footer_text.chars() {
+                glyph_atlas.ensure_glyph(ch);
+            }
+            text_renderer.push_text_with_bg(
+                footer_text,
+                panel_x + padding,
+                (panel_h - footer_h + padding * 0.5 + ascent).round(),
+                [0.5, 0.5, 0.55, 1.0],
+                header_bg,
+                &glyph_atlas,
+            );
+
+            glyph_atlas.upload_if_dirty(gl);
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
+
         // Bell flash is drawn after FBO blit (outside FBO cache)
 
         // === Screenshot ===
@@ -4703,7 +5232,11 @@ Make sure seatd/logind is running and you're on an active VT."
                     let cursor_x =
                         margin_x + (grid.cursor_col + preedit_total_cols) as f32 * cell_w;
                     let cursor_y = margin_y + grid.cursor_row as f32 * cell_h;
-                    let mut cursor_rgb = [config_cursor.0, config_cursor.1, config_cursor.2];
+                    let mut cursor_rgb = if let Some((r, g, b)) = grid.colors.cursor {
+                        [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]
+                    } else {
+                        [config_cursor.0, config_cursor.1, config_cursor.2]
+                    };
                     let cursor_row = grid.cursor_row;
                     let cursor_col = grid.cursor_col;
 
@@ -4754,15 +5287,20 @@ Make sure seatd/logind is running and you're on an active VT."
                     let cell_bg = [bg_rgba[0], bg_rgba[1], bg_rgba[2]];
 
                     // Ensure cursor is visible against light/dark backgrounds
-                    let bg_luma = 0.2126 * cell_bg[0] + 0.7152 * cell_bg[1] + 0.0722 * cell_bg[2];
-                    let cur_luma =
-                        0.2126 * cursor_rgb[0] + 0.7152 * cursor_rgb[1] + 0.0722 * cursor_rgb[2];
-                    if (cur_luma - bg_luma).abs() < 0.25 {
-                        cursor_rgb = if bg_luma > 0.5 {
-                            [0.0, 0.0, 0.0]
-                        } else {
-                            [1.0, 1.0, 1.0]
-                        };
+                    // Skip auto-contrast when cursor color is explicitly set via OSC 12
+                    if grid.colors.cursor.is_none() {
+                        let bg_luma =
+                            0.2126 * cell_bg[0] + 0.7152 * cell_bg[1] + 0.0722 * cell_bg[2];
+                        let cur_luma = 0.2126 * cursor_rgb[0]
+                            + 0.7152 * cursor_rgb[1]
+                            + 0.0722 * cursor_rgb[2];
+                        if (cur_luma - bg_luma).abs() < 0.25 {
+                            cursor_rgb = if bg_luma > 0.5 {
+                                [0.0, 0.0, 0.0]
+                            } else {
+                                [1.0, 1.0, 1.0]
+                            };
+                        }
                     }
                     let cursor_color = [
                         cursor_rgb[0],

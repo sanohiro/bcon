@@ -71,6 +71,7 @@ impl Pty {
                 // Child process: set environment variables and spawn shell
                 std::env::set_var("TERM", term_env);
                 std::env::set_var("COLORTERM", "truecolor");
+                std::env::set_var("TERM_PROGRAM", "bcon");
 
                 // Set extra environment variables (e.g., DBUS_SESSION_BUS_ADDRESS for IME)
                 for (key, value) in extra_env {

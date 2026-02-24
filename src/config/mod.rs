@@ -37,6 +37,8 @@ pub struct Config {
     pub keyboard: KeyboardInputConfig,
     /// Display settings
     pub display: DisplayOutputConfig,
+    /// Notification settings
+    pub notifications: NotificationConfig,
 }
 
 /// Font settings
@@ -270,6 +272,12 @@ pub struct KeybindConfig {
     /// Reset terminal modes (default: "ctrl+shift+escape") - reset enhanced input modes
     #[serde(deserialize_with = "deserialize_keybind")]
     pub reset_terminal: Vec<String>,
+    /// Notification panel toggle (default: "ctrl+shift+n")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub notification_panel: Vec<String>,
+    /// Notification mute toggle (default: "ctrl+shift+m")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub notification_mute: Vec<String>,
 }
 
 /// Keybind deserializer: accepts string or array
@@ -321,6 +329,7 @@ impl Default for Config {
             terminal: TerminalConfig::default(),
             keyboard: KeyboardInputConfig::default(),
             display: DisplayOutputConfig::default(),
+            notifications: NotificationConfig::default(),
         }
     }
 }
@@ -496,6 +505,20 @@ impl Default for TerminalConfig {
     }
 }
 
+/// Notification settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationConfig {
+    /// Enable notification system (OSC 9/99). Default: true
+    pub enabled: bool,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 impl Default for KeybindConfig {
     fn default() -> Self {
         Self::default_preset()
@@ -519,6 +542,8 @@ impl KeybindConfig {
             scroll_down: vec!["shift+pagedown".to_string()],
             ime_toggle: vec!["ctrl+shift+j".to_string()],
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
+            notification_panel: vec!["ctrl+shift+n".to_string()],
+            notification_mute: vec!["ctrl+shift+m".to_string()],
         }
     }
 
@@ -540,6 +565,8 @@ impl KeybindConfig {
             scroll_down: vec!["alt+shift+n".to_string()], // M-S-n (safe Emacs-like)
             ime_toggle: vec!["ctrl+shift+j".to_string()],
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
+            notification_panel: vec!["ctrl+shift+n".to_string()],
+            notification_mute: vec!["alt+shift+m".to_string()],
         }
     }
 
@@ -561,6 +588,8 @@ impl KeybindConfig {
             scroll_down: vec!["ctrl+shift+d".to_string()], // Ctrl+Shift+D (safe Vim-like)
             ime_toggle: vec!["ctrl+shift+j".to_string()],
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
+            notification_panel: vec!["ctrl+shift+n".to_string()],
+            notification_mute: vec!["ctrl+shift+m".to_string()],
         }
     }
 }

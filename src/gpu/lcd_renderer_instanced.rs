@@ -356,11 +356,6 @@ impl LcdTextRendererInstanced {
         self.glyph_count = 0;
     }
 
-    /// Add a character (using default background)
-    pub fn push_char(&mut self, ch: char, x: f32, y: f32, fg: [f32; 4], atlas: &LcdGlyphAtlas) {
-        self.push_char_with_bg(ch, x, y, fg, self.default_bg, 0.0, atlas);
-    }
-
     /// Add a character with specific background and LCD disable flag
     pub fn push_char_with_bg(
         &mut self,

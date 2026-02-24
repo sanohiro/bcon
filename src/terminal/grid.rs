@@ -378,6 +378,69 @@ impl Default for Pen {
     }
 }
 
+/// Character set (SCS - Select Character Set)
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Charset {
+    /// ASCII (ESC ( B)
+    #[default]
+    Ascii,
+    /// DEC Special Graphics / Line Drawing (ESC ( 0)
+    DecSpecial,
+}
+
+/// Map DEC Special Graphics charset (0x60-0x7E → Unicode line drawing)
+/// Reference: VT100 User Guide, Table 3-9
+fn map_dec_special(ch: char) -> char {
+    match ch {
+        '`' => '◆',        // Diamond
+        'a' => '▒',        // Checkerboard
+        'b' => '\u{2409}', // HT symbol
+        'c' => '\u{240C}', // FF symbol
+        'd' => '\u{240D}', // CR symbol
+        'e' => '\u{240A}', // LF symbol
+        'f' => '°',        // Degree
+        'g' => '±',        // Plus/minus
+        'h' => '\u{2424}', // NL symbol
+        'i' => '\u{240B}', // VT symbol
+        'j' => '┘',        // Lower-right corner
+        'k' => '┐',        // Upper-right corner
+        'l' => '┌',        // Upper-left corner
+        'm' => '└',        // Lower-left corner
+        'n' => '┼',        // Crossing lines
+        'o' => '⎺',        // Horizontal line - scan 1
+        'p' => '⎻',        // Horizontal line - scan 3
+        'q' => '─',        // Horizontal line - scan 5
+        'r' => '⎼',        // Horizontal line - scan 7
+        's' => '⎽',        // Horizontal line - scan 9
+        't' => '├',        // Left tee
+        'u' => '┤',        // Right tee
+        'v' => '┴',        // Bottom tee
+        'w' => '┬',        // Top tee
+        'x' => '│',        // Vertical bar
+        'y' => '≤',        // Less-than-or-equal
+        'z' => '≥',        // Greater-than-or-equal
+        '{' => 'π',        // Pi
+        '|' => '≠',        // Not-equal
+        '}' => '£',        // UK pound
+        '~' => '·',        // Centered dot
+        _ => ch,
+    }
+}
+
+/// Saved cursor state for DECSC (ESC 7) / DECRC (ESC 8)
+/// Per VT220 spec, saves: position, pen, charset, origin mode, auto-wrap
+#[derive(Debug, Clone)]
+struct SavedCursor {
+    row: usize,
+    col: usize,
+    pen: Pen,
+    charset_g0: Charset,
+    charset_g1: Charset,
+    active_charset: u8,
+    origin_mode: bool,
+    auto_wrap: bool,
+}
+
 // ========== Sub-structures for Grid ==========
 
 /// Terminal mode flags (DECSET/DECRST)
@@ -395,10 +458,18 @@ pub struct TerminalModes {
     pub mouse_mode: MouseMode,
     /// SGR mouse mode (?1006) - extended coordinate format
     pub mouse_sgr: bool,
+    /// SGR mouse pixel mode (?1016) - pixel coordinates
+    pub mouse_sgr_pixels: bool,
     /// Focus event reporting flag (?1004)
     pub send_focus_events: bool,
     /// Synchronized Update mode (?2026)
     pub synchronized_update: bool,
+    /// Origin mode (DECOM, ?6) - cursor addressing relative to scroll region
+    pub origin_mode: bool,
+    /// Insert/Replace mode (IRM, CSI 4 h/l)
+    pub insert_mode: bool,
+    /// Reverse video mode (DECSCNM, ?5) - swap fg/bg for entire screen
+    pub reverse_video: bool,
 }
 
 impl TerminalModes {
@@ -476,13 +547,15 @@ impl KeyboardState {
     }
 }
 
-/// Dynamic colors (OSC 10/11)
+/// Dynamic colors (OSC 10/11/12)
 #[derive(Debug, Clone, Default)]
 pub struct DynamicColors {
     /// OSC 10 foreground color (RGB, None = use default)
     pub fg: Option<(u8, u8, u8)>,
     /// OSC 11 background color (RGB, None = use default)
     pub bg: Option<(u8, u8, u8)>,
+    /// OSC 12 cursor color (RGB, None = use default)
+    pub cursor: Option<(u8, u8, u8)>,
 }
 
 /// Character grid
@@ -522,6 +595,30 @@ pub struct Grid {
     pub current_hyperlink: Option<Arc<Hyperlink>>,
     /// Image placement list
     pub image_placements: Vec<ImagePlacement>,
+
+    // ===== Character set state (SCS) =====
+    /// G0 character set
+    charset_g0: Charset,
+    /// G1 character set
+    charset_g1: Charset,
+    /// Active character set: 0 = G0, 1 = G1
+    active_charset: u8,
+
+    // ===== Tab stops =====
+    /// Custom tab stop positions (true = tab stop at this column)
+    tab_stops: Vec<bool>,
+
+    // ===== DEC saved cursor (ESC 7/8) =====
+    /// Saved cursor state (DECSC/DECRC) - separate from SCOSC (CSI s/u)
+    saved_dec_cursor: Option<SavedCursor>,
+
+    // ===== Window title (OSC 0/2) =====
+    /// Window title (stored for tmux/status line queries)
+    pub window_title: Option<String>,
+
+    // ===== Custom 256-color palette (OSC 4) =====
+    /// Custom color palette overrides (None = use default)
+    custom_palette: [Option<(u8, u8, u8)>; 256],
 
     // ===== Grouped state =====
     /// Terminal mode flags
@@ -566,6 +663,20 @@ struct AlternateScreen {
     pen: Pen,
     scroll_top: usize,
     scroll_bottom: usize,
+    // Additional state saved/restored with Mode 1049
+    charset_g0: Charset,
+    charset_g1: Charset,
+    active_charset: u8,
+    modes_snapshot: ModeSnapshot,
+}
+
+/// Snapshot of mode flags for alternate screen save/restore
+#[derive(Debug, Clone)]
+struct ModeSnapshot {
+    origin_mode: bool,
+    insert_mode: bool,
+    reverse_video: bool,
+    auto_wrap: bool,
 }
 
 impl Grid {
@@ -576,6 +687,12 @@ impl Grid {
 
     /// Create grid with specified size and scrollback limit
     pub fn with_scrollback(cols: usize, rows: usize, max_scrollback: usize) -> Self {
+        // Initialize default tab stops at every 8th column
+        let mut tab_stops = vec![false; cols];
+        for i in (8..cols).step_by(8) {
+            tab_stops[i] = true;
+        }
+
         Self {
             cells: vec![Cell::default(); cols * rows],
             cols,
@@ -594,6 +711,13 @@ impl Grid {
             bell_triggered: false,
             current_hyperlink: None,
             image_placements: Vec::new(),
+            charset_g0: Charset::Ascii,
+            charset_g1: Charset::Ascii,
+            active_charset: 0,
+            tab_stops,
+            saved_dec_cursor: None,
+            window_title: None,
+            custom_palette: [None; 256],
             modes: TerminalModes::new(),
             cursor: CursorAppearance::default(),
             shell: ShellState::default(),
@@ -611,7 +735,7 @@ impl Grid {
         self.ansi_palette = Some(palette);
     }
 
-    /// Convert Color to RGBA using custom palette for indexed colors 0-15
+    /// Convert Color to RGBA using custom palette for indexed colors
     pub fn color_to_rgba(&self, color: &Color, is_foreground: bool) -> [f32; 4] {
         match color {
             Color::Default => {
@@ -622,7 +746,11 @@ impl Grid {
                 }
             }
             Color::Indexed(idx) => {
-                // Use custom palette for colors 0-15
+                // Check OSC 4 custom palette first
+                if let Some((r, g, b)) = self.custom_palette[*idx as usize] {
+                    return [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0];
+                }
+                // Use config palette for colors 0-15
                 if *idx < 16 {
                     if let Some(ref palette) = self.ansi_palette {
                         return palette[*idx as usize];
@@ -804,6 +932,28 @@ impl Grid {
     #[inline]
     pub fn osc_bg_color(&self) -> Option<(u8, u8, u8)> {
         self.colors.bg
+    }
+    #[inline]
+    pub fn osc_cursor_color(&self) -> Option<(u8, u8, u8)> {
+        self.colors.cursor
+    }
+
+    // New mode accessors
+    #[inline]
+    pub fn reverse_video(&self) -> bool {
+        self.modes.reverse_video
+    }
+    #[inline]
+    pub fn origin_mode(&self) -> bool {
+        self.modes.origin_mode
+    }
+    #[inline]
+    pub fn insert_mode(&self) -> bool {
+        self.modes.insert_mode
+    }
+    #[inline]
+    pub fn mouse_sgr_pixels(&self) -> bool {
+        self.modes.mouse_sgr_pixels
     }
 
     /// Get reference to cell
@@ -1051,6 +1201,23 @@ impl Grid {
             }
         }
 
+        // Apply character set mapping (SCS)
+        let ch = if char_width == 1 {
+            let active_cs = if self.active_charset == 0 {
+                self.charset_g0
+            } else {
+                self.charset_g1
+            };
+            match active_cs {
+                Charset::DecSpecial => map_dec_special(ch),
+                Charset::Ascii => ch,
+            }
+        } else {
+            ch
+        };
+        // Recalculate codepoint after mapping
+        let cp = ch as u32;
+
         let fg = self.pen.fg;
         let bg = self.pen.bg;
         let mut attrs = self.pen.attrs;
@@ -1060,6 +1227,11 @@ impl Grid {
         // Set IS_EMOJI flag for emoji characters (cached for rendering)
         if is_emoji_codepoint(cp) {
             attrs.insert(CellAttrs::IS_EMOJI);
+        }
+
+        // IRM: Insert mode - shift characters right before writing
+        if self.modes.insert_mode {
+            self.insert_chars(char_width);
         }
 
         // Clear paired cell when overwriting existing wide character
@@ -1112,8 +1284,15 @@ impl Grid {
     // ========== Cursor movement ==========
 
     /// Move cursor to absolute position (1-indexed -> 0-indexed)
+    /// When origin mode (DECOM) is active, coordinates are relative to scroll region
     pub fn move_cursor_to(&mut self, row: usize, col: usize) {
-        self.cursor_row = row.saturating_sub(1).min(self.rows - 1);
+        if self.modes.origin_mode {
+            // DECOM: row is relative to scroll region top, clamped to scroll region
+            let abs_row = self.scroll_top + row.saturating_sub(1);
+            self.cursor_row = abs_row.min(self.scroll_bottom);
+        } else {
+            self.cursor_row = row.saturating_sub(1).min(self.rows - 1);
+        }
         self.cursor_col = col.saturating_sub(1).min(self.cols - 1);
     }
 
@@ -1385,11 +1564,60 @@ impl Grid {
         self.cursor_col = 0;
     }
 
-    /// Tab (HT)
+    /// Tab (HT) - move to next tab stop
     pub fn tab(&mut self) {
-        // Move to next multiple of 8 position
-        let next_tab = (self.cursor_col / 8 + 1) * 8;
-        self.cursor_col = next_tab.min(self.cols - 1);
+        // Search for next tab stop from current position
+        for col in (self.cursor_col + 1)..self.cols {
+            if self.tab_stops[col] {
+                self.cursor_col = col;
+                return;
+            }
+        }
+        // No tab stop found - move to last column
+        self.cursor_col = self.cols - 1;
+    }
+
+    /// Set tab stop at current cursor column (ESC H / HTS)
+    pub fn set_tab_stop(&mut self) {
+        if self.cursor_col < self.cols {
+            self.tab_stops[self.cursor_col] = true;
+        }
+    }
+
+    /// Clear tab stops (CSI g / TBC)
+    /// mode 0: clear at cursor column, mode 3: clear all
+    pub fn clear_tab_stop(&mut self, mode: u16) {
+        match mode {
+            0 => {
+                if self.cursor_col < self.cols {
+                    self.tab_stops[self.cursor_col] = false;
+                }
+            }
+            3 => {
+                self.tab_stops.fill(false);
+            }
+            _ => {}
+        }
+    }
+
+    /// Shift Out (SO / 0x0E) - activate G1 charset
+    pub fn shift_out(&mut self) {
+        self.active_charset = 1;
+    }
+
+    /// Shift In (SI / 0x0F) - activate G0 charset
+    pub fn shift_in(&mut self) {
+        self.active_charset = 0;
+    }
+
+    /// Set G0 character set (ESC ( C)
+    pub fn set_charset_g0(&mut self, charset: Charset) {
+        self.charset_g0 = charset;
+    }
+
+    /// Set G1 character set (ESC ) C)
+    pub fn set_charset_g1(&mut self, charset: Charset) {
+        self.charset_g1 = charset;
     }
 
     /// Backspace (BS)
@@ -1674,6 +1902,145 @@ impl Grid {
         }
     }
 
+    /// Save cursor state (DECSC / ESC 7)
+    /// Saves position, pen, charset, origin mode, auto-wrap per VT220 spec
+    pub fn save_dec_cursor(&mut self) {
+        self.saved_dec_cursor = Some(SavedCursor {
+            row: self.cursor_row,
+            col: self.cursor_col,
+            pen: self.pen.clone(),
+            charset_g0: self.charset_g0,
+            charset_g1: self.charset_g1,
+            active_charset: self.active_charset,
+            origin_mode: self.modes.origin_mode,
+            auto_wrap: self.modes.auto_wrap,
+        });
+    }
+
+    /// Restore cursor state (DECRC / ESC 8)
+    pub fn restore_dec_cursor(&mut self) {
+        if let Some(saved) = self.saved_dec_cursor.clone() {
+            self.cursor_row = saved.row.min(self.rows - 1);
+            self.cursor_col = saved.col.min(self.cols - 1);
+            self.pen = saved.pen;
+            self.charset_g0 = saved.charset_g0;
+            self.charset_g1 = saved.charset_g1;
+            self.active_charset = saved.active_charset;
+            self.modes.origin_mode = saved.origin_mode;
+            self.modes.auto_wrap = saved.auto_wrap;
+        }
+    }
+
+    /// Soft terminal reset (DECSTR / CSI ! p)
+    /// Resets modes and attributes without clearing screen
+    /// Reference: VT220 spec, xterm source code
+    pub fn soft_reset(&mut self) {
+        // DECSTR: Does NOT reset cursor position (per VT220 spec)
+        // Reset pen (SGR)
+        self.pen = Pen::default();
+        // Reset modes
+        self.modes.insert_mode = false;
+        self.modes.origin_mode = false;
+        self.modes.auto_wrap = true;
+        self.modes.reverse_video = false;
+        // Reset cursor style
+        self.cursor = CursorAppearance::default();
+        // Reset scroll region
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
+        // Reset character sets
+        self.charset_g0 = Charset::Ascii;
+        self.charset_g1 = Charset::Ascii;
+        self.active_charset = 0;
+        // Reset saved cursor
+        self.saved_dec_cursor = None;
+        self.saved_cursor = None;
+        // Reset keyboard modes
+        self.keyboard.kitty_flags = 0;
+        self.keyboard.kitty_stack.clear();
+        self.keyboard.modify_other_keys = 0;
+        // Reset hyperlink
+        self.current_hyperlink = None;
+        // Mark all dirty
+        self.mark_all_dirty();
+    }
+
+    /// Set palette color (OSC 4)
+    pub fn set_palette_color(&mut self, index: u8, r: u8, g: u8, b: u8) {
+        self.custom_palette[index as usize] = Some((r, g, b));
+        self.mark_all_dirty();
+    }
+
+    /// Get palette color (OSC 4 query)
+    pub fn get_palette_color(&self, index: u8) -> (u8, u8, u8) {
+        if let Some((r, g, b)) = self.custom_palette[index as usize] {
+            (r, g, b)
+        } else if let Some(ref palette) = self.ansi_palette {
+            if (index as usize) < 16 {
+                let c = palette[index as usize];
+                (
+                    (c[0] * 255.0) as u8,
+                    (c[1] * 255.0) as u8,
+                    (c[2] * 255.0) as u8,
+                )
+            } else {
+                let c = PALETTE_256[index as usize];
+                (
+                    (c[0] * 255.0) as u8,
+                    (c[1] * 255.0) as u8,
+                    (c[2] * 255.0) as u8,
+                )
+            }
+        } else {
+            let c = PALETTE_256[index as usize];
+            (
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+            )
+        }
+    }
+
+    /// Reset palette color (OSC 104)
+    pub fn reset_palette_color(&mut self, index: Option<u8>) {
+        match index {
+            Some(idx) => {
+                self.custom_palette[idx as usize] = None;
+            }
+            None => {
+                // Reset all
+                self.custom_palette = [None; 256];
+            }
+        }
+        self.mark_all_dirty();
+    }
+
+    /// Check if a DEC private mode is set (for DECRQM)
+    pub fn is_mode_set(&self, mode: u16) -> Option<bool> {
+        match mode {
+            1 => Some(self.modes.application_cursor_keys),
+            5 => Some(self.modes.reverse_video),
+            6 => Some(self.modes.origin_mode),
+            7 => Some(self.modes.auto_wrap),
+            25 => Some(self.modes.cursor_visible),
+            1000 => Some(self.modes.mouse_mode == MouseMode::X10),
+            1002 => Some(self.modes.mouse_mode == MouseMode::ButtonEvent),
+            1003 => Some(self.modes.mouse_mode == MouseMode::AnyEvent),
+            1004 => Some(self.modes.send_focus_events),
+            1006 => Some(self.modes.mouse_sgr),
+            1016 => Some(self.modes.mouse_sgr_pixels),
+            1049 => Some(self.alternate_screen.is_some()),
+            2004 => Some(self.modes.bracketed_paste),
+            2026 => Some(self.modes.synchronized_update),
+            _ => None, // Unknown mode
+        }
+    }
+
+    /// Get scroll region top/bottom (for DECRQSS)
+    pub fn scroll_region_1based(&self) -> (usize, usize) {
+        (self.scroll_top + 1, self.scroll_bottom + 1)
+    }
+
     /// Repeat last character (CSI b / REP)
     pub fn repeat_char(&mut self, n: usize) {
         let ch = self.last_char;
@@ -1696,8 +2063,12 @@ impl Grid {
             self.scroll_top = top;
             self.scroll_bottom = bottom;
         }
-        // Move cursor to top-left
-        self.cursor_row = 0;
+        // Move cursor to home (respecting DECOM)
+        if self.modes.origin_mode {
+            self.cursor_row = self.scroll_top;
+        } else {
+            self.cursor_row = 0;
+        }
         self.cursor_col = 0;
     }
 
@@ -1712,6 +2083,8 @@ impl Grid {
         if self.alternate_screen.is_some() {
             return; // Already in alternate screen
         }
+        // Save DECSC cursor before switching (per xterm ?1049 spec)
+        self.save_dec_cursor();
         // Save current state (including pen and scroll region per xterm spec)
         let saved = AlternateScreen {
             cells: self.cells.clone(),
@@ -1720,6 +2093,15 @@ impl Grid {
             pen: self.pen.clone(),
             scroll_top: self.scroll_top,
             scroll_bottom: self.scroll_bottom,
+            charset_g0: self.charset_g0,
+            charset_g1: self.charset_g1,
+            active_charset: self.active_charset,
+            modes_snapshot: ModeSnapshot {
+                origin_mode: self.modes.origin_mode,
+                insert_mode: self.modes.insert_mode,
+                reverse_video: self.modes.reverse_video,
+                auto_wrap: self.modes.auto_wrap,
+            },
         };
         self.alternate_screen = Some(saved);
         // Clear screen and reset state for alternate buffer
@@ -1743,8 +2125,67 @@ impl Grid {
             self.pen = saved.pen;
             self.scroll_top = saved.scroll_top;
             self.scroll_bottom = saved.scroll_bottom;
+            self.charset_g0 = saved.charset_g0;
+            self.charset_g1 = saved.charset_g1;
+            self.active_charset = saved.active_charset;
+            self.modes.origin_mode = saved.modes_snapshot.origin_mode;
+            self.modes.insert_mode = saved.modes_snapshot.insert_mode;
+            self.modes.reverse_video = saved.modes_snapshot.reverse_video;
+            self.modes.auto_wrap = saved.modes_snapshot.auto_wrap;
             self.image_placements.clear();
+            // Restore DECSC cursor (per xterm ?1049 spec)
+            self.restore_dec_cursor();
             // Mark all rows dirty for FBO cache invalidation
+            self.mark_all_dirty();
+        }
+    }
+
+    /// Switch to alternate screen without cursor save (?1047 set)
+    pub fn enter_alternate_screen_1047(&mut self) {
+        if self.alternate_screen.is_some() {
+            return;
+        }
+        let saved = AlternateScreen {
+            cells: self.cells.clone(),
+            cursor_row: self.cursor_row,
+            cursor_col: self.cursor_col,
+            pen: self.pen.clone(),
+            scroll_top: self.scroll_top,
+            scroll_bottom: self.scroll_bottom,
+            charset_g0: self.charset_g0,
+            charset_g1: self.charset_g1,
+            active_charset: self.active_charset,
+            modes_snapshot: ModeSnapshot {
+                origin_mode: self.modes.origin_mode,
+                insert_mode: self.modes.insert_mode,
+                reverse_video: self.modes.reverse_video,
+                auto_wrap: self.modes.auto_wrap,
+            },
+        };
+        self.alternate_screen = Some(saved);
+        self.cells = vec![Cell::default(); self.cols * self.rows];
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows - 1;
+        self.image_placements.clear();
+        self.mark_all_dirty();
+    }
+
+    /// Return from alternate screen (?1047 reset)
+    /// Clears alternate screen before switching back (per xterm spec)
+    pub fn leave_alternate_screen_1047(&mut self) {
+        if let Some(saved) = self.alternate_screen.take() {
+            self.cells = saved.cells;
+            self.cursor_row = saved.cursor_row;
+            self.cursor_col = saved.cursor_col;
+            self.pen = saved.pen;
+            self.scroll_top = saved.scroll_top;
+            self.scroll_bottom = saved.scroll_bottom;
+            self.charset_g0 = saved.charset_g0;
+            self.charset_g1 = saved.charset_g1;
+            self.active_charset = saved.active_charset;
+            self.image_placements.clear();
             self.mark_all_dirty();
         }
     }
@@ -1929,6 +2370,14 @@ impl Grid {
         // Clear row pool if column count changed (old rows have wrong size)
         if new_cols != old_cols {
             self.row_pool.clear();
+            // Resize tab stops
+            self.tab_stops.resize(new_cols, false);
+            // Set default tab stops for new columns
+            for i in (8..new_cols).step_by(8) {
+                if i >= old_cols {
+                    self.tab_stops[i] = true;
+                }
+            }
         }
 
         // Resize dirty_rows and mark all dirty

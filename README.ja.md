@@ -49,10 +49,12 @@ Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく�
 
 ### ターミナル
 - **スクロールバック**: 設定可能なバッファ (デフォルト: 10,000 行)
-- **マウスサポート**: 選択、ホイールスクロール、ボタンイベント (X10/SGR/URXVT)
+- **マウスサポート**: 選択、ホイールスクロール、ボタンイベント (X10/SGR/URXVT/SGR-Pixels)
 - **OSC 52 クリップボード**: エスケープシーケンスでクリップボード操作
 - **ブラケットペースト**: セキュアなペーストモード
 - **ハイパーリンク**: OSC 8 対応
+- **OSC 4/10/11/12**: パレット、前景色、背景色、カーソル色の動的変更
+- **通知**: OSC 9 (iTerm2) / OSC 99 (Kitty) 通知プロトコル — トーストオーバーレイ＋プログレスバー
 
 ### 入力
 - **キーボード**: evdev + xkbcommon による完全キーボードサポート
@@ -65,6 +67,7 @@ Unix 哲学に従い、一つのことをうまくやる。bcon は「美しく�
 - **テキスト検索**: スクロールバック内インクリメンタル検索 (Ctrl+Shift+F)
 - **スクリーンショット**: PNG で保存 (PrintScreen または Ctrl+Shift+S)
 - **フォント拡大縮小**: 実行時フォントサイズ変更 (Ctrl+Plus/Minus)
+- **通知パネル**: 通知履歴の閲覧 (Ctrl+Shift+N)、ミュート切替 (Ctrl+Shift+M)
 - **ビジュアルベル**: ベル文字で画面フラッシュ
 - **URL 検出**: Ctrl+クリックで URL をコピー
 - **モニターホットプラグ**: モニター接続/切断を自動検知・切替
@@ -227,6 +230,9 @@ xkb_options = "ctrl:nocaps"  # XKB オプション (Caps Lock を Ctrl に)
 prefer_external = true       # 外部モニター優先 (HDMI/DP > 内蔵)
 auto_switch = true           # ホットプラグ時に自動切り替え
 
+[notifications]
+enabled = true               # OSC 9/99 通知を有効化 (デフォルト: true)
+
 [paths]
 screenshot_dir = "~/Pictures"
 ```
@@ -279,6 +285,8 @@ sudo fc-cache -fv
 | フォントリセット | `Ctrl+0` | 同左 | 同左 | フォントサイズリセット |
 | スクロールアップ | `Shift+PageUp` | `Ctrl+Shift+U` | `Alt+Shift+V` | 上にスクロール |
 | スクロールダウン | `Shift+PageDown` | `Ctrl+Shift+D` | `Alt+Shift+N` | 下にスクロール |
+| 通知パネル | `Ctrl+Shift+N` | 同左 | 同左 | 通知パネルの開閉 |
+| 通知ミュート | `Ctrl+Shift+M` | 同左 | `Alt+Shift+M` | トースト通知のミュート切替 |
 
 1つのアクションに複数のキーを割り当て可能:
 

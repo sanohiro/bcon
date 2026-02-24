@@ -40,19 +40,21 @@ const fn param_or_default(param: u16, default: usize) -> usize {
 #[inline]
 const fn cursor_style_from_decscusr(param: u16) -> Option<(CursorStyle, bool)> {
     match param {
-        0 | 1 => Some((CursorStyle::Block, true)),      // Default / blinking block
-        2 => Some((CursorStyle::Block, false)),         // Steady block
-        3 => Some((CursorStyle::Underline, true)),      // Blinking underline
-        4 => Some((CursorStyle::Underline, false)),     // Steady underline
-        5 => Some((CursorStyle::Bar, true)),            // Blinking bar
-        6 => Some((CursorStyle::Bar, false)),           // Steady bar
+        0 | 1 => Some((CursorStyle::Block, true)), // Default / blinking block
+        2 => Some((CursorStyle::Block, false)),    // Steady block
+        3 => Some((CursorStyle::Underline, true)), // Blinking underline
+        4 => Some((CursorStyle::Underline, false)), // Steady underline
+        5 => Some((CursorStyle::Bar, true)),       // Blinking bar
+        6 => Some((CursorStyle::Bar, false)),      // Steady bar
         _ => None,
     }
 }
 
 use super::grid::{CellAttrs, Color, CursorStyle, Grid, Hyperlink, UnderlineStyle};
 use super::sixel::SixelDecoder;
-use super::{AnimationState, DcsHandler, ImageRegistry, TerminalImage};
+use super::{AnimationState, DcsHandler, ImageRegistry, Notification, NotificationProgress, TerminalImage};
+
+use std::collections::HashMap;
 
 /// Parse OSC color value
 /// Supports formats:
@@ -124,6 +126,14 @@ pub struct Performer<'a> {
     pub current_dir: &'a mut Option<String>,
     /// Clipboard file path (OSC 52)
     clipboard_path: &'a str,
+    /// Notification history
+    pub notifications: &'a mut Vec<Notification>,
+    /// Active progress bar state
+    pub active_progress: &'a mut Option<NotificationProgress>,
+    /// Pending (incomplete) OSC 99 notifications
+    pub pending_notifications: &'a mut HashMap<String, Notification>,
+    /// Whether notifications are enabled
+    pub notifications_enabled: &'a bool,
 }
 
 impl<'a> Performer<'a> {
@@ -137,6 +147,10 @@ impl<'a> Performer<'a> {
         current_dir: &'a mut Option<String>,
         clipboard_path: &'a str,
         pty_response: &'a mut Vec<u8>,
+        notifications: &'a mut Vec<Notification>,
+        active_progress: &'a mut Option<NotificationProgress>,
+        pending_notifications: &'a mut HashMap<String, Notification>,
+        notifications_enabled: &'a bool,
     ) -> Self {
         Self {
             grid,
@@ -148,6 +162,10 @@ impl<'a> Performer<'a> {
             cell_height,
             current_dir,
             clipboard_path,
+            notifications,
+            active_progress,
+            pending_notifications,
+            notifications_enabled,
         }
     }
 }
@@ -168,6 +186,8 @@ impl<'a> Perform for Performer<'a> {
                 self.grid.linefeed();
             }
             0x0D => self.grid.carriage_return(),     // CR
+            0x0E => self.grid.shift_out(),           // SO - activate G1 charset
+            0x0F => self.grid.shift_in(),            // SI - activate G0 charset
             0x07 => self.grid.bell_triggered = true, // BEL
             _ => {
                 trace!("Unhandled control character: 0x{:02x}", byte);
@@ -227,11 +247,13 @@ impl<'a> Perform for Performer<'a> {
             }
             ('G', []) => {
                 // CHA - Cursor Horizontal Absolute (column, 1-based)
-                self.grid.move_cursor_to(self.grid.cursor_row + 1, param_or_default(param0, 1));
+                self.grid
+                    .move_cursor_to(self.grid.cursor_row + 1, param_or_default(param0, 1));
             }
             ('d', []) => {
                 // VPA - Vertical Position Absolute (row, 1-based)
-                self.grid.move_cursor_to(param_or_default(param0, 1), self.grid.cursor_col + 1);
+                self.grid
+                    .move_cursor_to(param_or_default(param0, 1), self.grid.cursor_col + 1);
             }
             ('J', []) => {
                 // ED - Erase in Display
@@ -394,6 +416,68 @@ impl<'a> Perform for Performer<'a> {
                 }
                 trace!("Kitty keyboard: set flags={} mode={}", flags, mode);
             }
+            ('g', []) => {
+                // TBC - Tabulation Clear
+                // 0: clear at current column, 3: clear all
+                self.grid.clear_tab_stop(param0);
+            }
+            ('p', [b'!']) => {
+                // DECSTR - Soft Terminal Reset
+                self.grid.soft_reset();
+            }
+            ('h', []) => {
+                // SM - Set Mode (ANSI modes)
+                match param0 {
+                    4 => {
+                        // IRM - Insert/Replace Mode
+                        self.grid.modes.insert_mode = true;
+                    }
+                    _ => {
+                        trace!("Unhandled SM mode: {}", param0);
+                    }
+                }
+            }
+            ('l', []) => {
+                // RM - Reset Mode (ANSI modes)
+                match param0 {
+                    4 => {
+                        // IRM - Insert/Replace Mode
+                        self.grid.modes.insert_mode = false;
+                    }
+                    _ => {
+                        trace!("Unhandled RM mode: {}", param0);
+                    }
+                }
+            }
+            ('p', [b'?', b'$']) | ('p', [b'$']) => {
+                // DECRQM - DEC Request Mode
+                // CSI ? Ps $ p → response: CSI ? Ps ; Pm $ y
+                // Pm: 0=not recognized, 1=set, 2=reset, 3=permanently set, 4=permanently reset
+                let is_dec = intermediates.contains(&b'?');
+                if is_dec {
+                    let pm = match self.grid.is_mode_set(param0) {
+                        Some(true) => 1,  // Set
+                        Some(false) => 2, // Reset
+                        None => 0,        // Not recognized
+                    };
+                    let response = format!("\x1b[?{};{}$y", param0, pm);
+                    self.pty_response.extend_from_slice(response.as_bytes());
+                } else {
+                    // ANSI mode query
+                    let pm = match param0 {
+                        4 => {
+                            if self.grid.modes.insert_mode {
+                                1
+                            } else {
+                                2
+                            }
+                        }
+                        _ => 0,
+                    };
+                    let response = format!("\x1b[{};{}$y", param0, pm);
+                    self.pty_response.extend_from_slice(response.as_bytes());
+                }
+            }
             ('r', []) => {
                 // DECSTBM - Set Top and Bottom Margins
                 let top = param0 as usize;
@@ -504,6 +588,44 @@ impl<'a> Perform for Performer<'a> {
                 let max_scrollback = self.grid.max_scrollback;
                 *self.grid = Grid::with_scrollback(cols, rows, max_scrollback);
             }
+            (b'7', []) => {
+                // DECSC - Save Cursor
+                self.grid.save_dec_cursor();
+            }
+            (b'8', []) => {
+                // DECRC - Restore Cursor
+                self.grid.restore_dec_cursor();
+            }
+            (b'H', []) => {
+                // HTS - Horizontal Tab Set
+                self.grid.set_tab_stop();
+            }
+            // SCS - Select Character Set (G0)
+            (b'B', [b'(']) => {
+                // ESC ( B → ASCII
+                self.grid.set_charset_g0(super::grid::Charset::Ascii);
+            }
+            (b'0', [b'(']) => {
+                // ESC ( 0 → DEC Special Graphics (line drawing)
+                self.grid.set_charset_g0(super::grid::Charset::DecSpecial);
+            }
+            // SCS - Select Character Set (G1)
+            (b'B', [b')']) => {
+                // ESC ) B → ASCII
+                self.grid.set_charset_g1(super::grid::Charset::Ascii);
+            }
+            (b'0', [b')']) => {
+                // ESC ) 0 → DEC Special Graphics
+                self.grid.set_charset_g1(super::grid::Charset::DecSpecial);
+            }
+            // Other charset designators - treat as ASCII
+            (_, [b'(']) | (_, [b')']) => {
+                trace!(
+                    "Unhandled SCS designator: 0x{:02x} intermediates={:?}",
+                    byte,
+                    intermediates
+                );
+            }
             _ => {
                 trace!(
                     "Unhandled ESC: byte=0x{:02x}, intermediates={:?}",
@@ -534,6 +656,11 @@ impl<'a> Perform for Performer<'a> {
                 trace!("XTGETTCAP query started");
                 *self.dcs_handler = Some(DcsHandler::XtGetTcap(Vec::new()));
             }
+            // DECRQSS: DCS $ q Pt ST
+            ('q', [b'$']) => {
+                trace!("DECRQSS query started");
+                *self.dcs_handler = Some(DcsHandler::Decrqss(Vec::new()));
+            }
             _ => {}
         }
     }
@@ -549,6 +676,11 @@ impl<'a> Perform for Performer<'a> {
                     buffer.push(byte);
                 }
             }
+            Some(DcsHandler::Decrqss(ref mut buffer)) => {
+                if buffer.len() < 256 {
+                    buffer.push(byte);
+                }
+            }
             None => {}
         }
     }
@@ -560,6 +692,10 @@ impl<'a> Perform for Performer<'a> {
                 DcsHandler::XtGetTcap(buffer) => {
                     // Generate XTGETTCAP response
                     self.handle_xtgettcap(&buffer);
+                }
+                DcsHandler::Decrqss(buffer) => {
+                    // Generate DECRQSS response
+                    self.handle_decrqss(&buffer);
                 }
                 DcsHandler::Sixel(decoder) => {
                     // Decode complete, register image
@@ -607,11 +743,31 @@ impl<'a> Perform for Performer<'a> {
         let cmd = std::str::from_utf8(params[0]).unwrap_or("");
         trace!("OSC dispatch: cmd={}, params.len()={}", cmd, params.len());
         match cmd {
-            "52" => self.handle_osc_52(params),
+            "0" | "1" | "2" => self.handle_osc_title(params),
+            "4" => self.handle_osc_4(params),
             "7" => self.handle_osc_7(params),
             "8" => self.handle_osc_8(params),
             "10" => self.handle_osc_10(params),
             "11" => self.handle_osc_11(params),
+            "12" => self.handle_osc_12(params),
+            "52" => self.handle_osc_52(params),
+            "104" => self.handle_osc_104(params),
+            "110" => {
+                // Reset foreground color to default
+                self.grid.colors.fg = None;
+                self.grid.mark_all_dirty();
+            }
+            "111" => {
+                // Reset background color to default
+                self.grid.colors.bg = None;
+                self.grid.mark_all_dirty();
+            }
+            "112" => {
+                // Reset cursor color to default
+                self.grid.colors.cursor = None;
+            }
+            "9" => self.handle_osc_9(params),
+            "99" => self.handle_osc_99(params),
             "133" => self.handle_osc_133(params),
             _ => {
                 trace!("Unhandled OSC: cmd={}", cmd);
@@ -634,6 +790,27 @@ impl<'a> Performer<'a> {
                 // instead of normal sequences (ESC [ A/B/C/D)
                 self.grid.modes.application_cursor_keys = enable;
             }
+            5 => {
+                // DECSCNM: Screen Mode (reverse video)
+                // When set, swap foreground/background for entire screen
+                if self.grid.modes.reverse_video != enable {
+                    self.grid.modes.reverse_video = enable;
+                    self.grid.mark_all_dirty();
+                }
+            }
+            6 => {
+                // DECOM: Origin Mode
+                // When set, cursor addressing is relative to scroll region
+                self.grid.modes.origin_mode = enable;
+                // Move cursor to origin on mode change
+                if enable {
+                    let (top, _) = self.grid.scroll_region();
+                    self.grid.cursor_row = top;
+                } else {
+                    self.grid.cursor_row = 0;
+                }
+                self.grid.cursor_col = 0;
+            }
             7 => {
                 // DECAWM: Auto-wrap Mode
                 // When set, text wraps to next line at right margin
@@ -646,6 +823,22 @@ impl<'a> Performer<'a> {
             }
 
             // === Xterm Extensions ===
+            1047 => {
+                // Alternate Screen Buffer (without save/restore cursor)
+                if enable {
+                    self.grid.enter_alternate_screen_1047();
+                } else {
+                    self.grid.leave_alternate_screen_1047();
+                }
+            }
+            1048 => {
+                // Save/Restore Cursor (equivalent to DECSC/DECRC)
+                if enable {
+                    self.grid.save_dec_cursor();
+                } else {
+                    self.grid.restore_dec_cursor();
+                }
+            }
             1049 => {
                 // Alternate Screen Buffer (with save/restore cursor)
                 // Used by vim, less, etc. to preserve main screen content
@@ -669,13 +862,23 @@ impl<'a> Performer<'a> {
                 } else {
                     MouseMode::None
                 };
-                debug!("Mouse mode: ?{} {} → {:?}", mode, if enable { "h" } else { "l" }, new_mode);
+                debug!(
+                    "Mouse mode: ?{} {} → {:?}",
+                    mode,
+                    if enable { "h" } else { "l" },
+                    new_mode
+                );
                 self.grid.modes.mouse_mode = new_mode;
             }
             1006 => {
                 // SGR Extended Mouse Mode
                 // Uses CSI < Pb ; Px ; Py M/m format (supports coordinates > 223)
                 self.grid.modes.mouse_sgr = enable;
+            }
+            1016 => {
+                // SGR-Pixels Mouse Mode
+                // Like 1006 but reports pixel coordinates instead of cell coordinates
+                self.grid.modes.mouse_sgr_pixels = enable;
             }
 
             // === Modern Extensions ===
@@ -1091,6 +1294,287 @@ impl<'a> Performer<'a> {
         }
     }
 
+    /// OSC 0/1/2 (window title) handler
+    /// Format: ESC ] 0 ; title ST (icon + title)
+    /// Format: ESC ] 2 ; title ST (title only)
+    fn handle_osc_title(&mut self, params: &[&[u8]]) {
+        if params.len() < 2 {
+            return;
+        }
+        let title = String::from_utf8_lossy(params[1]).to_string();
+        self.grid.window_title = Some(title.clone());
+        trace!("OSC title: {}", title);
+    }
+
+    /// OSC 4 (color palette) handler
+    /// Format: ESC ] 4 ; index ; color ST (set)
+    /// Format: ESC ] 4 ; index ; ? ST (query)
+    fn handle_osc_4(&mut self, params: &[&[u8]]) {
+        // OSC 4 can have multiple index;color pairs: ESC]4;idx1;color1;idx2;color2 ST
+        // vte splits on ';', so params = ["4", idx1, color1, idx2, color2, ...]
+        if params.len() < 3 {
+            return;
+        }
+
+        let mut i = 1;
+        while i + 1 < params.len() {
+            let index_str = std::str::from_utf8(params[i]).unwrap_or("");
+            let index: u8 = match index_str.parse::<u16>() {
+                Ok(v) if v < 256 => v as u8,
+                _ => { i += 2; continue; }
+            };
+
+            let data = params[i + 1];
+            if data == b"?" {
+                // Query: respond with current color
+                let (r, g, b) = self.grid.get_palette_color(index);
+                let response = format!(
+                    "\x1b]4;{};rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
+                    index, r, r, g, g, b, b
+                );
+                self.pty_response.extend_from_slice(response.as_bytes());
+            } else {
+                // Set: parse color value
+                if let Some((r, g, b)) = parse_osc_color(data) {
+                    self.grid.set_palette_color(index, r, g, b);
+                    trace!("OSC 4: palette[{}] = ({},{},{})", index, r, g, b);
+                } else {
+                    trace!("OSC 4: failed to parse color for palette[{}]: {:?}",
+                          index, std::str::from_utf8(data));
+                }
+            }
+            i += 2;
+        }
+    }
+
+    /// OSC 12 (cursor color query/set) handler
+    fn handle_osc_12(&mut self, params: &[&[u8]]) {
+        let param = if params.len() > 1 {
+            params[1]
+        } else {
+            return;
+        };
+
+        if param == b"?" {
+            // Query: return current cursor color
+            let (r, g, b) = self.grid.colors.cursor.unwrap_or((0xff, 0xff, 0xff));
+            let response = format!(
+                "\x1b]12;rgb:{:02x}{:02x}/{:02x}{:02x}/{:02x}{:02x}\x1b\\",
+                r, r, g, g, b, b
+            );
+            self.pty_response.extend_from_slice(response.as_bytes());
+        } else {
+            // Set: parse color value
+            if let Some(rgb) = parse_osc_color(param) {
+                self.grid.colors.cursor = Some(rgb);
+                trace!("OSC 12: cursor color set to {:?}", rgb);
+            }
+        }
+    }
+
+    /// OSC 104 (reset palette color) handler
+    /// Format: ESC ] 104 ST (reset all)
+    /// Format: ESC ] 104 ; index ST (reset one)
+    fn handle_osc_104(&mut self, params: &[&[u8]]) {
+        if params.len() < 2 {
+            // Reset all palette colors
+            self.grid.reset_palette_color(None);
+        } else {
+            let index_str = std::str::from_utf8(params[1]).unwrap_or("");
+            if let Ok(idx) = index_str.parse::<u16>() {
+                if idx < 256 {
+                    self.grid.reset_palette_color(Some(idx as u8));
+                }
+            } else {
+                // No valid index = reset all
+                self.grid.reset_palette_color(None);
+            }
+        }
+    }
+
+    /// OSC 9 (iTerm2 notification / ConEmu progress) handler
+    /// Note: vte crate splits on ';', so params are already separated:
+    ///   OSC 9 ; message ST          → params = ["9", "message"]
+    ///   OSC 9 ; 4 ; state ; pct ST  → params = ["9", "4", "state", "pct"]
+    ///   OSC 9 ; 4 ST                → params = ["9", "4"]
+    fn handle_osc_9(&mut self, params: &[&[u8]]) {
+        if params.len() < 2 {
+            return;
+        }
+
+        let first = std::str::from_utf8(params[1]).unwrap_or("");
+
+        // Progress: params[1] == "4"
+        if first == "4" {
+            if params.len() >= 4 {
+                // OSC 9;4;state;percent → params = ["9","4","state","percent"]
+                let state = std::str::from_utf8(params[2])
+                    .ok()
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .unwrap_or(0);
+                let percent = std::str::from_utf8(params[3])
+                    .ok()
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .unwrap_or(0)
+                    .min(100);
+                if state == 0 {
+                    *self.active_progress = None;
+                    debug!("OSC 9: progress stopped (state=0)");
+                } else {
+                    *self.active_progress = Some(NotificationProgress { state, percent });
+                    debug!("OSC 9: progress state={} percent={}%", state, percent);
+                }
+            } else {
+                // OSC 9;4 → stop progress
+                *self.active_progress = None;
+                debug!("OSC 9: progress stopped");
+            }
+            return;
+        }
+
+        // Regular notification — rejoin remaining params with ';' (message may contain ';')
+        let mut title = first.to_string();
+        for p in &params[2..] {
+            title.push(';');
+            title.push_str(&String::from_utf8_lossy(p));
+        }
+        info!("OSC 9: notification '{}'", title);
+        self.push_notification(Notification {
+            id: None,
+            title,
+            body: String::new(),
+            urgency: 1,
+            timestamp: std::time::Instant::now(),
+        });
+    }
+
+    /// OSC 99 (Kitty notification protocol) handler
+    /// Format: OSC 99 ; metadata ; payload ST
+    /// Metadata: colon-separated key=value pairs (e.g., "i=id:d=1:p=title")
+    fn handle_osc_99(&mut self, params: &[&[u8]]) {
+        if params.len() < 2 {
+            return;
+        }
+
+        // Parse metadata from params[1]
+        let meta_str = String::from_utf8_lossy(params[1]);
+        let payload = if params.len() > 2 {
+            String::from_utf8_lossy(params[2]).to_string()
+        } else {
+            String::new()
+        };
+
+        // Parse key=value pairs from metadata
+        let mut id: Option<String> = None;
+        let mut done = true; // d=1 is default (complete)
+        let mut payload_type = String::from("title"); // p=title is default
+        let mut urgency: u8 = 1;
+
+        for kv in meta_str.split(':') {
+            if let Some((key, value)) = kv.split_once('=') {
+                match key {
+                    "i" => id = Some(value.to_string()),
+                    "d" => done = value != "0",
+                    "p" => payload_type = value.to_string(),
+                    "u" => urgency = value.parse().unwrap_or(1).min(2),
+                    "e" => {
+                        // e=1 means close notification with this id
+                        if value == "1" {
+                            if let Some(ref close_id) = id {
+                                self.pending_notifications.remove(close_id);
+                            }
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Handle query (p=?)
+        if payload_type == "?" {
+            // Report capabilities per Kitty notification spec:
+            //   metadata: i=<id>:p=?  (echo back query marker)
+            //   payload:  p=title,body:a=focus:o=always:u=0,1,2
+            let resp_id = id.as_deref().unwrap_or("");
+            let response = format!(
+                "\x1b]99;i={}:p=?;p=title,body:a=focus:o=always:u=0,1,2\x1b\\",
+                resp_id
+            );
+            self.pty_response.extend_from_slice(response.as_bytes());
+            debug!("OSC 99: query response sent");
+            return;
+        }
+
+        if !done {
+            // Incomplete notification: store/update in pending
+            let notif_id = id.clone().unwrap_or_default();
+            let entry = self.pending_notifications.entry(notif_id).or_insert_with(|| Notification {
+                id: id.clone(),
+                title: String::new(),
+                body: String::new(),
+                urgency,
+                timestamp: std::time::Instant::now(),
+            });
+            match payload_type.as_str() {
+                "title" => entry.title = payload,
+                "body" => entry.body = payload,
+                _ => {}
+            }
+            debug!("OSC 99: pending notification updated (id={:?})", id);
+        } else {
+            // Complete notification
+            let notif_id = id.clone().unwrap_or_default();
+
+            // Check if there's a pending notification to complete
+            let mut notif = if let Some(mut pending) = self.pending_notifications.remove(&notif_id) {
+                // Update with final payload
+                match payload_type.as_str() {
+                    "title" => pending.title = payload,
+                    "body" => pending.body = payload,
+                    _ => {}
+                }
+                pending.urgency = urgency;
+                pending
+            } else {
+                // New complete notification
+                let mut n = Notification {
+                    id: id.clone(),
+                    title: String::new(),
+                    body: String::new(),
+                    urgency,
+                    timestamp: std::time::Instant::now(),
+                };
+                match payload_type.as_str() {
+                    "title" => n.title = payload,
+                    "body" => n.body = payload,
+                    _ => {}
+                }
+                n
+            };
+
+            // Default title if empty
+            if notif.title.is_empty() && !notif.body.is_empty() {
+                notif.title = notif.body.clone();
+                notif.body = String::new();
+            }
+
+            info!("OSC 99: notification '{}' (id={:?})", notif.title, notif.id);
+            self.push_notification(notif);
+        }
+    }
+
+    /// Push a notification to the history list (capped at MAX_NOTIFICATIONS)
+    fn push_notification(&mut self, notif: Notification) {
+        if !*self.notifications_enabled {
+            return;
+        }
+        self.notifications.push(notif);
+        if self.notifications.len() > super::MAX_NOTIFICATIONS {
+            self.notifications.remove(0);
+        }
+    }
+
     /// XTGETTCAP (DCS + q) handler
     /// Query: DCS + q Pt ST (Pt is hex-encoded capability name, ; separated)
     /// Response: DCS 1 + r Pt = Pv ST (capability exists) or DCS 0 + r Pt ST (not found)
@@ -1130,6 +1614,49 @@ impl<'a> Performer<'a> {
         if !response.is_empty() {
             trace!("XTGETTCAP: sending {} bytes response", response.len());
             self.pty_response.extend_from_slice(&response);
+        }
+    }
+
+    /// DECRQSS (DCS $ q) handler
+    /// Query: DCS $ q Pt ST (Pt is the setting to query)
+    /// Response: DCS Ps $ r Pt ST (Ps=1 valid, Ps=0 invalid)
+    fn handle_decrqss(&mut self, buffer: &[u8]) {
+        let query = std::str::from_utf8(buffer).unwrap_or("");
+        trace!("DECRQSS: query={:?}", query);
+
+        let response = match query {
+            // SGR (Select Graphic Rendition)
+            "m" => {
+                // Report current SGR state as "0m" (simplified - always report reset)
+                // A full implementation would serialize the current pen state
+                Some("\x1bP1$r0m\x1b\\".to_string())
+            }
+            // DECSTBM (scroll region)
+            "r" => {
+                let (top, bottom) = self.grid.scroll_region_1based();
+                Some(format!("\x1bP1$r{};{}r\x1b\\", top, bottom))
+            }
+            // DECSCUSR (cursor style)
+            " q" => {
+                let style_code = match (self.grid.cursor.style, self.grid.cursor.blink) {
+                    (CursorStyle::Block, true) => 1,
+                    (CursorStyle::Block, false) => 2,
+                    (CursorStyle::Underline, true) => 3,
+                    (CursorStyle::Underline, false) => 4,
+                    (CursorStyle::Bar, true) => 5,
+                    (CursorStyle::Bar, false) => 6,
+                };
+                Some(format!("\x1bP1$r{} q\x1b\\", style_code))
+            }
+            _ => {
+                // Not recognized
+                trace!("DECRQSS: unknown setting {:?}", query);
+                Some(format!("\x1bP0$r\x1b\\"))
+            }
+        };
+
+        if let Some(resp) = response {
+            self.pty_response.extend_from_slice(resp.as_bytes());
         }
     }
 
