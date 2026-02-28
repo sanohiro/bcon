@@ -39,6 +39,8 @@ pub struct Config {
     pub display: DisplayOutputConfig,
     /// Notification settings
     pub notifications: NotificationConfig,
+    /// Security settings
+    pub security: SecurityConfig,
 }
 
 /// Font settings
@@ -55,7 +57,7 @@ pub struct FontConfig {
     pub emoji: String,
     /// Font size
     pub size: f32,
-    /// Rendering mode: "grayscale" (default) or "lcd"
+    /// Rendering mode: "lcd" (default) or "grayscale"
     /// LCD mode provides high-quality subpixel rendering,
     /// but is not suitable for rotated/scaled displays
     pub render_mode: String,
@@ -330,6 +332,7 @@ impl Default for Config {
             keyboard: KeyboardInputConfig::default(),
             display: DisplayOutputConfig::default(),
             notifications: NotificationConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -342,7 +345,7 @@ impl Default for FontConfig {
             cjk: String::new(),
             emoji: String::new(),
             size: 16.0,
-            render_mode: "lcd".to_string(),    // LCD subpixel rendering (high quality)
+            render_mode: "lcd".to_string(), // LCD subpixel rendering (high quality)
             lcd_filter: "default".to_string(), // Sharp (less blur than light)
             lcd_weights: None,
             lcd_subpixel: "rgb".to_string(),  // For common panels
@@ -519,6 +522,24 @@ impl Default for NotificationConfig {
     }
 }
 
+/// Security settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecurityConfig {
+    /// Allow Kitty graphics protocol remote file/shm transfers (t=f, t=t, t=s).
+    /// Default: false (only direct base64 transfer t=d is allowed).
+    /// When enabled, temp file paths are restricted to /tmp/ and /dev/shm/.
+    pub allow_kitty_remote: bool,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            allow_kitty_remote: false,
+        }
+    }
+}
+
 impl Default for KeybindConfig {
     fn default() -> Self {
         Self::default_preset()
@@ -552,16 +573,16 @@ impl KeybindConfig {
     /// (Ctrl+S/Y/V/Space conflicts with bash/zsh/tmux, so avoided)
     pub fn emacs_preset() -> Self {
         Self {
-            copy: vec!["ctrl+shift+w".to_string()],      // M-w (kill-ring-save) style
-            paste: vec!["ctrl+shift+y".to_string()],     // C-y (yank) style
+            copy: vec!["ctrl+shift+w".to_string()], // M-w (kill-ring-save) style
+            paste: vec!["ctrl+shift+y".to_string()], // C-y (yank) style
             screenshot: vec!["printscreen".to_string()],
-            search: vec!["ctrl+shift+s".to_string()],    // C-s (isearch) style
+            search: vec!["ctrl+shift+s".to_string()], // C-s (isearch) style
             copy_mode: vec!["ctrl+shift+m".to_string()], // M for Mark/Mode
             // "=" is the key that has "+" with Shift on US keyboards
             font_increase: vec!["ctrl+=".to_string(), "ctrl+shift+=".to_string()],
             font_decrease: vec!["ctrl+minus".to_string(), "ctrl+shift+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
-            scroll_up: vec!["alt+shift+v".to_string()],   // M-S-v (safe Emacs-like)
+            scroll_up: vec!["alt+shift+v".to_string()], // M-S-v (safe Emacs-like)
             scroll_down: vec!["alt+shift+n".to_string()], // M-S-n (safe Emacs-like)
             ime_toggle: vec!["ctrl+shift+j".to_string()],
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
@@ -739,7 +760,8 @@ impl Config {
             }
 
             // Symbols / Nerd Font
-            let nerd_font = finder.as_ref()
+            let nerd_font = finder
+                .as_ref()
                 .and_then(|f| f.find_nerd_font())
                 .map(|m| m.family)
                 .or_else(detect_nerd_font_path);

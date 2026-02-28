@@ -25,3 +25,13 @@ pub use lcd_renderer::LcdTextRenderer;
 pub use lcd_renderer_instanced::LcdTextRendererInstanced;
 pub use renderer::CurlyRenderer;
 pub use ui_renderer::UiRenderer;
+
+/// Cast a slice of any type to a byte slice (for OpenGL buffer uploads).
+pub fn bytemuck_cast_slice<T>(slice: &[T]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            slice.as_ptr() as *const u8,
+            slice.len() * std::mem::size_of::<T>(),
+        )
+    }
+}

@@ -11,7 +11,7 @@ pub mod parser;
 pub mod pty;
 pub mod sixel;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use anyhow::Result;
 use log::{info, trace};
@@ -198,11 +198,23 @@ pub struct Selection {
 
 impl Selection {
     /// Return normalized range (guarantees start <= end)
+    /// Both anchor_col and end_col are stored as inclusive cell positions.
+    /// This method returns (sr, sc, er, ec) where sc is inclusive and ec is EXCLUSIVE.
     pub fn normalized(&self) -> (usize, usize, usize, usize) {
         if (self.anchor_row, self.anchor_col) <= (self.end_row, self.end_col) {
-            (self.anchor_row, self.anchor_col, self.end_row, self.end_col)
+            (
+                self.anchor_row,
+                self.anchor_col,
+                self.end_row,
+                self.end_col + 1,
+            )
         } else {
-            (self.end_row, self.end_col, self.anchor_row, self.anchor_col)
+            (
+                self.end_row,
+                self.end_col,
+                self.anchor_row,
+                self.anchor_col + 1,
+            )
         }
     }
 
@@ -216,7 +228,11 @@ impl Selection {
             return None;
         }
         let start = if row == sr { sc } else { 0 };
-        let end = if row == er { ec } else { max_cols };
+        let end = if row == er {
+            ec.min(max_cols)
+        } else {
+            max_cols
+        };
         if start >= end {
             return None;
         }
@@ -299,12 +315,25 @@ pub struct TerminalImage {
     pub current_loop: u32,
 }
 
+/// Maximum total image memory (512MB)
+const MAX_TOTAL_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+
+/// Maximum number of images in registry
+const MAX_IMAGE_COUNT: usize = 256;
+
 /// Image registry (manages Sixel, Kitty, etc. images)
 pub struct ImageRegistry {
     /// Image map (ID -> TerminalImage)
     images: HashMap<u32, TerminalImage>,
     /// Next ID to assign
     pub next_id: u32,
+    /// Total tracked image memory in bytes
+    total_bytes: usize,
+}
+
+/// Calculate memory usage of a TerminalImage
+fn image_byte_size(image: &TerminalImage) -> usize {
+    image.data.len() + image.frames.iter().map(|f| f.data.len()).sum::<usize>()
 }
 
 impl ImageRegistry {
@@ -313,12 +342,43 @@ impl ImageRegistry {
         Self {
             images: HashMap::new(),
             next_id: 1,
+            total_bytes: 0,
         }
     }
 
-    /// Register image and return its ID
+    /// Register image and return its ID.
+    /// Evicts oldest images (by lowest ID) if count or memory limits are exceeded.
     pub fn insert(&mut self, image: TerminalImage) -> u32 {
         let id = image.id;
+        let new_size = image_byte_size(&image);
+
+        // If replacing existing image, subtract old size first
+        if let Some(old) = self.images.remove(&id) {
+            self.total_bytes = self.total_bytes.saturating_sub(image_byte_size(&old));
+        }
+
+        // Evict oldest images while over limits
+        while (self.images.len() >= MAX_IMAGE_COUNT
+            || self.total_bytes + new_size > MAX_TOTAL_IMAGE_BYTES)
+            && !self.images.is_empty()
+        {
+            // Find the smallest ID (oldest image)
+            let oldest_id = match self.images.keys().min().copied() {
+                Some(id) => id,
+                None => break,
+            };
+            if let Some(removed) = self.images.remove(&oldest_id) {
+                let removed_size = image_byte_size(&removed);
+                self.total_bytes = self.total_bytes.saturating_sub(removed_size);
+                log::trace!(
+                    "ImageRegistry: evicted image {} ({} bytes) to stay within limits",
+                    oldest_id,
+                    removed_size
+                );
+            }
+        }
+
+        self.total_bytes += new_size;
         self.images.insert(id, image);
         if id >= self.next_id {
             self.next_id = id + 1;
@@ -331,19 +391,49 @@ impl ImageRegistry {
         self.images.get(&id)
     }
 
-    /// Get mutable image by ID
+    /// Get mutable image by ID.
+    /// After mutating the image (e.g. adding frames), call `update_tracking(id)`
+    /// to keep total_bytes accurate.
     pub fn get_mut(&mut self, id: u32) -> Option<&mut TerminalImage> {
         self.images.get_mut(&id)
     }
 
+    /// Recalculate total_bytes and evict oldest images if over limits.
+    /// Call after mutating images via get_mut() (e.g. frame add/replace).
+    pub fn enforce_limits(&mut self) {
+        self.total_bytes = self.images.values().map(image_byte_size).sum();
+        while (self.images.len() > MAX_IMAGE_COUNT || self.total_bytes > MAX_TOTAL_IMAGE_BYTES)
+            && !self.images.is_empty()
+        {
+            let oldest_id = match self.images.keys().min().copied() {
+                Some(id) => id,
+                None => break,
+            };
+            if let Some(removed) = self.images.remove(&oldest_id) {
+                let removed_size = image_byte_size(&removed);
+                self.total_bytes = self.total_bytes.saturating_sub(removed_size);
+                log::trace!(
+                    "ImageRegistry: evicted image {} ({} bytes) after frame update",
+                    oldest_id,
+                    removed_size
+                );
+            }
+        }
+    }
+
     /// Remove image by ID
     pub fn remove(&mut self, id: u32) -> Option<TerminalImage> {
-        self.images.remove(&id)
+        let removed = self.images.remove(&id);
+        if let Some(ref img) = removed {
+            self.total_bytes = self.total_bytes.saturating_sub(image_byte_size(img));
+        }
+        removed
     }
 
     /// Remove all images
     pub fn clear(&mut self) {
         self.images.clear();
+        self.total_bytes = 0;
     }
 
     /// Check if image exists by ID
@@ -413,13 +503,17 @@ pub struct Terminal {
     /// Image IDs whose GPU textures need re-upload (image data changed for existing ID)
     pub dirty_image_ids: Vec<u32>,
     /// Notification history (oldest first, max MAX_NOTIFICATIONS)
-    pub notifications: Vec<Notification>,
+    pub notifications: VecDeque<Notification>,
+    /// Monotonically increasing counter for notification toast detection
+    pub notification_seq: u64,
     /// Whether notifications are enabled (config: notifications.enabled)
     pub notifications_enabled: bool,
     /// Current progress bar state (OSC 9;4)
     pub active_progress: Option<NotificationProgress>,
     /// Pending OSC 99 notifications (incomplete, keyed by id)
     pub pending_notifications: HashMap<String, Notification>,
+    /// Allow Kitty graphics remote file/shm transfers (from config)
+    pub allow_kitty_remote: bool,
 }
 
 impl Terminal {
@@ -471,10 +565,12 @@ impl Terminal {
             current_directory: None,
             pty_response: Vec::with_capacity(256),
             dirty_image_ids: Vec::new(),
-            notifications: Vec::new(),
+            notifications: VecDeque::new(),
+            notification_seq: 0,
             notifications_enabled: true,
             active_progress: None,
             pending_notifications: HashMap::new(),
+            allow_kitty_remote: false,
         })
     }
 
@@ -483,11 +579,11 @@ impl Terminal {
         self.cell_width = width;
         self.cell_height = height;
 
-        // Notify PTY of pixel size
-        let cols = self.grid.cols() as u16;
-        let rows = self.grid.rows() as u16;
-        let xpixel = (cols as u32 * width) as u16;
-        let ypixel = (rows as u32 * height) as u16;
+        // Notify PTY of pixel size (clamp to u16::MAX for safety)
+        let cols = (self.grid.cols() as u32).min(u16::MAX as u32) as u16;
+        let rows = (self.grid.rows() as u32).min(u16::MAX as u32) as u16;
+        let xpixel = (cols as u32).saturating_mul(width).min(u16::MAX as u32) as u16;
+        let ypixel = (rows as u32).saturating_mul(height).min(u16::MAX as u32) as u16;
         if let Err(e) = self.pty.resize_with_pixels(cols, rows, xpixel, ypixel) {
             log::warn!("Failed to set PTY pixel size: {}", e);
         }
@@ -548,13 +644,19 @@ impl Terminal {
         // Resize grid
         self.grid.resize(new_cols, new_rows);
 
-        // Resize PTY (with pixel size)
-        let xpixel = (new_cols as u32 * self.cell_width) as u16;
-        let ypixel = (new_rows as u32 * self.cell_height) as u16;
-        if let Err(e) =
-            self.pty
-                .resize_with_pixels(new_cols as u16, new_rows as u16, xpixel, ypixel)
-        {
+        // Resize PTY (with pixel size, clamp to u16::MAX)
+        let xpixel = (new_cols as u32)
+            .saturating_mul(self.cell_width)
+            .min(u16::MAX as u32) as u16;
+        let ypixel = (new_rows as u32)
+            .saturating_mul(self.cell_height)
+            .min(u16::MAX as u32) as u16;
+        if let Err(e) = self.pty.resize_with_pixels(
+            (new_cols as u32).min(u16::MAX as u32) as u16,
+            (new_rows as u32).min(u16::MAX as u32) as u16,
+            xpixel,
+            ypixel,
+        ) {
             log::warn!("PTY resize failed: {}", e);
         }
 
@@ -615,6 +717,7 @@ impl Terminal {
             &self.clipboard_path,
             &mut self.pty_response,
             &mut self.notifications,
+            &mut self.notification_seq,
             &mut self.active_progress,
             &mut self.pending_notifications,
             &self.notifications_enabled,
@@ -640,6 +743,7 @@ impl Terminal {
 
     /// Slow path: byte-by-byte processing with APC state machine
     fn process_pty_output_slow(&mut self, n: usize) {
+        self.pty_response.clear();
         for i in 0..n {
             let byte = self.read_buf[i];
 
@@ -704,6 +808,7 @@ impl Terminal {
             &self.clipboard_path,
             &mut self.pty_response,
             &mut self.notifications,
+            &mut self.notification_seq,
             &mut self.active_progress,
             &mut self.pending_notifications,
             &self.notifications_enabled,
@@ -810,18 +915,20 @@ impl Terminal {
                 | KittyAction::TransmitAndDisplay
                 | KittyAction::Frame
                 | KittyAction::Compose
-                | KittyAction::Animation => match decoder.finish(self.images.next_id) {
-                    Ok(result) => {
-                        self.handle_kitty_result(result, action, quiet);
-                    }
-                    Err(e) => {
-                        log::warn!("Kitty decode error: {}", e);
-                        if quiet < 2 {
-                            let resp = make_response(id, false, &e);
-                            self.write_response(&resp);
+                | KittyAction::Animation => {
+                    match decoder.finish(self.images.next_id, self.allow_kitty_remote) {
+                        Ok(result) => {
+                            self.handle_kitty_result(result, action, quiet);
+                        }
+                        Err(e) => {
+                            log::warn!("Kitty decode error: {}", e);
+                            if quiet < 2 {
+                                let resp = make_response(id, false, &e);
+                                self.write_response(&resp);
+                            }
                         }
                     }
-                },
+                }
             }
         }
     }
@@ -922,21 +1029,34 @@ impl Terminal {
                             image.frames[frame_idx] = frame;
                         } else {
                             // Extend frames array
-                            while image.frames.len() < frame_idx {
-                                // Fill gaps with empty frames
-                                image.frames.push(ImageFrame {
-                                    number: image.frames.len() as u32 + 2,
-                                    width: image.width,
-                                    height: image.height,
-                                    x: 0,
-                                    y: 0,
-                                    gap: 40,
-                                    data: vec![0u8; (image.width * image.height * 4) as usize],
-                                });
+                            let gap_frame_size = (image.width as usize)
+                                .saturating_mul(image.height as usize)
+                                .saturating_mul(4);
+                            if gap_frame_size > 256 * 1024 * 1024 {
+                                log::warn!(
+                                    "Kitty: gap frame too large ({}), skipping",
+                                    gap_frame_size
+                                );
+                            } else {
+                                while image.frames.len() < frame_idx {
+                                    // Fill gaps with empty frames
+                                    image.frames.push(ImageFrame {
+                                        number: image.frames.len() as u32 + 2,
+                                        width: image.width,
+                                        height: image.height,
+                                        x: 0,
+                                        y: 0,
+                                        gap: 40,
+                                        data: vec![0u8; gap_frame_size],
+                                    });
+                                }
+                                image.frames.push(frame);
                             }
-                            image.frames.push(frame);
                         }
                     }
+
+                    // Recalculate tracked memory after frame mutation
+                    self.images.enforce_limits();
 
                     if quiet < 2 {
                         let resp = make_response(frame_data.image_id, true, "");
@@ -1066,12 +1186,28 @@ fn compose_frames(
         &image.frames[idx].data
     };
 
+    // Bounds check: prevent u32 underflow when src/dst exceed image dimensions
+    if src_x >= image.width
+        || src_y >= image.height
+        || dst_x >= image.width
+        || dst_y >= image.height
+    {
+        return Ok(());
+    }
+
     // Copy source rectangle
     let img_width = image.width as usize;
     let copy_width = width.min(image.width - src_x).min(image.width - dst_x) as usize;
     let copy_height = height.min(image.height - src_y).min(image.height - dst_y) as usize;
 
-    let mut copied_data = vec![0u8; copy_width * copy_height * 4];
+    let alloc_size = copy_width.saturating_mul(copy_height).saturating_mul(4);
+    if alloc_size > 256 * 1024 * 1024 {
+        return Err(format!(
+            "compose_frames: allocation too large ({})",
+            alloc_size
+        ));
+    }
+    let mut copied_data = vec![0u8; alloc_size];
     for row in 0..copy_height {
         let src_row_start = ((src_y as usize + row) * img_width + src_x as usize) * 4;
         let dst_row_start = row * copy_width * 4;
@@ -1201,7 +1337,7 @@ impl Terminal {
 
         for row in sr..=er {
             let col_start = if row == sr { sc } else { 0 };
-            let col_end = if row == er { ec } else { cols };
+            let col_end = if row == er { ec.min(cols) } else { cols };
             for col in col_start..col_end {
                 let cell = self.display_cell(row, col);
                 if cell.width == 0 {
@@ -1301,12 +1437,12 @@ impl Terminal {
             end_col += 1;
         }
 
-        // Selection's end_col is exclusive (not included) so +1
+        // Both anchor_col and end_col are inclusive cell positions
         self.selection = Some(Selection {
             anchor_row: row,
             anchor_col: start_col,
             end_row: row,
-            end_col: end_col + 1,
+            end_col: end_col,
         });
         self.copy_selection();
     }
@@ -1554,6 +1690,28 @@ impl Terminal {
         let grid_rows = self.grid.rows();
         let scrollback_len = self.grid.scrollback_len();
 
+        // Build byte→char index once per line for O(1) byte-to-column lookup.
+        // This avoids repeated O(n) chars().count() calls per match.
+        let mut byte_to_char: Vec<usize> = Vec::new();
+
+        /// Build byte-to-char-index mapping for a string.
+        /// byte_to_char[byte_offset] = char_index at that byte offset.
+        fn build_byte_to_char(s: &str, buf: &mut Vec<usize>) {
+            buf.clear();
+            buf.reserve(s.len() + 1);
+            let mut char_idx = 0;
+            for (byte_idx, _) in s.char_indices() {
+                while buf.len() <= byte_idx {
+                    buf.push(char_idx);
+                }
+                char_idx += 1;
+            }
+            // Fill remaining bytes (for slicing up to s.len())
+            while buf.len() <= s.len() {
+                buf.push(char_idx);
+            }
+        }
+
         // Search scrollback
         for sb_row in 0..scrollback_len {
             if let Some(row_cells) = self.grid.scrollback_row(sb_row) {
@@ -1569,14 +1727,15 @@ impl Terminal {
                     })
                     .collect();
 
+                build_byte_to_char(&line_text, &mut byte_to_char);
+
                 let mut search_pos = 0;
                 while let Some(pos) = line_text[search_pos..].find(&query) {
                     let start_byte = search_pos + pos;
                     let end_byte = start_byte + query.len();
 
-                    // Calculate column position from byte position (simple version)
-                    let start_col = line_text[..start_byte].chars().count();
-                    let end_col = line_text[..end_byte].chars().count();
+                    let start_col = byte_to_char[start_byte];
+                    let end_col = byte_to_char[end_byte];
 
                     matches.push((sb_row, start_col, end_col));
                     search_pos = start_byte + 1;
@@ -1599,13 +1758,15 @@ impl Terminal {
                 }
             }
 
+            build_byte_to_char(&line_text, &mut byte_to_char);
+
             let mut search_pos = 0;
             while let Some(pos) = line_text[search_pos..].find(&query) {
                 let start_byte = search_pos + pos;
                 let end_byte = start_byte + query.len();
 
-                let start_col = line_text[..start_byte].chars().count();
-                let end_col = line_text[..end_byte].chars().count();
+                let start_col = byte_to_char[start_byte];
+                let end_col = byte_to_char[end_byte];
 
                 // Grid row is offset from scrollback_len
                 matches.push((scrollback_len + row, start_col, end_col));
@@ -1966,6 +2127,7 @@ impl Terminal {
             &self.clipboard_path,
             &mut self.pty_response,
             &mut self.notifications,
+            &mut self.notification_seq,
             &mut self.active_progress,
             &mut self.pending_notifications,
             &self.notifications_enabled,

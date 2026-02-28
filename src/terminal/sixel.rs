@@ -214,7 +214,7 @@ impl SixelDecoder {
             _ => {
                 // Count finalized
                 let count: u32 = self.param_buf.parse().unwrap_or(1);
-                self.rle_count = Some(count.max(1));
+                self.rle_count = Some(count.max(1).min(MAX_IMAGE_DIMENSION));
                 self.state = State::Normal;
                 // Draw immediately if terminator is Sixel data
                 if (0x3F..=0x7E).contains(&byte) {

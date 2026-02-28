@@ -52,9 +52,11 @@ const fn cursor_style_from_decscusr(param: u16) -> Option<(CursorStyle, bool)> {
 
 use super::grid::{CellAttrs, Color, CursorStyle, Grid, Hyperlink, UnderlineStyle};
 use super::sixel::SixelDecoder;
-use super::{AnimationState, DcsHandler, ImageRegistry, Notification, NotificationProgress, TerminalImage};
+use super::{
+    AnimationState, DcsHandler, ImageRegistry, Notification, NotificationProgress, TerminalImage,
+};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Parse OSC color value
 /// Supports formats:
@@ -127,7 +129,9 @@ pub struct Performer<'a> {
     /// Clipboard file path (OSC 52)
     clipboard_path: &'a str,
     /// Notification history
-    pub notifications: &'a mut Vec<Notification>,
+    pub notifications: &'a mut VecDeque<Notification>,
+    /// Monotonically increasing counter for toast detection
+    pub notification_seq: &'a mut u64,
     /// Active progress bar state
     pub active_progress: &'a mut Option<NotificationProgress>,
     /// Pending (incomplete) OSC 99 notifications
@@ -147,7 +151,8 @@ impl<'a> Performer<'a> {
         current_dir: &'a mut Option<String>,
         clipboard_path: &'a str,
         pty_response: &'a mut Vec<u8>,
-        notifications: &'a mut Vec<Notification>,
+        notifications: &'a mut VecDeque<Notification>,
+        notification_seq: &'a mut u64,
         active_progress: &'a mut Option<NotificationProgress>,
         pending_notifications: &'a mut HashMap<String, Notification>,
         notifications_enabled: &'a bool,
@@ -163,6 +168,7 @@ impl<'a> Performer<'a> {
             current_dir,
             clipboard_path,
             notifications,
+            notification_seq,
             active_progress,
             pending_notifications,
             notifications_enabled,
@@ -1101,26 +1107,23 @@ impl<'a> Performer<'a> {
         const MAX_OSC52_PAYLOAD: usize = 10 * 1024 * 1024;
 
         // params[0] = "52", params[1] = selection type (e.g. "c"), params[2] = data
-        trace!(
-            "OSC 52: params.len()={}, params={:?}",
-            params.len(),
-            params
-                .iter()
-                .map(|p| String::from_utf8_lossy(p).to_string())
-                .collect::<Vec<_>>()
-        );
         if params.len() < 3 {
-            trace!("OSC 52: params not enough, returning");
+            trace!(
+                "OSC 52: params not enough (len={}), returning",
+                params.len()
+            );
             return;
         }
 
         let data = params[2];
 
-        // Security: reject oversized payloads
+        // Security: reject oversized payloads before any processing/logging
         if data.len() > MAX_OSC52_PAYLOAD {
             warn!("OSC 52: payload too large ({} bytes), ignoring", data.len());
             return;
         }
+
+        trace!("OSC 52: data len={}", data.len());
 
         if data == b"?" {
             // Query: respond with current clipboard contents in base64
@@ -1321,7 +1324,10 @@ impl<'a> Performer<'a> {
             let index_str = std::str::from_utf8(params[i]).unwrap_or("");
             let index: u8 = match index_str.parse::<u16>() {
                 Ok(v) if v < 256 => v as u8,
-                _ => { i += 2; continue; }
+                _ => {
+                    i += 2;
+                    continue;
+                }
             };
 
             let data = params[i + 1];
@@ -1339,8 +1345,11 @@ impl<'a> Performer<'a> {
                     self.grid.set_palette_color(index, r, g, b);
                     trace!("OSC 4: palette[{}] = ({},{},{})", index, r, g, b);
                 } else {
-                    trace!("OSC 4: failed to parse color for palette[{}]: {:?}",
-                          index, std::str::from_utf8(data));
+                    trace!(
+                        "OSC 4: failed to parse color for palette[{}]: {:?}",
+                        index,
+                        std::str::from_utf8(data)
+                    );
                 }
             }
             i += 2;
@@ -1508,14 +1517,37 @@ impl<'a> Performer<'a> {
 
         if !done {
             // Incomplete notification: store/update in pending
-            let notif_id = id.clone().unwrap_or_default();
-            let entry = self.pending_notifications.entry(notif_id).or_insert_with(|| Notification {
-                id: id.clone(),
-                title: String::new(),
-                body: String::new(),
-                urgency,
-                timestamp: std::time::Instant::now(),
-            });
+            // Use a unique auto-generated key when id is not provided to avoid collisions
+            let notif_id = id
+                .clone()
+                .unwrap_or_else(|| format!("_auto_{}", self.notification_seq));
+
+            // Cap pending notifications to prevent unbounded accumulation
+            const MAX_PENDING: usize = 32;
+            if !self.pending_notifications.contains_key(&notif_id)
+                && self.pending_notifications.len() >= MAX_PENDING
+            {
+                // Evict oldest pending notification by timestamp
+                if let Some(oldest_key) = self
+                    .pending_notifications
+                    .iter()
+                    .min_by_key(|(_, v)| v.timestamp)
+                    .map(|(k, _)| k.clone())
+                {
+                    self.pending_notifications.remove(&oldest_key);
+                }
+            }
+
+            let entry = self
+                .pending_notifications
+                .entry(notif_id)
+                .or_insert_with(|| Notification {
+                    id: id.clone(),
+                    title: String::new(),
+                    body: String::new(),
+                    urgency,
+                    timestamp: std::time::Instant::now(),
+                });
             match payload_type.as_str() {
                 "title" => entry.title = payload,
                 "body" => entry.body = payload,
@@ -1525,9 +1557,12 @@ impl<'a> Performer<'a> {
         } else {
             // Complete notification
             let notif_id = id.clone().unwrap_or_default();
+            // Note: for complete (d=1, default) notifications without id,
+            // we use empty string since there's nothing to look up in pending
 
             // Check if there's a pending notification to complete
-            let mut notif = if let Some(mut pending) = self.pending_notifications.remove(&notif_id) {
+            let mut notif = if let Some(mut pending) = self.pending_notifications.remove(&notif_id)
+            {
                 // Update with final payload
                 match payload_type.as_str() {
                     "title" => pending.title = payload,
@@ -1569,9 +1604,10 @@ impl<'a> Performer<'a> {
         if !*self.notifications_enabled {
             return;
         }
-        self.notifications.push(notif);
+        self.notifications.push_back(notif);
+        *self.notification_seq += 1;
         if self.notifications.len() > super::MAX_NOTIFICATIONS {
-            self.notifications.remove(0);
+            self.notifications.pop_front();
         }
     }
 

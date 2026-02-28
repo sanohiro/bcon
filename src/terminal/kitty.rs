@@ -485,7 +485,8 @@ impl KittyDecoder {
     }
 
     /// Decode complete, generate result based on action
-    pub fn finish(self, next_id: u32) -> Result<KittyDecodeResult, String> {
+    /// allow_remote: if false, reject File/TempFile/SharedMemory transfers
+    pub fn finish(self, next_id: u32, allow_remote: bool) -> Result<KittyDecodeResult, String> {
         let params = self.params;
         let id = if params.id != 0 { params.id } else { next_id };
 
@@ -538,7 +539,7 @@ impl KittyDecoder {
         }
 
         // Actions that need data (Transmit, TransmitAndDisplay, Display, Frame, Query)
-        let mut data = load_data_from_transmission(params.transmission, raw_data)?;
+        let mut data = load_data_from_transmission(params.transmission, raw_data, allow_remote)?;
 
         // zlib decompression
         if params.compression == Some('z') {
@@ -588,13 +589,20 @@ impl KittyDecoder {
 }
 
 /// Load data from transmission medium
+/// allow_remote: if false, reject File/TempFile/SharedMemory (only Direct allowed)
 fn load_data_from_transmission(
     transmission: KittyTransmission,
     raw_data: Vec<u8>,
+    allow_remote: bool,
 ) -> Result<Vec<u8>, String> {
     match transmission {
         KittyTransmission::Direct => Ok(raw_data),
         KittyTransmission::File => {
+            if !allow_remote {
+                return Err("remote file transfer (t=f) disabled for security. \
+                     Set [security] allow_kitty_remote = true in config to enable."
+                    .to_string());
+            }
             let path = String::from_utf8(raw_data).map_err(|_| "invalid file path encoding")?;
             let path = path.trim();
             info!("Kitty: reading image from file: {}", path);
@@ -610,9 +618,34 @@ fn load_data_from_transmission(
             Ok(data)
         }
         KittyTransmission::TempFile => {
+            if !allow_remote {
+                return Err("remote temp file transfer (t=t) disabled for security. \
+                     Set [security] allow_kitty_remote = true in config to enable."
+                    .to_string());
+            }
             let path =
                 String::from_utf8(raw_data).map_err(|_| "invalid temp file path encoding")?;
             let path = path.trim();
+            // Validate canonical path is under /tmp/ or /dev/shm/ (prevent symlink traversal)
+            match std::fs::canonicalize(path) {
+                Ok(canonical) => {
+                    let canonical_str = canonical.to_string_lossy();
+                    if !canonical_str.starts_with("/tmp/")
+                        && !canonical_str.starts_with("/dev/shm/")
+                    {
+                        return Err(format!(
+                            "temp file path '{}' (resolved: {}) not under /tmp/ or /dev/shm/",
+                            path, canonical_str
+                        ));
+                    }
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "failed to resolve temp file path '{}': {}",
+                        path, e
+                    ));
+                }
+            }
             info!("Kitty: reading image from temp file: {}", path);
             let data = std::fs::read(path)
                 .map_err(|e| format!("failed to read temp file '{}': {}", path, e))?;
@@ -629,6 +662,11 @@ fn load_data_from_transmission(
             Ok(data)
         }
         KittyTransmission::SharedMemory => {
+            if !allow_remote {
+                return Err("shared memory transfer (t=s) disabled for security. \
+                     Set [security] allow_kitty_remote = true in config to enable."
+                    .to_string());
+            }
             let name = String::from_utf8(raw_data).map_err(|_| "invalid shm name encoding")?;
             let name = name.trim();
             info!("Kitty: reading image from shared memory: {}", name);
@@ -771,13 +809,28 @@ fn decode_png(data: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let rgba = img.to_rgba8();
     let width = rgba.width();
     let height = rgba.height();
+    let raw = rgba.into_raw();
 
-    Ok((width, height, rgba.into_raw()))
+    // Guard against decompression bombs: decoded RGBA can be far larger than compressed PNG
+    if raw.len() > MAX_IMAGE_DATA_SIZE {
+        return Err(format!(
+            "decoded PNG too large: {}x{} = {} bytes (max {})",
+            width,
+            height,
+            raw.len(),
+            MAX_IMAGE_DATA_SIZE
+        ));
+    }
+
+    Ok((width, height, raw))
 }
 
 /// Convert RGB to RGBA
 fn rgb_to_rgba(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
-    let expected = (width * height * 3) as usize;
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|wh| wh.checked_mul(3))
+        .ok_or_else(|| "RGB dimensions too large".to_string())?;
     if data.len() != expected {
         return Err(format!(
             "RGB size mismatch: expected {}, got {}",
@@ -786,7 +839,11 @@ fn rgb_to_rgba(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> 
         ));
     }
 
-    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    let rgba_size = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|wh| wh.checked_mul(4))
+        .ok_or_else(|| "RGB dimensions too large".to_string())?;
+    let mut rgba = Vec::with_capacity(rgba_size);
     for chunk in data.chunks(3) {
         rgba.push(chunk[0]);
         rgba.push(chunk[1]);

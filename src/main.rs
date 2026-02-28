@@ -1017,7 +1017,13 @@ fn save_screenshot(
     let screenshot_dir = expand_path(screenshot_dir, user_home);
 
     // Read pixel data from framebuffer
-    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    let pixel_buf_size = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if pixel_buf_size > 256 * 1024 * 1024 {
+        anyhow::bail!("Screenshot buffer too large: {} bytes", pixel_buf_size);
+    }
+    let mut pixels = vec![0u8; pixel_buf_size];
     unsafe {
         gl.read_pixels(
             0,
@@ -1265,7 +1271,6 @@ fn main() -> Result<()> {
         // Note: With libseat, we don't manually wait for VT.
         // libseat handles session management - it will send Enable event
         // when the session becomes active.
-        info!("Opening libseat session...");
         info!("Opening libseat session...");
         match session::SeatSession::open() {
             Ok(s) => {
@@ -1713,6 +1718,9 @@ Make sure seatd/logind is running and you're on an active VT."
     // Apply notification settings from config
     term.notifications_enabled = cfg.notifications.enabled;
 
+    // Apply security settings from config
+    term.allow_kitty_remote = cfg.security.allow_kitty_remote;
+
     // Display /etc/issue (like getty does) if running as root on a VT.
     // In seatd mode this usually isn't needed, but in VT mode it improves login UX.
     #[cfg(target_os = "linux")]
@@ -1883,9 +1891,13 @@ Make sure seatd/logind is running and you're on an active VT."
         show_until: std::time::Instant,
     }
     let mut toast_notifications: Vec<ToastEntry> = Vec::new();
-    let mut last_notification_count: usize = 0;
+    let mut last_notification_seq: u64 = 0;
     // Track previous overlay state to force full FBO clear when overlays disappear
     let mut prev_had_overlays = false;
+
+    // Synchronized Update (Mode 2026) state
+    let mut sync_update_pending = false;
+    let mut sync_update_deadline: Option<std::time::Instant> = None;
 
     // IME is always enabled when ime_client is connected
     // User controls input method switching via fcitx5's Ctrl+Space
@@ -2195,9 +2207,12 @@ Make sure seatd/logind is running and you're on an active VT."
                 kb_scroll_up = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_up);
                 kb_scroll_down = config::ParsedKeybinds::parse(&new_cfg.keybinds.scroll_down);
                 kb_reset_terminal = config::ParsedKeybinds::parse(&new_cfg.keybinds.reset_terminal);
-                kb_notification_panel = config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_panel);
-                kb_notification_mute = config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_mute);
+                kb_notification_panel =
+                    config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_panel);
+                kb_notification_mute =
+                    config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_mute);
                 term.notifications_enabled = new_cfg.notifications.enabled;
+                term.allow_kitty_remote = new_cfg.security.allow_kitty_remote;
 
                 // Update IME disable app list
                 cfg = new_cfg;
@@ -2392,7 +2407,14 @@ Make sure seatd/logind is running and you're on an active VT."
                 // Notification mute toggle
                 if kb_notification_mute.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     notification_muted = !notification_muted;
-                    info!("Notifications {}", if notification_muted { "muted" } else { "unmuted" });
+                    info!(
+                        "Notifications {}",
+                        if notification_muted {
+                            "muted"
+                        } else {
+                            "unmuted"
+                        }
+                    );
                     needs_redraw = true;
                     continue;
                 }
@@ -2428,18 +2450,20 @@ Make sure seatd/logind is running and you're on an active VT."
                         xkbcommon::xkb::keysyms::KEY_Page_Down => {
                             let page = (grid_rows / 2).max(1);
                             let max_scroll = term.notifications.len().saturating_sub(1);
-                            notification_panel_scroll = (notification_panel_scroll + page).min(max_scroll);
+                            notification_panel_scroll =
+                                (notification_panel_scroll + page).min(max_scroll);
                             true
                         }
                         xkbcommon::xkb::keysyms::KEY_Page_Up => {
                             let page = (grid_rows / 2).max(1);
-                            notification_panel_scroll = notification_panel_scroll.saturating_sub(page);
+                            notification_panel_scroll =
+                                notification_panel_scroll.saturating_sub(page);
                             true
                         }
                         xkbcommon::xkb::keysyms::KEY_c => {
                             term.notifications.clear();
                             toast_notifications.clear();
-                            last_notification_count = 0;
+                            last_notification_seq = term.notification_seq;
                             notification_panel_scroll = 0;
                             true
                         }
@@ -2620,43 +2644,21 @@ Make sure seatd/logind is running and you're on an active VT."
                 }
 
                 // Font size increase (configurable)
-                if kb_font_increase.matches(ctrl, shift, alt, raw.keycode, keysym) {
-                    font_size_delta += 2;
+                // Font size change (increase / decrease / reset)
+                let font_size_change = if kb_font_increase.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    Some(font_size_delta + 2)
+                } else if kb_font_decrease.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    Some(font_size_delta - 2)
+                } else if kb_font_reset.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    Some(0)
+                } else {
+                    None
+                };
+                if let Some(new_delta) = font_size_change {
+                    font_size_delta = new_delta;
                     let new_size = (base_font_size as f32 + font_size_delta as f32)
                         .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
                     let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
-                    cell_w = new_cell_w.max(1.0);
-                    cell_h = new_cell_h.max(1.0);
-                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
-                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
-                    term.resize(grid_cols, grid_rows);
-                    term.set_cell_size(cell_w as u32, cell_h as u32);
-                    emoji_atlas.resize(cell_h as u32);
-                    needs_redraw = true;
-                    continue;
-                }
-
-                // Font size decrease (configurable)
-                if kb_font_decrease.matches(ctrl, shift, alt, raw.keycode, keysym) {
-                    font_size_delta -= 2;
-                    let new_size = (base_font_size as f32 + font_size_delta as f32)
-                        .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-                    let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
-                    cell_w = new_cell_w.max(1.0);
-                    cell_h = new_cell_h.max(1.0);
-                    grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
-                    grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
-                    term.resize(grid_cols, grid_rows);
-                    term.set_cell_size(cell_w as u32, cell_h as u32);
-                    emoji_atlas.resize(cell_h as u32);
-                    needs_redraw = true;
-                    continue;
-                }
-
-                // Font size reset (configurable)
-                if kb_font_reset.matches(ctrl, shift, alt, raw.keycode, keysym) {
-                    font_size_delta = 0;
-                    let (new_cell_w, new_cell_h) = glyph_atlas.resize(base_font_size as f32);
                     cell_w = new_cell_w.max(1.0);
                     cell_h = new_cell_h.max(1.0);
                     grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
@@ -2736,7 +2738,8 @@ Make sure seatd/logind is running and you're on an active VT."
                                 let max_scroll = term.notifications.len().saturating_sub(1);
                                 if *delta < 0.0 {
                                     // Scroll up (toward older)
-                                    notification_panel_scroll = notification_panel_scroll.saturating_sub(1);
+                                    notification_panel_scroll =
+                                        notification_panel_scroll.saturating_sub(1);
                                 } else {
                                     // Scroll down (toward newer)
                                     if notification_panel_scroll < max_scroll {
@@ -2759,7 +2762,9 @@ Make sure seatd/logind is running and you're on an active VT."
                             continue;
                         }
                         // Release events are consumed while panel is open
-                        _ => { continue; }
+                        _ => {
+                            continue;
+                        }
                     }
                 }
 
@@ -2771,8 +2776,8 @@ Make sure seatd/logind is running and you're on an active VT."
 
                         // Ctrl+Left click: Copy URL to clipboard
                         if ctrl_pressed && *button == input::BTN_LEFT {
-                            let clamped_row = row.min(grid_rows - 1);
-                            let clamped_col = col.min(grid_cols - 1);
+                            let clamped_row = row.min(grid_rows.saturating_sub(1));
+                            let clamped_col = col.min(grid_cols.saturating_sub(1));
                             if let Some(url) = term.detect_url_at(clamped_row, clamped_col) {
                                 term.copy_url_to_clipboard(&url);
                                 // Visual feedback with bell flash
@@ -2795,8 +2800,8 @@ Make sure seatd/logind is running and you're on an active VT."
                             };
                             let _ = term.send_mouse_press(
                                 btn,
-                                col.min(grid_cols - 1),
-                                row.min(grid_rows - 1),
+                                col.min(grid_cols.saturating_sub(1)),
+                                row.min(grid_rows.saturating_sub(1)),
                             );
                             mouse_button_held = Some(btn);
                         } else if *button == input::BTN_LEFT {
@@ -2814,8 +2819,8 @@ Make sure seatd/logind is running and you're on an active VT."
                             last_click_col = col;
                             last_click_row = row;
 
-                            let clamped_row = row.min(grid_rows - 1);
-                            let clamped_col = col.min(grid_cols - 1);
+                            let clamped_row = row.min(grid_rows.saturating_sub(1));
+                            let clamped_col = col.min(grid_cols.saturating_sub(1));
 
                             match click_count {
                                 2 => {
@@ -2855,15 +2860,15 @@ Make sure seatd/logind is running and you're on an active VT."
                         // Send move event if mouse mode is enabled
                         if term.mouse_mode_enabled() {
                             let _ = term.send_mouse_move(
-                                col.min(grid_cols - 1),
-                                row.min(grid_rows - 1),
+                                col.min(grid_cols.saturating_sub(1)),
+                                row.min(grid_rows.saturating_sub(1)),
                                 mouse_button_held,
                             );
                         } else if mouse_selecting {
                             // Dragging: Update selection range
                             if let Some(ref mut sel) = term.selection {
-                                sel.end_row = row.min(grid_rows - 1);
-                                sel.end_col = col.min(grid_cols - 1);
+                                sel.end_row = row.min(grid_rows.saturating_sub(1));
+                                sel.end_col = col.min(grid_cols.saturating_sub(1));
                             }
                             needs_redraw = true;
                         }
@@ -2885,14 +2890,19 @@ Make sure seatd/logind is running and you're on an active VT."
                             };
                             let _ = term.send_mouse_release(
                                 btn,
-                                col.min(grid_cols - 1),
-                                row.min(grid_rows - 1),
+                                col.min(grid_cols.saturating_sub(1)),
+                                row.min(grid_rows.saturating_sub(1)),
                             );
                         } else if *button == input::BTN_LEFT {
                             // Left button release: Confirm selection + auto copy
                             mouse_selecting = false;
-                            if term.selection.is_some() {
-                                term.copy_selection();
+                            if let Some(sel) = &term.selection {
+                                if sel.anchor_row == sel.end_row && sel.anchor_col == sel.end_col {
+                                    // Single click (no drag): clear selection
+                                    term.selection = None;
+                                } else {
+                                    term.copy_selection();
+                                }
                             }
                         }
                         // Always reset button state
@@ -2911,8 +2921,8 @@ Make sure seatd/logind is running and you're on an active VT."
                             let d = if *delta < 0.0 { -1i8 } else { 1i8 };
                             let _ = term.send_mouse_wheel(
                                 d,
-                                col.min(grid_cols - 1),
-                                row.min(grid_rows - 1),
+                                col.min(grid_cols.saturating_sub(1)),
+                                row.min(grid_rows.saturating_sub(1)),
                             );
                         } else {
                             // Scroll accumulation (negative=up/history, positive=down/live)
@@ -3037,7 +3047,23 @@ Make sure seatd/logind is running and you're on an active VT."
         }
 
         if total_read > 0 {
-            needs_redraw = true;
+            // Synchronized Update: defer rendering while mode 2026 is active
+            if term.grid.modes.synchronized_update {
+                sync_update_pending = true;
+                if sync_update_deadline.is_none() {
+                    sync_update_deadline =
+                        Some(std::time::Instant::now() + Duration::from_millis(500));
+                }
+                // needs_redraw stays false -> skip FBO rendering
+            } else {
+                needs_redraw = true;
+                // Sync update ended -> flush pending changes
+                if sync_update_pending {
+                    sync_update_pending = false;
+                    sync_update_deadline = None;
+                }
+            }
+
             // Return to live position on new output
             term.scroll_to_bottom();
             // Clear selection on new output
@@ -3051,10 +3077,14 @@ Make sure seatd/logind is running and you're on an active VT."
             }
 
             // Detect new notifications and create toast entries (skip when muted)
-            let current_count = term.notifications.len();
-            if current_count > last_notification_count && !notification_muted {
+            let current_seq = term.notification_seq;
+            if current_seq > last_notification_seq && !notification_muted {
+                let new_count = (current_seq - last_notification_seq) as usize;
                 let now = std::time::Instant::now();
-                for i in last_notification_count..current_count {
+                // New notifications are at the tail of the deque
+                let len = term.notifications.len();
+                let start = len.saturating_sub(new_count);
+                for i in start..len {
                     if let Some(notif) = term.notifications.get(i) {
                         toast_notifications.push(ToastEntry {
                             title: notif.title.clone(),
@@ -3064,8 +3094,13 @@ Make sure seatd/logind is running and you're on an active VT."
                         });
                     }
                 }
+                // Cap toast notifications to prevent unbounded growth
+                const MAX_TOAST_NOTIFICATIONS: usize = 50;
+                while toast_notifications.len() > MAX_TOAST_NOTIFICATIONS {
+                    toast_notifications.remove(0);
+                }
             }
-            last_notification_count = current_count;
+            last_notification_seq = current_seq;
         }
 
         // Expire old toast notifications
@@ -3097,6 +3132,16 @@ Make sure seatd/logind is running and you're on an active VT."
         // (VtSwitcher handles SIGUSR1/SIGUSR2 for acquire/release)
 
         // IME auto-switch removed - user controls via fcitx5's Ctrl+Space
+
+        // Synchronized Update timeout (500ms safety)
+        if let Some(deadline) = sync_update_deadline {
+            if std::time::Instant::now() >= deadline {
+                needs_redraw = true;
+                sync_update_pending = false;
+                sync_update_deadline = None;
+                log::debug!("Synchronized update timeout, forcing redraw");
+            }
+        }
 
         // Sleep briefly if no changes (reduce CPU load)
         if !needs_redraw {
@@ -4439,7 +4484,11 @@ Make sure seatd/logind is running and you're on an active VT."
                     ([0.0, 0.0, 0.0, 1.0], [0.7, 0.7, 0.7], 1.0)
                 } else {
                     // White text on terminal background — LCD enabled
-                    ([1.0, 1.0, 1.0, 1.0], [bg_color.0, bg_color.1, bg_color.2], 0.0)
+                    (
+                        [1.0, 1.0, 1.0, 1.0],
+                        [bg_color.0, bg_color.1, bg_color.2],
+                        0.0,
+                    )
                 };
 
                 let seg_start = offset_col;
@@ -4450,7 +4499,15 @@ Make sure seatd/logind is running and you're on an active VT."
 
                     // Skip zero-width characters for positioning but still render them
                     glyph_atlas.ensure_glyph(ch);
-                    text_renderer.push_char_with_bg(ch, char_x, baseline_y, fg, pe_bg, lcd_off, &glyph_atlas);
+                    text_renderer.push_char_with_bg(
+                        ch,
+                        char_x,
+                        baseline_y,
+                        fg,
+                        pe_bg,
+                        lcd_off,
+                        &glyph_atlas,
+                    );
                     offset_col += ch_w;
                 }
 
@@ -4867,8 +4924,14 @@ Make sure seatd/logind is running and you're on an active VT."
             if term.active_progress.is_some() {
                 toast_y -= progress_bar_h + 6.0;
                 ui_renderer.push_shadow_rounded_rect(
-                    toast_x, toast_y, toast_w, progress_bar_h, 6.0,
-                    [0.12, 0.14, 0.20, 0.92], 3.0, [0.0, 0.0, 0.0, 0.4],
+                    toast_x,
+                    toast_y,
+                    toast_w,
+                    progress_bar_h,
+                    6.0,
+                    [0.12, 0.14, 0.20, 0.92],
+                    3.0,
+                    [0.0, 0.0, 0.0, 0.4],
                 );
             }
 
@@ -4879,8 +4942,14 @@ Make sure seatd/logind is running and you're on an active VT."
                     _ => [0.15, 0.18, 0.25, 0.92],
                 };
                 ui_renderer.push_shadow_rounded_rect(
-                    toast_x, toast_y, toast_w, toast_h, 6.0,
-                    bg, 3.0, [0.0, 0.0, 0.0, 0.4],
+                    toast_x,
+                    toast_y,
+                    toast_w,
+                    toast_h,
+                    6.0,
+                    bg,
+                    3.0,
+                    [0.0, 0.0, 0.0, 0.4],
                 );
             }
             ui_renderer.flush(gl, screen_w, screen_h);
@@ -4900,10 +4969,10 @@ Make sure seatd/logind is running and you're on an active VT."
                 toast_y -= progress_bar_h + 6.0;
                 let progress_bg = [0.12, 0.14, 0.20];
                 let bar_color = match progress.state {
-                    1 => [0.2, 0.7, 0.3, 1.0],  // Normal (green)
-                    2 => [0.8, 0.2, 0.2, 1.0],  // Error (red)
-                    3 => [0.4, 0.4, 0.8, 1.0],  // Indeterminate (blue)
-                    4 => [0.8, 0.6, 0.1, 1.0],  // Warning (yellow)
+                    1 => [0.2, 0.7, 0.3, 1.0], // Normal (green)
+                    2 => [0.8, 0.2, 0.2, 1.0], // Error (red)
+                    3 => [0.4, 0.4, 0.8, 1.0], // Indeterminate (blue)
+                    4 => [0.8, 0.6, 0.1, 1.0], // Warning (yellow)
                     _ => [0.4, 0.4, 0.8, 1.0],
                 };
                 // Percent label (left side)
@@ -4914,8 +4983,12 @@ Make sure seatd/logind is running and you're on an active VT."
                 let label_x = toast_x + 8.0;
                 let label_baseline = (toast_y + (progress_bar_h + ascent) / 2.0).round();
                 text_renderer.push_text_with_bg(
-                    &pct_text, label_x, label_baseline,
-                    [0.8, 0.8, 0.85, 1.0], progress_bg, &glyph_atlas,
+                    &pct_text,
+                    label_x,
+                    label_baseline,
+                    [0.8, 0.8, 0.85, 1.0],
+                    progress_bg,
+                    &glyph_atlas,
                 );
                 // Bar (right of label) — reserve 5 chars width for "100%"
                 let label_w = cell_w * 5.0;
@@ -4925,14 +4998,15 @@ Make sure seatd/logind is running and you're on an active VT."
                 let fill_w = bar_w * (progress.percent as f32 / 100.0);
                 // Background bar track
                 text_renderer.push_rect(
-                    bar_x, bar_y, bar_w, 6.0,
-                    [0.25, 0.25, 0.3, 0.6], &glyph_atlas,
+                    bar_x,
+                    bar_y,
+                    bar_w,
+                    6.0,
+                    [0.25, 0.25, 0.3, 0.6],
+                    &glyph_atlas,
                 );
                 // Filled portion
-                text_renderer.push_rect(
-                    bar_x, bar_y, fill_w, 6.0,
-                    bar_color, &glyph_atlas,
-                );
+                text_renderer.push_rect(bar_x, bar_y, fill_w, 6.0, bar_color, &glyph_atlas);
             }
 
             // Max characters that fit in toast width (with padding)
@@ -4956,8 +5030,12 @@ Make sure seatd/logind is running and you're on an active VT."
                     glyph_atlas.ensure_glyph(ch);
                 }
                 text_renderer.push_text_with_bg(
-                    &title, title_x, title_baseline,
-                    title_color, item_bg, &glyph_atlas,
+                    &title,
+                    title_x,
+                    title_baseline,
+                    title_color,
+                    item_bg,
+                    &glyph_atlas,
                 );
 
                 // Body (second line, truncate to fit)
@@ -4968,8 +5046,12 @@ Make sure seatd/logind is running and you're on an active VT."
                         glyph_atlas.ensure_glyph(ch);
                     }
                     text_renderer.push_text_with_bg(
-                        &body, title_x, body_baseline,
-                        body_color, item_bg, &glyph_atlas,
+                        &body,
+                        title_x,
+                        body_baseline,
+                        body_color,
+                        item_bg,
+                        &glyph_atlas,
                     );
                 }
             }
@@ -4991,17 +5073,29 @@ Make sure seatd/logind is running and you're on an active VT."
             ui_renderer.begin();
             // Panel body
             ui_renderer.push_rounded_rect(
-                panel_x, 0.0, panel_w, panel_h, 0.0,
+                panel_x,
+                0.0,
+                panel_w,
+                panel_h,
+                0.0,
                 [0.1, 0.1, 0.14, 0.95],
             );
             // Header
             ui_renderer.push_rounded_rect(
-                panel_x, 0.0, panel_w, header_h, 0.0,
+                panel_x,
+                0.0,
+                panel_w,
+                header_h,
+                0.0,
                 [0.15, 0.15, 0.2, 0.98],
             );
             // Footer
             ui_renderer.push_rounded_rect(
-                panel_x, panel_h - footer_h, panel_w, footer_h, 0.0,
+                panel_x,
+                panel_h - footer_h,
+                panel_w,
+                footer_h,
+                0.0,
                 [0.15, 0.15, 0.2, 0.98],
             );
             ui_renderer.flush(gl, screen_w, screen_h);
@@ -5030,7 +5124,8 @@ Make sure seatd/logind is running and you're on an active VT."
             for ch in count_text.chars() {
                 glyph_atlas.ensure_glyph(ch);
             }
-            let count_cols: usize = count_text.chars()
+            let count_cols: usize = count_text
+                .chars()
                 .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                 .sum();
             let count_x = panel_x + panel_w - padding - count_cols as f32 * cell_w;
@@ -5088,11 +5183,13 @@ Make sure seatd/logind is running and you're on an active VT."
                 );
 
                 // Title (after timestamp)
-                let time_cols: usize = time_str.chars()
+                let time_cols: usize = time_str
+                    .chars()
                     .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
                     .sum();
                 let title_x = panel_x + padding + (time_cols as f32 + 1.0) * cell_w;
-                let max_title_cols = ((panel_w - padding * 2.0 - (time_cols as f32 + 1.0) * cell_w) / cell_w) as usize;
+                let max_title_cols = ((panel_w - padding * 2.0 - (time_cols as f32 + 1.0) * cell_w)
+                    / cell_w) as usize;
                 let title = truncate_to_width(&notif.title, max_title_cols);
                 for ch in title.chars() {
                     glyph_atlas.ensure_glyph(ch);

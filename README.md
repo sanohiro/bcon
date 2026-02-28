@@ -55,11 +55,14 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 - **Mouse Support**: Selection, wheel scroll, button events (X10/SGR/URXVT/SGR-Pixels protocols)
 - **OSC 52 Clipboard**: Apps can read/write clipboard via escape sequences
 - **Bracketed Paste**: Secure paste mode support
+- **Colored Underlines**: SGR 58/59 colored underline with 5 styles (single, double, curly, dotted, dashed)
+- **Synchronized Output**: Mode 2026 flicker-free rendering for fast-updating applications
 - **OSC 4/10/11/12**: Dynamic palette, foreground, background, and cursor color changes
 - **Notifications**: OSC 9 (iTerm2) and OSC 99 (Kitty) desktop notification protocols with toast overlay and progress bar
 
 ### Input
 - **Keyboard**: Full keyboard support via evdev + xkbcommon
+- **Kitty Keyboard Protocol**: Progressive enhancement for Neovim, Helix, and other modern TUI apps
 - **Japanese Input**: fcitx5 integration via D-Bus
 - **IME Auto-disable**: Automatically disable IME for vim/emacs/etc.
 - **Key Repeat**: Configurable key repeat delay/rate

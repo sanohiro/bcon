@@ -763,11 +763,4 @@ fn compile_shader(gl: &glow::Context, shader_type: u32, source: &str) -> Result<
     }
 }
 
-fn bytemuck_cast_slice<T>(slice: &[T]) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(
-            slice.as_ptr() as *const u8,
-            slice.len() * std::mem::size_of::<T>(),
-        )
-    }
-}
+use super::bytemuck_cast_slice;

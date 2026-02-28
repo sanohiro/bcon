@@ -372,20 +372,4 @@ fn compile_shader(gl: &glow::Context, shader_type: u32, source: &str) -> Result<
     }
 }
 
-/// &[T] -> &[u8] conversion
-///
-/// # Safety
-/// This is safe because:
-/// - The pointer comes from a valid slice
-/// - The size calculation cannot overflow (slice.len() is already bounded by allocation)
-/// - The resulting byte slice refers to the same memory as the input slice
-/// - T is expected to be a plain data type (no padding issues for our use case)
-fn bytemuck_cast_slice<T>(slice: &[T]) -> &[u8] {
-    // SAFETY: See function documentation above
-    unsafe {
-        std::slice::from_raw_parts(
-            slice.as_ptr() as *const u8,
-            slice.len() * std::mem::size_of::<T>(),
-        )
-    }
-}
+use super::bytemuck_cast_slice;

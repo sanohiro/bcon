@@ -41,10 +41,41 @@ pub fn ensure_ime_environment() {
 
     // Check if our previously-started dbus-daemon is still alive
     if std::path::Path::new(&socket_path).exists() {
-        // Try to connect to the existing bus
-        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &addr);
-        info!("IME: reusing existing D-Bus session: {}", addr);
-    } else {
+        // Verify socket ownership before reuse (prevent hijacking)
+        let mut reuse = false;
+        match std::fs::symlink_metadata(&socket_path) {
+            Ok(meta) => {
+                use std::os::unix::fs::{FileTypeExt, MetadataExt};
+                if meta.uid() != uid {
+                    warn!(
+                        "IME: socket {} owned by uid {}, expected {}, removing",
+                        socket_path,
+                        meta.uid(),
+                        uid
+                    );
+                    let _ = std::fs::remove_file(&socket_path);
+                } else if !meta.file_type().is_socket() {
+                    warn!(
+                        "IME: {} is not a socket (type mismatch), removing",
+                        socket_path
+                    );
+                    let _ = std::fs::remove_file(&socket_path);
+                } else {
+                    reuse = true;
+                }
+            }
+            Err(e) => {
+                warn!("IME: cannot stat socket {}: {}, removing", socket_path, e);
+                let _ = std::fs::remove_file(&socket_path);
+            }
+        }
+        if reuse {
+            std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &addr);
+            info!("IME: reusing existing D-Bus session: {}", addr);
+        }
+    }
+
+    if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_err() {
         // Start a new dbus-daemon with a well-known address
         info!("IME: DBUS_SESSION_BUS_ADDRESS not set, starting dbus-daemon...");
         match std::process::Command::new("dbus-daemon")
@@ -83,10 +114,7 @@ pub fn ensure_ime_environment() {
 
     if !fcitx5_running {
         info!("IME: fcitx5 not running, starting...");
-        match std::process::Command::new("fcitx5")
-            .arg("-d")
-            .spawn()
-        {
+        match std::process::Command::new("fcitx5").arg("-d").spawn() {
             Ok(_) => {
                 info!("IME: started fcitx5 daemon, waiting for initialization...");
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -341,7 +369,14 @@ async fn ime_async_main(
 ) -> Result<()> {
     // Connect to D-Bus session bus
     let dbus_addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
-    info!("IME: connecting to D-Bus session (addr={})", if dbus_addr.is_empty() { "<not set>" } else { &dbus_addr });
+    info!(
+        "IME: connecting to D-Bus session (addr={})",
+        if dbus_addr.is_empty() {
+            "<not set>"
+        } else {
+            &dbus_addr
+        }
+    );
     let connection = match zbus::Connection::session().await {
         Ok(c) => {
             info!("IME: D-Bus session connected");
@@ -349,9 +384,15 @@ async fn ime_async_main(
         }
         Err(e) => {
             let msg = if dbus_addr.is_empty() {
-                format!("Failed to connect to D-Bus session bus (DBUS_SESSION_BUS_ADDRESS not set): {}", e)
+                format!(
+                    "Failed to connect to D-Bus session bus (DBUS_SESSION_BUS_ADDRESS not set): {}",
+                    e
+                )
             } else {
-                format!("Failed to connect to D-Bus session bus (addr={}): {}", dbus_addr, e)
+                format!(
+                    "Failed to connect to D-Bus session bus (addr={}): {}",
+                    dbus_addr, e
+                )
             };
             let _ = ready_tx.send(Err(anyhow!(msg)));
             return Ok(());

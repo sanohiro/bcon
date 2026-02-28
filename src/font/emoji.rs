@@ -937,10 +937,16 @@ impl EmojiLoader {
 
 // Helper functions
 fn read_u16(data: &[u8], offset: usize) -> u16 {
+    if offset + 2 > data.len() {
+        return 0;
+    }
     u16::from_be_bytes([data[offset], data[offset + 1]])
 }
 
 fn read_u32(data: &[u8], offset: usize) -> u32 {
+    if offset + 4 > data.len() {
+        return 0;
+    }
     u32::from_be_bytes([
         data[offset],
         data[offset + 1],
@@ -1244,8 +1250,14 @@ impl EmojiAtlas {
 
         for row in 0..h {
             for col in 0..w {
-                let src_idx = ((row * w + col) * 4) as usize;
-                let dst_idx = (((y + row) * self.width + (x + col)) * 4) as usize;
+                let src_idx = (row as usize)
+                    .saturating_mul(w as usize)
+                    .saturating_add(col as usize)
+                    .saturating_mul(4);
+                let dst_idx = ((y + row) as usize)
+                    .saturating_mul(self.width as usize)
+                    .saturating_add((x + col) as usize)
+                    .saturating_mul(4);
 
                 if src_idx + 3 < scaled_data.len() && dst_idx + 3 < self.data.len() {
                     self.data[dst_idx] = scaled_data[src_idx]; // R

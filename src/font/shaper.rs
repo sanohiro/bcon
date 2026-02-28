@@ -187,8 +187,11 @@ impl TextShaper {
                 // Safety: segment_cols_buf is never empty here because we checked
                 // segment_chars_buf.is_empty() at the start, and both buffers
                 // are always pushed together in shape_line()
-                (self.segment_cols_buf.last()
-                    .expect("segment_cols_buf empty in flush_segment_internal") + 1) as u32
+                (self
+                    .segment_cols_buf
+                    .last()
+                    .expect("segment_cols_buf empty in flush_segment_internal")
+                    + 1) as u32
             };
 
             let cell_span = (next_cluster - cluster).max(1) as u8;

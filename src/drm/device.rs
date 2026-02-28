@@ -528,11 +528,18 @@ impl VtSwitcher {
         const VT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
         let vt_wait_success = loop {
             if shutdown_requested() {
-                info!("Shutdown signal received while waiting for VT{}, exiting", target_vt);
+                info!(
+                    "Shutdown signal received while waiting for VT{}, exiting",
+                    target_vt
+                );
                 break false;
             }
             if vt_wait_start.elapsed() >= VT_WAIT_TIMEOUT {
-                warn!("Timed out waiting for VT{} to become active ({}s)", target_vt, VT_WAIT_TIMEOUT.as_secs());
+                warn!(
+                    "Timed out waiting for VT{} to become active ({}s)",
+                    target_vt,
+                    VT_WAIT_TIMEOUT.as_secs()
+                );
                 break false;
             }
             #[repr(C)]
@@ -638,7 +645,10 @@ impl VtSwitcher {
             info!("VT{} is active, keeping KD_GRAPHICS", target_vt);
         } else {
             // We're not the active VT - restore KD_TEXT so the active VT can display
-            info!("VT{} is not active (active={}), restoring KD_TEXT", target_vt, is_active);
+            info!(
+                "VT{} is not active (active={}), restoring KD_TEXT",
+                target_vt, is_active
+            );
             unsafe { libc::ioctl(tty_fd, KDSETMODE, KD_TEXT) };
         }
 
@@ -1006,7 +1016,9 @@ pub fn get_active_vt() -> Option<u16> {
 
 /// Check if specified VT is currently active
 pub fn is_vt_active(target_vt: u16) -> bool {
-    get_active_vt().map(|active| active == target_vt).unwrap_or(false)
+    get_active_vt()
+        .map(|active| active == target_vt)
+        .unwrap_or(false)
 }
 
 /// Wait for specified VT to become active (blocking)
@@ -1015,8 +1027,8 @@ pub fn is_vt_active(target_vt: u16) -> bool {
 /// Returns Ok(()) when the VT becomes active, or Err if waiting fails.
 pub fn wait_for_vt(target_vt: u16) -> anyhow::Result<()> {
     // Open /dev/tty0 for ioctl
-    let tty0 = std::ffi::CString::new("/dev/tty0")
-        .map_err(|_| anyhow::anyhow!("Invalid tty path"))?;
+    let tty0 =
+        std::ffi::CString::new("/dev/tty0").map_err(|_| anyhow::anyhow!("Invalid tty path"))?;
     let fd = unsafe { libc::open(tty0.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
     if fd < 0 {
         return Err(anyhow::anyhow!(
@@ -1038,7 +1050,9 @@ pub fn wait_for_vt(target_vt: u16) -> anyhow::Result<()> {
             if shutdown_requested() {
                 info!("Shutdown signal received during VT_WAITACTIVE, exiting");
                 unsafe { libc::close(fd) };
-                return Err(anyhow::anyhow!("VT_WAITACTIVE interrupted by shutdown signal"));
+                return Err(anyhow::anyhow!(
+                    "VT_WAITACTIVE interrupted by shutdown signal"
+                ));
             }
             continue;
         }

@@ -223,12 +223,4 @@ impl UiRenderer {
     }
 }
 
-/// Convert &[T] to &[u8]
-fn bytemuck_cast_slice<T>(slice: &[T]) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(
-            slice.as_ptr() as *const u8,
-            slice.len() * std::mem::size_of::<T>(),
-        )
-    }
-}
+use super::bytemuck_cast_slice;
