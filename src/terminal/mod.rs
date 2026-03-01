@@ -570,7 +570,7 @@ impl Terminal {
             notifications_enabled: true,
             active_progress: None,
             pending_notifications: HashMap::new(),
-            allow_kitty_remote: false,
+            allow_kitty_remote: true,
         })
     }
 

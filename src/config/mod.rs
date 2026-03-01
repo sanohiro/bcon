@@ -527,15 +527,20 @@ impl Default for NotificationConfig {
 #[serde(default)]
 pub struct SecurityConfig {
     /// Allow Kitty graphics protocol remote file/shm transfers (t=f, t=t, t=s).
-    /// Default: false (only direct base64 transfer t=d is allowed).
+    /// Default: true (matches kitty's default behavior).
     /// When enabled, temp file paths are restricted to /tmp/ and /dev/shm/.
+    /// Set to false to restrict to direct base64 transfer (t=d) only.
+    ///
+    /// NOTE: bcon runs as root for DRM access, so t=f can read any file.
+    /// This is the same trust model as kitty/foot/other terminal emulators.
+    /// If you want to harden against malicious escape sequences, set to false.
     pub allow_kitty_remote: bool,
 }
 
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
-            allow_kitty_remote: false,
+            allow_kitty_remote: true,
         }
     }
 }

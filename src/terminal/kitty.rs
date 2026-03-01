@@ -599,7 +599,7 @@ fn load_data_from_transmission(
         KittyTransmission::Direct => Ok(raw_data),
         KittyTransmission::File => {
             if !allow_remote {
-                return Err("remote file transfer (t=f) disabled for security. \
+                return Err("remote file transfer (t=f) disabled. \
                      Set [security] allow_kitty_remote = true in config to enable."
                     .to_string());
             }
@@ -619,7 +619,7 @@ fn load_data_from_transmission(
         }
         KittyTransmission::TempFile => {
             if !allow_remote {
-                return Err("remote temp file transfer (t=t) disabled for security. \
+                return Err("remote temp file transfer (t=t) disabled. \
                      Set [security] allow_kitty_remote = true in config to enable."
                     .to_string());
             }
@@ -663,7 +663,7 @@ fn load_data_from_transmission(
         }
         KittyTransmission::SharedMemory => {
             if !allow_remote {
-                return Err("shared memory transfer (t=s) disabled for security. \
+                return Err("shared memory transfer (t=s) disabled. \
                      Set [security] allow_kitty_remote = true in config to enable."
                     .to_string());
             }
