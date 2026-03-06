@@ -2958,28 +2958,19 @@ Make sure seatd/logind is running and you're on an active VT."
         // IME lazy connect: retry if fcitx5 wasn't available at startup
         if let Some(retry_time) = ime_retry_at {
             if std::time::Instant::now() >= retry_time {
-                // Quick check: only attempt connection if fcitx5 process exists
-                let fcitx5_running = std::process::Command::new("pgrep")
-                    .args(["-x", "fcitx5"])
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
-                if fcitx5_running {
-                    input::ime::ensure_ime_environment();
-                    match input::ime::ImeClient::try_new() {
-                        Ok(c) => {
-                            info!("fcitx5 IME connected (deferred)");
-                            ime_client = Some(c);
-                            ime_retry_at = None;
-                        }
-                        Err(e) => {
-                            info!("fcitx5 IME retry failed: {}", e);
-                            ime_retry_at =
-                                Some(std::time::Instant::now() + Duration::from_secs(5));
-                        }
+                // Ensure fcitx5 is running on bcon's D-Bus, then try connecting
+                input::ime::start_fcitx5();
+                match input::ime::ImeClient::try_new() {
+                    Ok(c) => {
+                        info!("fcitx5 IME connected (deferred)");
+                        ime_client = Some(c);
+                        ime_retry_at = None;
                     }
-                } else {
-                    ime_retry_at = Some(std::time::Instant::now() + Duration::from_secs(5));
+                    Err(e) => {
+                        info!("fcitx5 IME retry failed: {}", e);
+                        ime_retry_at =
+                            Some(std::time::Instant::now() + Duration::from_secs(5));
+                    }
                 }
             }
         }

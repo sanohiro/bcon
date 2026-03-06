@@ -105,23 +105,25 @@ pub fn ensure_ime_environment() {
         }
     }
 
-    // 2. Ensure fcitx5 is running
-    let fcitx5_running = std::process::Command::new("pgrep")
-        .args(["-x", "fcitx5"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // 2. Ensure fcitx5 is running on OUR bus
+    // Note: don't use pgrep — it may find fcitx5 on a different D-Bus session.
+    // fcitx5 -d checks D-Bus name ownership, so it will start a new instance
+    // on our bus even if another instance is running on a different bus.
+    start_fcitx5();
+}
 
-    if !fcitx5_running {
-        info!("IME: fcitx5 not running, starting...");
-        match std::process::Command::new("fcitx5").arg("-d").spawn() {
-            Ok(_) => {
-                info!("IME: started fcitx5 daemon, waiting for initialization...");
-                std::thread::sleep(std::time::Duration::from_secs(1));
-            }
-            Err(e) => {
-                info!("IME: fcitx5 not available: {}", e);
-            }
+/// Start fcitx5 daemon on the current DBUS_SESSION_BUS_ADDRESS.
+///
+/// Safe to call multiple times — fcitx5 -d exits if already running on the same bus.
+pub fn start_fcitx5() {
+    info!("IME: starting fcitx5 on bcon D-Bus...");
+    match std::process::Command::new("fcitx5").arg("-d").spawn() {
+        Ok(_) => {
+            info!("IME: started fcitx5 daemon, waiting for initialization...");
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        Err(e) => {
+            info!("IME: fcitx5 not available: {}", e);
         }
     }
 }
