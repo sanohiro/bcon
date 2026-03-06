@@ -1812,7 +1812,7 @@ Make sure seatd/logind is running and you're on an active VT."
 
     // Phase 5d: fcitx5 IME initialization (optional, requires terminal.ime = true)
     info!("Phase 5: IME (fcitx5)...");
-    let ime_client = if cfg.terminal.ime {
+    let mut ime_client = if cfg.terminal.ime {
         input::ime::ensure_ime_environment();
         match input::ime::ImeClient::try_new() {
             Ok(c) => {
@@ -1901,6 +1901,13 @@ Make sure seatd/logind is running and you're on an active VT."
 
     // IME is always enabled when ime_client is connected
     // User controls input method switching via fcitx5's Ctrl+Space
+    let ime_enabled = cfg.terminal.ime;
+    let mut ime_retry_at: Option<std::time::Instant> = if ime_enabled && ime_client.is_none() {
+        // Schedule first retry 5 seconds after startup
+        Some(std::time::Instant::now() + Duration::from_secs(5))
+    } else {
+        None
+    };
 
     // DRM master state (for VT switching)
     let mut drm_master_held = initial_drm_master;
@@ -2945,6 +2952,35 @@ Make sure seatd/logind is running and you're on an active VT."
 
             if !key_events.is_empty() || !mouse_events.is_empty() {
                 needs_redraw = true;
+            }
+        }
+
+        // IME lazy connect: retry if fcitx5 wasn't available at startup
+        if let Some(retry_time) = ime_retry_at {
+            if std::time::Instant::now() >= retry_time {
+                // Quick check: only attempt connection if fcitx5 process exists
+                let fcitx5_running = std::process::Command::new("pgrep")
+                    .args(["-x", "fcitx5"])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                if fcitx5_running {
+                    input::ime::ensure_ime_environment();
+                    match input::ime::ImeClient::try_new() {
+                        Ok(c) => {
+                            info!("fcitx5 IME connected (deferred)");
+                            ime_client = Some(c);
+                            ime_retry_at = None;
+                        }
+                        Err(e) => {
+                            info!("fcitx5 IME retry failed: {}", e);
+                            ime_retry_at =
+                                Some(std::time::Instant::now() + Duration::from_secs(5));
+                        }
+                    }
+                } else {
+                    ime_retry_at = Some(std::time::Instant::now() + Duration::from_secs(5));
+                }
             }
         }
 
