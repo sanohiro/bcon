@@ -1696,13 +1696,22 @@ Make sure seatd/logind is running and you're on an active VT."
         input::ime::ensure_ime_environment();
     }
 
+    // Pass DBUS_SESSION_BUS_ADDRESS to child process so user's .bashrc fcitx5
+    // connects to bcon's D-Bus (survives /bin/login via extra_env)
+    let dbus_addr = input::ime::dbus_address();
+    let extra_env: Vec<(&str, &str)> = if let Some(ref addr) = dbus_addr {
+        vec![("DBUS_SESSION_BUS_ADDRESS", addr.as_str())]
+    } else {
+        vec![]
+    };
+
     info!("PTY fork...");
     let mut term = terminal::Terminal::with_scrollback_env(
         grid_cols,
         grid_rows,
         cfg.terminal.scrollback_lines,
         &cfg.terminal.term_env,
-        &[],
+        &extra_env,
     )
     .context("Failed to initialize terminal")?;
 
@@ -2956,9 +2965,11 @@ Make sure seatd/logind is running and you're on an active VT."
         }
 
         // IME lazy connect: retry if fcitx5 wasn't available at startup
+        // When running as root (systemd), fcitx5 is started by the user's shell
+        // (.bashrc) after login. We just keep trying to connect.
         if let Some(retry_time) = ime_retry_at {
             if std::time::Instant::now() >= retry_time {
-                // Ensure fcitx5 is running on bcon's D-Bus, then try connecting
+                // Try starting fcitx5 (no-op when running as root)
                 input::ime::start_fcitx5();
                 match input::ime::ImeClient::try_new() {
                     Ok(c) => {
@@ -2967,9 +2978,9 @@ Make sure seatd/logind is running and you're on an active VT."
                         ime_retry_at = None;
                     }
                     Err(e) => {
-                        info!("fcitx5 IME retry failed: {}", e);
+                        debug!("fcitx5 IME retry failed: {}", e);
                         ime_retry_at =
-                            Some(std::time::Instant::now() + Duration::from_secs(5));
+                            Some(std::time::Instant::now() + Duration::from_secs(10));
                     }
                 }
             }

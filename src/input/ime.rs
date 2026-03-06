@@ -115,7 +115,14 @@ pub fn ensure_ime_environment() {
 /// Start fcitx5 daemon on the current DBUS_SESSION_BUS_ADDRESS.
 ///
 /// Safe to call multiple times — fcitx5 -d exits if already running on the same bus.
+/// Skips when running as root (uid=0) since fcitx5 crashes under root.
 pub fn start_fcitx5() {
+    if unsafe { libc::getuid() } == 0 {
+        // fcitx5 cannot run as root — it will be started by the user's shell
+        // (.bashrc) which inherits DBUS_SESSION_BUS_ADDRESS from bcon.
+        debug!("IME: skipping fcitx5 start (running as root, user shell will start it)");
+        return;
+    }
     info!("IME: starting fcitx5 on bcon D-Bus...");
     match std::process::Command::new("fcitx5").arg("-d").spawn() {
         Ok(_) => {
@@ -126,6 +133,13 @@ pub fn start_fcitx5() {
             info!("IME: fcitx5 not available: {}", e);
         }
     }
+}
+
+/// Get the current bcon D-Bus address if one was set up.
+///
+/// Returns the address string for passing to child processes via extra_env.
+pub fn dbus_address() -> Option<String> {
+    std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()
 }
 
 // === Type definitions ===
