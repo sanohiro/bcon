@@ -27,7 +27,7 @@ mod utils;
 
 use anyhow::{anyhow, Context, Result};
 use glow::HasContext;
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 use std::time::{Duration, Instant};
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
@@ -1696,8 +1696,11 @@ Make sure seatd/logind is running and you're on an active VT."
         input::ime::ensure_ime_environment();
     }
 
-    // Pass DBUS_SESSION_BUS_ADDRESS to child process so user's .bashrc fcitx5
-    // connects to bcon's D-Bus (survives /bin/login via extra_env)
+    // Pass DBUS_SESSION_BUS_ADDRESS to child process.
+    // For non-root: shell is exec'd directly, so extra_env works.
+    // For root/systemd: /bin/login calls clearenv(), so this is lost —
+    // but /etc/profile.d/bcon-dbus.sh (written by ensure_ime_environment)
+    // provides the address to login shells instead.
     let dbus_addr = input::ime::dbus_address();
     let extra_env: Vec<(&str, &str)> = if let Some(ref addr) = dbus_addr {
         vec![("DBUS_SESSION_BUS_ADDRESS", addr.as_str())]
