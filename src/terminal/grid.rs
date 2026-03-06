@@ -963,14 +963,27 @@ impl Grid {
         self.modes.mouse_sgr_pixels
     }
 
-    /// Get reference to cell
+    /// Get reference to cell (bounds-checked to prevent panic)
     pub fn cell(&self, row: usize, col: usize) -> &Cell {
-        &self.cells[row * self.cols + col]
+        let idx = row * self.cols + col;
+        if idx < self.cells.len() {
+            &self.cells[idx]
+        } else {
+            // Return last cell as fallback rather than panicking.
+            // This can happen during resize race or out-of-bounds escape sequences.
+            &self.cells[self.cells.len() - 1]
+        }
     }
 
-    /// Get mutable reference to cell
+    /// Get mutable reference to cell (bounds-checked to prevent panic)
     fn cell_mut(&mut self, row: usize, col: usize) -> &mut Cell {
-        &mut self.cells[row * self.cols + col]
+        let idx = row * self.cols + col;
+        let len = self.cells.len();
+        if idx < len {
+            &mut self.cells[idx]
+        } else {
+            &mut self.cells[len - 1]
+        }
     }
 
     // ========== Wide character helpers ==========
@@ -1250,6 +1263,9 @@ impl Grid {
 
         // Write primary cell
         let idx = self.cursor_row * self.cols + self.cursor_col;
+        if idx >= self.cells.len() {
+            return;
+        }
         self.cells[idx] = Cell {
             grapheme: char_to_smolstr(ch),
             fg,
@@ -1422,14 +1438,18 @@ impl Grid {
         let blank = self.blank_cell();
         let start = row * self.cols;
         let end = start + self.cols;
-        self.cells[start..end].fill(blank);
+        if end <= self.cells.len() {
+            self.cells[start..end].fill(blank);
+        }
     }
 
     /// Clear row with default colors (for internal use)
     fn clear_row(&mut self, row: usize) {
         let start = row * self.cols;
         let end = start + self.cols;
-        self.cells[start..end].fill(Cell::default());
+        if end <= self.cells.len() {
+            self.cells[start..end].fill(Cell::default());
+        }
     }
 
     /// Delete images overlapping specified row
@@ -1481,6 +1501,9 @@ impl Grid {
         if top == 0 && bottom == self.rows - 1 {
             for i in 0..n {
                 let start = i * self.cols;
+                if start + self.cols > self.cells.len() {
+                    break;
+                }
                 // Reuse row buffer from pool if available
                 let mut row_cells = self
                     .row_pool
@@ -1490,7 +1513,8 @@ impl Grid {
                 row_cells.extend_from_slice(&self.cells[start..start + self.cols]);
                 self.scrollback.push_back(row_cells);
                 // Save wrapped flag for this row
-                self.scrollback_wrapped.push_back(self.wrapped_lines[i]);
+                self.scrollback_wrapped
+                    .push_back(self.wrapped_lines.get(i).copied().unwrap_or(false));
             }
             // Return evicted rows to pool for reuse
             while self.scrollback.len() > self.max_scrollback {
@@ -1509,11 +1533,16 @@ impl Grid {
         for row in top..(bottom + 1 - n) {
             let src_start = (row + n) * self.cols;
             let dst_start = row * self.cols;
+            if src_start + self.cols > self.cells.len() || dst_start + self.cols > src_start {
+                break;
+            }
             // split_at_mut allows us to have mutable refs to non-overlapping slices
             let (left, right) = self.cells.split_at_mut(src_start);
             left[dst_start..dst_start + self.cols].clone_from_slice(&right[..self.cols]);
             // Shift wrapped_lines flag
-            self.wrapped_lines[row] = self.wrapped_lines[row + n];
+            if row + n < self.wrapped_lines.len() {
+                self.wrapped_lines[row] = self.wrapped_lines[row + n];
+            }
         }
 
         // Clear bottom (using current background)
@@ -1718,9 +1747,14 @@ impl Grid {
         for row in start..(bottom + 1 - n) {
             let src_start = (row + n) * self.cols;
             let dst_start = row * self.cols;
+            if src_start + self.cols > self.cells.len() || dst_start + self.cols > src_start {
+                break;
+            }
             let (left, right) = self.cells.split_at_mut(src_start);
             left[dst_start..dst_start + self.cols].clone_from_slice(&right[..self.cols]);
-            self.wrapped_lines[row] = self.wrapped_lines[row + n];
+            if row + n < self.wrapped_lines.len() {
+                self.wrapped_lines[row] = self.wrapped_lines[row + n];
+            }
         }
 
         // Clear bottom (using current background)
@@ -1765,7 +1799,10 @@ impl Grid {
 
         // Left-shift via rotate (avoids per-cell String clone/alloc)
         let row_start = row * self.cols;
-        self.cells[row_start + col..row_start + self.cols].rotate_left(n);
+        let row_end = row_start + self.cols;
+        if row_start + col < row_end && row_end <= self.cells.len() {
+            self.cells[row_start + col..row_end].rotate_left(n);
+        }
 
         // Fill right end with spaces (using current background)
         let blank = self.blank_cell();
@@ -1811,7 +1848,10 @@ impl Grid {
 
         // Right-shift via rotate (avoids per-cell String clone/alloc)
         let row_start = row * self.cols;
-        self.cells[row_start + col..row_start + self.cols].rotate_right(n);
+        let row_end = row_start + self.cols;
+        if row_start + col < row_end && row_end <= self.cells.len() {
+            self.cells[row_start + col..row_end].rotate_right(n);
+        }
 
         // Fill insertion position with spaces (using current background)
         let blank = self.blank_cell();
@@ -1872,11 +1912,16 @@ impl Grid {
         for row in ((top + n)..=bottom).rev() {
             let src_start = (row - n) * self.cols;
             let dst_start = row * self.cols;
+            if dst_start + self.cols > self.cells.len() || src_start + self.cols > dst_start {
+                continue;
+            }
             // split_at_mut: left contains source, right contains destination
             let (left, right) = self.cells.split_at_mut(dst_start);
             right[..self.cols].clone_from_slice(&left[src_start..src_start + self.cols]);
             // Shift wrapped_lines flag
-            self.wrapped_lines[row] = self.wrapped_lines[row - n];
+            if row < self.wrapped_lines.len() && row - n < self.wrapped_lines.len() {
+                self.wrapped_lines[row] = self.wrapped_lines[row - n];
+            }
         }
 
         // Fill top with spaces (using current background)
@@ -2237,9 +2282,14 @@ impl Grid {
         for row in ((self.cursor_row + n)..=bottom).rev() {
             let src_start = (row - n) * self.cols;
             let dst_start = row * self.cols;
+            if dst_start + self.cols > self.cells.len() || src_start + self.cols > dst_start {
+                continue;
+            }
             let (left, right) = self.cells.split_at_mut(dst_start);
             right[..self.cols].clone_from_slice(&left[src_start..src_start + self.cols]);
-            self.wrapped_lines[row] = self.wrapped_lines[row - n];
+            if row < self.wrapped_lines.len() && row - n < self.wrapped_lines.len() {
+                self.wrapped_lines[row] = self.wrapped_lines[row - n];
+            }
         }
 
         // Clear inserted rows (using current background)
@@ -2381,6 +2431,11 @@ impl Grid {
             for row in 0..copy_rows {
                 let src_start = row * old_cols;
                 let dst_start = row * new_cols;
+                if src_start + copy_cols > self.cells.len()
+                    || dst_start + copy_cols > new_cells.len()
+                {
+                    break;
+                }
                 new_cells[dst_start..dst_start + copy_cols]
                     .clone_from_slice(&self.cells[src_start..src_start + copy_cols]);
             }
@@ -2509,7 +2564,9 @@ impl Grid {
             let src = &reflowed_rows[row_idx];
             let dst_start = i * new_cols;
             let copy_len = src.len().min(new_cols);
-            self.cells[dst_start..dst_start + copy_len].clone_from_slice(&src[..copy_len]);
+            if dst_start + copy_len <= self.cells.len() {
+                self.cells[dst_start..dst_start + copy_len].clone_from_slice(&src[..copy_len]);
+            }
             self.wrapped_lines[i] = reflowed_wrapped[row_idx];
         }
 
@@ -2556,6 +2613,9 @@ impl Grid {
         for screen_row in 0..self.rows {
             let abs_row = scrollback_len + screen_row;
             let src_start = screen_row * self.cols;
+            if src_start + self.cols > self.cells.len() {
+                break;
+            }
             current_cells.extend_from_slice(&self.cells[src_start..src_start + self.cols]);
             row_count += 1;
             let wrapped = self.wrapped_lines.get(screen_row).copied().unwrap_or(false);
