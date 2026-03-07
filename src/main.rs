@@ -27,7 +27,7 @@ mod utils;
 
 use anyhow::{anyhow, Context, Result};
 use glow::HasContext;
-use log::{debug, info, trace, warn};
+use log::{info, trace, warn};
 use std::time::{Duration, Instant};
 
 #[cfg(all(target_os = "linux", feature = "seatd"))]
@@ -1920,6 +1920,7 @@ Make sure seatd/logind is running and you're on an active VT."
     } else {
         None
     };
+    let mut fcitx5_launched = false;
 
     // DRM master state (for VT switching)
     let mut drm_master_held = initial_drm_master;
@@ -2968,12 +2969,27 @@ Make sure seatd/logind is running and you're on an active VT."
         }
 
         // IME lazy connect: retry if fcitx5 wasn't available at startup
-        // When running as root (systemd), fcitx5 is started by the user's shell
-        // (.bashrc) after login. We just keep trying to connect.
+        // When running as root (systemd), fcitx5 needs to be started as the
+        // logged-in user. We detect the user from the PTY child's UID.
         if let Some(retry_time) = ime_retry_at {
             if std::time::Instant::now() >= retry_time {
-                // Try starting fcitx5 (no-op when running as root)
-                input::ime::start_fcitx5();
+                // Start fcitx5 only once; after that just retry connection
+                if !fcitx5_launched {
+                    // Root login — fcitx5 cannot run as root, stop retrying
+                    if term.logged_in_uid() == Some(0) {
+                        info!("IME: root login, fcitx5 not supported, disabling IME");
+                        ime_retry_at = None;
+                        continue;
+                    }
+                    fcitx5_launched =
+                        input::ime::start_fcitx5_as_user(term.logged_in_uid());
+                    if !fcitx5_launched {
+                        // User not yet logged in — retry later
+                        ime_retry_at =
+                            Some(std::time::Instant::now() + Duration::from_secs(10));
+                        continue;
+                    }
+                }
                 match input::ime::ImeClient::try_new() {
                     Ok(c) => {
                         info!("fcitx5 IME connected (deferred)");
@@ -2981,7 +2997,7 @@ Make sure seatd/logind is running and you're on an active VT."
                         ime_retry_at = None;
                     }
                     Err(e) => {
-                        debug!("fcitx5 IME retry failed: {}", e);
+                        info!("fcitx5 IME retry failed: {}", e);
                         ime_retry_at =
                             Some(std::time::Instant::now() + Duration::from_secs(10));
                     }

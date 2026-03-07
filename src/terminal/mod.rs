@@ -599,6 +599,16 @@ impl Terminal {
         self.pty.child_home_dir()
     }
 
+    /// Get the UID of the child process (for IME user detection)
+    pub fn child_uid(&self) -> Option<u32> {
+        self.pty.child_uid()
+    }
+
+    /// Get the UID of the logged-in user (walks process tree past login)
+    pub fn logged_in_uid(&self) -> Option<u32> {
+        self.pty.logged_in_uid()
+    }
+
     /// Get cell width
     #[allow(dead_code)]
     pub fn cell_width(&self) -> u32 {

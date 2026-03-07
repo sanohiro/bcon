@@ -19,12 +19,19 @@ use std::sync::mpsc;
 /// Uses a well-known socket path (`/run/user/$UID/bcon-dbus` or `/tmp/bcon-dbus-$UID`)
 /// so that dbus-daemon survives bcon restarts and can be reused.
 ///
-/// When running as root (systemd service), uses a custom D-Bus config that
-/// allows cross-user access, and writes `/etc/profile.d/bcon-dbus.sh` so that
-/// login shells get DBUS_SESSION_BUS_ADDRESS (survives /bin/login clearenv).
+/// When running as root (systemd service), this function is a no-op.
+/// D-Bus and fcitx5 are started later by `start_fcitx5_as_user()` after
+/// detecting user login.
 ///
 /// Must be called from the main thread before any IME threads are spawned.
 pub fn ensure_ime_environment() {
+    // When running as root (e.g., systemd service), D-Bus and fcitx5 are
+    // started later by start_fcitx5_as_user() after detecting user login.
+    if unsafe { libc::getuid() } == 0 {
+        info!("IME: running as root, deferring D-Bus/fcitx5 to start_fcitx5_as_user()");
+        return;
+    }
+
     // 1. Ensure D-Bus session bus is available
     if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_ok() {
         // Already set (e.g. desktop session) — use as-is
@@ -76,77 +83,140 @@ pub fn ensure_ime_environment() {
         if reuse {
             std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &addr);
             info!("IME: reusing existing D-Bus session: {}", addr);
-            // When root, ensure socket is accessible and profile.d script exists
-            if uid == 0 {
-                make_socket_accessible(&socket_path);
-                write_profile_d_script(&socket_path);
-            }
         }
     }
 
     if std::env::var("DBUS_SESSION_BUS_ADDRESS").is_err() {
-        if uid == 0 {
-            // Running as root (e.g., systemd service):
-            // Standard --session D-Bus only allows the owner's UID to connect.
-            // Use custom config with EXTERNAL+ANONYMOUS auth so the logged-in
-            // user's fcitx5 can also connect to bcon's D-Bus.
-            start_dbus_cross_user(&socket_path, &addr);
-        } else {
-            // Running as normal user: standard session bus
-            info!("IME: DBUS_SESSION_BUS_ADDRESS not set, starting dbus-daemon...");
-            match std::process::Command::new("dbus-daemon")
-                .args([
-                    "--session",
-                    "--fork",
-                    "--print-address=1",
-                    &format!("--address={}", addr),
-                ])
-                .output()
-            {
-                Ok(output) if output.status.success() => {
-                    std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &addr);
-                    info!("IME: started D-Bus session daemon: {}", addr);
-                }
-                Ok(output) => {
-                    warn!(
-                        "IME: dbus-daemon failed: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    );
-                    return;
-                }
-                Err(e) => {
-                    info!("IME: dbus-daemon not available: {}", e);
-                    return;
-                }
+        info!("IME: DBUS_SESSION_BUS_ADDRESS not set, starting dbus-daemon...");
+        match std::process::Command::new("dbus-daemon")
+            .args([
+                "--session",
+                "--fork",
+                "--print-address=1",
+                &format!("--address={}", addr),
+            ])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &addr);
+                info!("IME: started D-Bus session daemon: {}", addr);
+            }
+            Ok(output) => {
+                warn!(
+                    "IME: dbus-daemon failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                return;
+            }
+            Err(e) => {
+                info!("IME: dbus-daemon not available: {}", e);
+                return;
             }
         }
     }
 
     // 2. Ensure fcitx5 is running on OUR bus
     // Note: don't use pgrep — it may find fcitx5 on a different D-Bus session.
-    // When root, fcitx5 will be started by the user's login shell via profile.d.
     start_fcitx5();
 }
 
-/// Start D-Bus daemon with cross-user access (for root/systemd case).
+/// Start fcitx5 daemon on the current DBUS_SESSION_BUS_ADDRESS.
 ///
-/// Standard session bus only allows the owner's UID to connect. When bcon runs
-/// as root via systemd, the logged-in user (different UID) needs to run fcitx5
-/// on the same D-Bus. This uses a custom config with permissive auth policy.
+/// Safe to call multiple times — fcitx5 -d exits if already running on the same bus.
+/// Skips when running as root (uid=0) since fcitx5 crashes under root.
+/// For root case, use `start_fcitx5_as_user()` instead.
+pub fn start_fcitx5() {
+    if unsafe { libc::getuid() } == 0 {
+        // fcitx5 cannot run as root — use start_fcitx5_as_user() from retry loop
+        debug!("IME: skipping fcitx5 start (running as root)");
+        return;
+    }
+    let dbus_addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
+    info!("IME: starting fcitx5 on bcon D-Bus...");
+    match std::process::Command::new("fcitx5").arg("-d").spawn() {
+        Ok(_) => {
+            info!("IME: started fcitx5 daemon (DBUS={}), waiting for initialization...", dbus_addr);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        Err(e) => {
+            info!("IME: fcitx5 not available: {}", e);
+        }
+    }
+}
+
+/// Start fcitx5 as the logged-in user (for root/systemd case).
 ///
-/// Also writes `/etc/profile.d/bcon-dbus.sh` so the user's login shell gets
-/// DBUS_SESSION_BUS_ADDRESS set (survives /bin/login's clearenv()).
-fn start_dbus_cross_user(socket_path: &str, addr: &str) {
-    let config_path = "/tmp/bcon-dbus-config.xml";
+/// When bcon runs as root, fcitx5 cannot run as root (crashes with "Home is not set").
+/// This function detects the user from the PTY child process UID and starts fcitx5
+/// as that user via fork() + setuid, with proper HOME and DBUS_SESSION_BUS_ADDRESS.
+///
+/// Also starts a user-owned dbus-daemon with EXTERNAL auth and `<allow user="*"/>`
+/// policy so both the user (fcitx5) and root (bcon) can connect.
+///
+/// `child_uid`: UID of the PTY child process (from `Terminal::pty.child_uid()`)
+/// Returns true if fcitx5 was actually launched (or attempted).
+/// Returns false if conditions weren't met (no user logged in, etc.).
+pub fn start_fcitx5_as_user(child_uid: Option<u32>) -> bool {
+    if unsafe { libc::getuid() } != 0 {
+        start_fcitx5();
+        return true;
+    }
+
+    let uid = match child_uid {
+        Some(u) if u != 0 => u,
+        Some(0) => {
+            // Root login — fcitx5 cannot run as root, give up.
+            info!("IME: root login detected, fcitx5 not supported");
+            return false;
+        }
+        _ => {
+            info!("IME: user not yet logged in (uid={:?}), skipping fcitx5 start", child_uid);
+            return false;
+        }
+    };
+
+    let (username, home, gid) = unsafe {
+        let pwd = libc::getpwuid(uid);
+        if pwd.is_null() {
+            warn!("IME: cannot look up user for uid {}", uid);
+            return false;
+        }
+        let name = std::ffi::CStr::from_ptr((*pwd).pw_name)
+            .to_str()
+            .unwrap_or("nobody")
+            .to_string();
+        let dir = std::ffi::CStr::from_ptr((*pwd).pw_dir)
+            .to_str()
+            .unwrap_or("/tmp")
+            .to_string();
+        let g = (*pwd).pw_gid;
+        (name, dir, g)
+    };
+
+    let xdg_runtime = format!("/run/user/{}", uid);
+
+    // Start a NEW dbus-daemon as the user (not root).
+    // Root-owned dbus-daemon rejects fcitx5's RequestName.
+    // User-owned system bus (/run/user/1000/bus) rejects root connections.
+    // Solution: user-owned dbus-daemon with EXTERNAL auth and <allow user="*"/>
+    // policy so both root and the user can connect.
+    let socket_path = format!("/tmp/bcon-user-dbus-{}", uid);
+    let dbus_addr = format!("unix:path={}", socket_path);
+    let config_path = format!("/tmp/bcon-user-dbus-config-{}.xml", uid);
+    let log_path = format!("/tmp/bcon-fcitx5-{}.log", uid);
+
+    // Remove stale socket from previous runs
+    let _ = std::fs::remove_file(&socket_path);
+
+    // Write D-Bus config (as root, before fork — writable by root)
     let config = format!(
         r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
   <listen>unix:path={socket}</listen>
   <auth>EXTERNAL</auth>
-  <auth>ANONYMOUS</auth>
-  <allow_anonymous/>
   <policy context="default">
+    <allow user="*"/>
     <allow send_destination="*" eavesdrop="true"/>
     <allow eavesdrop="true"/>
     <allow own="*"/>
@@ -154,112 +224,177 @@ fn start_dbus_cross_user(socket_path: &str, addr: &str) {
 </busconfig>"#,
         socket = socket_path,
     );
-
-    if let Err(e) = std::fs::write(config_path, &config) {
-        warn!("IME: failed to write D-Bus config {}: {}", config_path, e);
-        return;
+    if let Err(e) = std::fs::write(&config_path, &config) {
+        warn!("IME: failed to write D-Bus config: {}", e);
+        return false;
     }
 
-    info!("IME: starting D-Bus daemon (cross-user mode)...");
-    match std::process::Command::new("dbus-daemon")
-        .args(["--config-file", config_path, "--fork", "--print-address=1"])
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            std::env::set_var("DBUS_SESSION_BUS_ADDRESS", addr);
-            info!("IME: started D-Bus daemon (cross-user): {}", addr);
-            make_socket_accessible(socket_path);
-            write_profile_d_script(socket_path);
-        }
-        Ok(output) => {
-            warn!(
-                "IME: dbus-daemon failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        Err(e) => {
-            info!("IME: dbus-daemon not available: {}", e);
-        }
-    }
-}
+    // Ensure fcitx5 profile has Mozc (or another Japanese IME) configured.
+    // Without this, fcitx5's Mozc addon is OnDemand and won't load.
+    ensure_fcitx5_profile(&home, uid, gid);
 
-/// Make D-Bus socket accessible to all users (chmod 666).
-///
-/// Needed when root starts dbus-daemon — the socket is created with root
-/// ownership, but the logged-in user needs to connect (for fcitx5).
-fn make_socket_accessible(socket_path: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Err(e) = std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)) {
-        warn!("IME: failed to chmod socket {}: {}", socket_path, e);
-    }
-}
-
-/// Write `/etc/profile.d/bcon-dbus.sh` for login shell D-Bus integration.
-///
-/// When bcon runs as root via systemd, `/bin/login` calls `clearenv()` which
-/// clears ALL environment variables. This profile.d script ensures login shells
-/// get `DBUS_SESSION_BUS_ADDRESS` set before `.bashrc` runs, so fcitx5
-/// connects to bcon's D-Bus session.
-///
-/// The script also starts fcitx5 if available, since bcon (root) cannot
-/// start fcitx5 itself (fcitx5 crashes under root).
-fn write_profile_d_script(socket_path: &str) {
-    let profile_d = "/etc/profile.d";
-    if !std::path::Path::new(profile_d).is_dir() {
-        warn!(
-            "IME: {} does not exist, skipping profile.d script",
-            profile_d
-        );
-        return;
-    }
-
-    let script = format!(
-        r#"# Auto-generated by bcon for IME D-Bus integration - DO NOT EDIT
-# Sets DBUS_SESSION_BUS_ADDRESS for login shells and starts fcitx5.
-# This is needed because /bin/login calls clearenv(), losing all env vars.
-if [ -S "{socket}" ] && [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
-    export DBUS_SESSION_BUS_ADDRESS="unix:path={socket}"
-    if command -v fcitx5 >/dev/null 2>&1; then
-        fcitx5 -d 2>/dev/null || true
-    fi
-fi
-"#,
-        socket = socket_path,
+    info!(
+        "IME: starting user dbus-daemon + fcitx5 as {} (uid={}, DBUS={})",
+        username, uid, dbus_addr
     );
 
-    let script_path = format!("{}/bcon-dbus.sh", profile_d);
-    match std::fs::write(&script_path, &script) {
-        Ok(()) => {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o644));
-            info!("IME: wrote {} (socket: {})", script_path, socket_path);
+    // Fork+setuid: child starts dbus-daemon (--fork) then fcitx5 (-rd)
+    match unsafe { libc::fork() } {
+        -1 => {
+            warn!("IME: fork failed: {}", std::io::Error::last_os_error());
+            return false;
         }
-        Err(e) => {
-            warn!("IME: failed to write {}: {}", script_path, e);
+        0 => {
+            // Child: become user, start dbus-daemon + fcitx5
+            unsafe {
+                libc::initgroups(
+                    std::ffi::CString::new(username.as_str()).unwrap().as_ptr(),
+                    gid,
+                );
+                libc::setgid(gid);
+                libc::setuid(uid);
+            }
+            std::env::set_var("HOME", &home);
+            std::env::set_var("XDG_RUNTIME_DIR", &xdg_runtime);
+            std::env::set_var("USER", &username);
+            std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &dbus_addr);
+            // Ensure fcitx5 can find addons (Mozc etc.) and load locale
+            std::env::set_var("LANG", "ja_JP.UTF-8");
+            std::env::set_var("XDG_DATA_DIRS", "/usr/local/share:/usr/share");
+            std::env::set_var("XDG_CONFIG_HOME", format!("{}/.config", home));
+            // Note: set FCITX_LOG_LEVEL=debug here to troubleshoot addon loading
+
+            let _ = std::fs::write(&log_path, ""); // truncate
+
+            // Start dbus-daemon (forks into background), then fcitx5 (also daemonizes).
+            // Shell exits after both have daemonized.
+            let cmd = format!(
+                "dbus-daemon --config-file={} --fork && fcitx5 -rd >>{} 2>&1",
+                config_path, log_path
+            );
+
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new("sh")
+                .args(["-c", &cmd])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .exec();
+            eprintln!("bcon: exec failed: {}", err);
+            std::process::exit(1);
+        }
+        child_pid => {
+            let mut status: libc::c_int = 0;
+            unsafe { libc::waitpid(child_pid, &mut status, 0) };
+            info!("IME: user dbus+fcitx5 exited (status={})", status);
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            // Make socket accessible to root (bcon)
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(e) = std::fs::set_permissions(
+                    &socket_path,
+                    std::fs::Permissions::from_mode(0o666),
+                ) {
+                    warn!("IME: failed to chmod socket {}: {}", socket_path, e);
+                }
+            }
+
+            // Read fcitx5 log
+            if let Ok(log) = std::fs::read_to_string(&log_path) {
+                if !log.is_empty() {
+                    info!("IME: fcitx5 output: {}", log.trim());
+                }
+            }
+
+            // Switch bcon to user's D-Bus
+            std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &dbus_addr);
+            info!("IME: switched bcon D-Bus to: {}", dbus_addr);
         }
     }
+    true
 }
 
-/// Start fcitx5 daemon on the current DBUS_SESSION_BUS_ADDRESS.
+/// Ensure fcitx5 profile has a Japanese input method (Mozc) configured.
 ///
-/// Safe to call multiple times — fcitx5 -d exits if already running on the same bus.
-/// Skips when running as root (uid=0) since fcitx5 crashes under root.
-pub fn start_fcitx5() {
-    if unsafe { libc::getuid() } == 0 {
-        // fcitx5 cannot run as root — it will be started by the user's shell
-        // (.bashrc) which inherits DBUS_SESSION_BUS_ADDRESS from bcon.
-        debug!("IME: skipping fcitx5 start (running as root, user shell will start it)");
-        return;
+/// fcitx5-mozc addon is `OnDemand=True`, so it won't load unless the profile
+/// references it as an active input method. If the profile doesn't exist or
+/// doesn't mention "mozc", create/update it with keyboard + mozc.
+fn ensure_fcitx5_profile(home: &str, uid: u32, gid: u32) {
+    let config_dir = format!("{}/.config/fcitx5", home);
+    let profile_path = format!("{}/profile", config_dir);
+
+    // Check if profile already exists
+    if let Ok(content) = std::fs::read_to_string(&profile_path) {
+        if content.contains("mozc") || content.contains("anthy")
+            || content.contains("skk") || content.contains("kkc")
+        {
+            info!("IME: fcitx5 profile already has Japanese IME configured");
+            return;
+        }
+        // Profile exists but no Japanese IME — don't overwrite user config,
+        // but warn so user knows why IME doesn't work
+        warn!(
+            "IME: fcitx5 profile exists but has no Japanese IME. \
+             Run: fcitx5-configtool or add mozc to {}", profile_path
+        );
+        // Fall through to overwrite — user likely has bare default
+    } else {
+        info!("IME: creating fcitx5 profile with Japanese IME");
     }
-    info!("IME: starting fcitx5 on bcon D-Bus...");
-    match std::process::Command::new("fcitx5").arg("-d").spawn() {
-        Ok(_) => {
-            info!("IME: started fcitx5 daemon, waiting for initialization...");
-            std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Detect which Japanese IME addons are available
+    let ime_name = if std::path::Path::new("/usr/share/fcitx5/addon/mozc.conf").exists() {
+        "mozc"
+    } else if std::path::Path::new("/usr/share/fcitx5/addon/anthy.conf").exists() {
+        "anthy"
+    } else if std::path::Path::new("/usr/share/fcitx5/addon/skk.conf").exists() {
+        "skk"
+    } else if std::path::Path::new("/usr/share/fcitx5/addon/kkc.conf").exists() {
+        "kkc"
+    } else {
+        warn!("IME: no Japanese IME addon found (mozc/anthy/skk/kkc)");
+        return;
+    };
+
+    let profile = format!(
+        "[Groups/0]\n\
+         Name=Default\n\
+         Default Layout=us\n\
+         DefaultIM=keyboard-us\n\
+         \n\
+         [Groups/0/Items/0]\n\
+         Name=keyboard-us\n\
+         Layout=\n\
+         \n\
+         [Groups/0/Items/1]\n\
+         Name={ime}\n\
+         Layout=\n\
+         \n\
+         [GroupOrder]\n\
+         0=Default\n",
+        ime = ime_name,
+    );
+
+    // Create config directory if needed, owned by user
+    let _ = std::fs::create_dir_all(&config_dir);
+    // chown directories to user
+    let config_base = format!("{}/.config", home);
+    for dir in [&config_base, &config_dir] {
+        unsafe {
+            let path_c = std::ffi::CString::new(dir.as_str()).unwrap();
+            libc::chown(path_c.as_ptr(), uid, gid);
         }
-        Err(e) => {
-            info!("IME: fcitx5 not available: {}", e);
+    }
+    match std::fs::write(&profile_path, &profile) {
+        Ok(()) => {
+            // chown profile to user
+            unsafe {
+                let path_c = std::ffi::CString::new(profile_path.as_str()).unwrap();
+                libc::chown(path_c.as_ptr(), uid, gid);
+            }
+            info!("IME: wrote fcitx5 profile with {} ({})", ime_name, profile_path);
         }
+        Err(e) => warn!("IME: failed to write fcitx5 profile: {}", e),
     }
 }
 
@@ -521,6 +656,10 @@ async fn ime_async_main(
             &dbus_addr
         }
     );
+    // Connect with EXTERNAL auth (default).
+    // The user-owned dbus-daemon has <allow user="*"/> in policy,
+    // so root can connect via EXTERNAL auth (SO_PEERCRED identifies UID 0,
+    // policy allows all users).
     let connection = match zbus::Connection::session().await {
         Ok(c) => {
             info!("IME: D-Bus session connected");
@@ -702,6 +841,10 @@ async fn ime_async_main(
 
             // Key event from main thread
             Some(key_event) = key_rx.recv() => {
+                if !key_event.is_release {
+                    debug!("IME ProcessKey: keysym={:#x} keycode={} state={:#x}",
+                        key_event.keysym, key_event.keycode, key_event.state);
+                }
                 match ic.process_key_event(
                     key_event.keysym,
                     key_event.keycode,
@@ -710,6 +853,9 @@ async fn ime_async_main(
                     0, // time
                 ).await {
                     Ok(handled) => {
+                        if !key_event.is_release {
+                            debug!("IME ProcessKey result: handled={}", handled);
+                        }
                         if !handled && !key_event.is_release {
                             // Not processed by IME -> notify as ForwardKey
                             debug!("IME unprocessed key: keysym={:#x}", key_event.keysym);

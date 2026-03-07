@@ -444,12 +444,48 @@ impl Pty {
 
     /// Get the UID of the child process
     pub fn child_uid(&self) -> Option<u32> {
-        let status_path = format!("/proc/{}/status", self.child_pid);
-        let content = std::fs::read_to_string(&status_path).ok()?;
+        Self::uid_of_pid(self.child_pid.as_raw())
+    }
 
+    /// Get the UID of the logged-in user (walks process tree).
+    ///
+    /// `/bin/login` forks: the direct child stays as root (waiting),
+    /// and the grandchild becomes the user's shell. This method checks
+    /// the child first, then walks to grandchildren to find a non-root UID.
+    pub fn logged_in_uid(&self) -> Option<u32> {
+        // Check direct child first
+        let uid = Self::uid_of_pid(self.child_pid.as_raw());
+        if let Some(u) = uid {
+            if u != 0 {
+                return Some(u);
+            }
+        }
+
+        // Direct child is root (login parent), check grandchildren
+        let children_path = format!(
+            "/proc/{}/task/{}/children",
+            self.child_pid, self.child_pid
+        );
+        if let Ok(children) = std::fs::read_to_string(&children_path) {
+            for pid_str in children.split_whitespace() {
+                if let Ok(pid) = pid_str.parse::<i32>() {
+                    if let Some(u) = Self::uid_of_pid(pid) {
+                        if u != 0 {
+                            return Some(u);
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Read the real UID of a process from /proc/<pid>/status
+    fn uid_of_pid(pid: i32) -> Option<u32> {
+        let content = std::fs::read_to_string(format!("/proc/{}/status", pid)).ok()?;
         for line in content.lines() {
             if line.starts_with("Uid:") {
-                // Format: "Uid:\treal\teffective\tsaved\tfs"
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 2 {
                     return parts[1].parse().ok();

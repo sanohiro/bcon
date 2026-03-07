@@ -28,6 +28,7 @@ ConditionPathExists=/dev/%I
 [Service]
 Type=simple
 Environment=BCON_BACKEND=vt
+Environment=RUST_LOG=info
 ExecStart=/usr/local/bin/bcon
 WorkingDirectory=/root
 StandardInput=tty

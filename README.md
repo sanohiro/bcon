@@ -137,21 +137,17 @@ curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.t
 tar xf Hack.tar.xz && rm Hack.tar.xz
 fc-cache -fv
 
-# 3. Setup fcitx5 auto-start
-echo 'fcitx5 -d &>/dev/null' >> ~/.bashrc
-# or ~/.zshrc
-
-# 4. Generate config file (auto-detects Nerd Font if installed)
+# 3. Generate config file (auto-detects Nerd Font if installed)
 sudo bcon --init-config=system,jp        # Default keybinds
 sudo bcon --init-config=system,vim,jp    # Vim-like keybinds
 sudo bcon --init-config=system,emacs,jp  # Emacs-like keybinds
 
-# 5. Enable systemd service (tty2)
+# 4. Enable systemd service (tty2)
 sudo systemctl disable getty@tty2
 sudo systemctl enable bcon@tty2
 sudo systemctl start bcon@tty2
 
-# 6. Switch to bcon
+# 5. Switch to bcon
 # Ctrl+Alt+F2
 
 # Toggle IME: Ctrl+Space (fcitx5 default)
