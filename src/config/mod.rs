@@ -1223,8 +1223,6 @@ pub fn detect_nerd_font_path() -> Option<String> {
         // JetBrainsMono Nerd Font
         "/usr/share/fonts/truetype/jetbrains-mono-nerd/JetBrainsMonoNerdFontMono-Regular.ttf",
         "/usr/share/fonts/truetype/jetbrains-mono-nerd/JetBrainsMonoNerdFont-Regular.ttf",
-        // Manual install locations (~/.local/share/fonts)
-        // These are expanded at runtime
     ];
 
     for path in candidates {
@@ -1234,23 +1232,32 @@ pub fn detect_nerd_font_path() -> Option<String> {
         }
     }
 
-    // Check user fonts directory
-    if let Some(data_dir) = dirs::data_dir() {
-        let user_fonts = data_dir.join("fonts");
-        let nerd_font_patterns = [
-            "HackNerdFont",
-            "FiraCodeNerdFont",
-            "JetBrainsMonoNerdFont",
-            "DejaVuSansMNerdFont",
-        ];
+    // Check system-wide and user font directories for manually installed Nerd Fonts
+    let nerd_font_patterns = [
+        "HackNerdFont",
+        "FiraCodeNerdFont",
+        "JetBrainsMonoNerdFont",
+        "DejaVuSansMNerdFont",
+    ];
 
-        if let Ok(entries) = std::fs::read_dir(&user_fonts) {
+    let mut font_dirs: Vec<std::path::PathBuf> = vec![
+        // System-wide (README recommends installing here)
+        std::path::PathBuf::from("/usr/local/share/fonts"),
+    ];
+
+    // User fonts directory (~/.local/share/fonts)
+    if let Some(data_dir) = dirs::data_dir() {
+        font_dirs.push(data_dir.join("fonts"));
+    }
+
+    for font_dir in &font_dirs {
+        if let Ok(entries) = std::fs::read_dir(font_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 for pattern in nerd_font_patterns {
                     if name.contains(pattern) && name.ends_with(".ttf") {
                         let path = entry.path().to_string_lossy().to_string();
-                        info!("Detected Nerd Font (user): {}", path);
+                        info!("Detected Nerd Font: {}", path);
                         return Some(path);
                     }
                 }

@@ -96,11 +96,11 @@ sudo apt install bcon
 
 # 2. (Optional) Install Nerd Font for icons (yazi, lsd, etc.)
 sudo apt install fontconfig curl  # if not already installed
-mkdir -p ~/.local/share/fonts
-cd ~/.local/share/fonts
-curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
-tar xf Hack.tar.xz && rm Hack.tar.xz
-fc-cache -fv
+sudo mkdir -p /usr/local/share/fonts
+cd /usr/local/share/fonts
+sudo curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+sudo tar xf Hack.tar.xz && sudo rm Hack.tar.xz
+sudo fc-cache -fv
 
 # 3. Generate config file (auto-detects Nerd Font if installed)
 sudo bcon --init-config=system           # Default keybinds
@@ -131,11 +131,11 @@ sudo apt install --no-install-recommends fcitx5 fcitx5-mozc
 
 # 2. (Optional) Install Nerd Font for icons (yazi, lsd, etc.)
 sudo apt install fontconfig curl  # if not already installed
-mkdir -p ~/.local/share/fonts
-cd ~/.local/share/fonts
-curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
-tar xf Hack.tar.xz && rm Hack.tar.xz
-fc-cache -fv
+sudo mkdir -p /usr/local/share/fonts
+cd /usr/local/share/fonts
+sudo curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+sudo tar xf Hack.tar.xz && sudo rm Hack.tar.xz
+sudo fc-cache -fv
 
 # 3. Generate config file (auto-detects Nerd Font if installed)
 sudo bcon --init-config=system,jp        # Default keybinds
@@ -245,12 +245,11 @@ For icon display in **yazi**, **ranger**, **lsd**, **eza**, **fish**, and Powerl
 
 ```bash
 # Download and install Hack Nerd Font
-mkdir -p ~/.local/share/fonts
-cd ~/.local/share/fonts
-curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
-tar xf Hack.tar.xz
-rm Hack.tar.xz
-fc-cache -fv
+sudo mkdir -p /usr/local/share/fonts
+cd /usr/local/share/fonts
+sudo curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+sudo tar xf Hack.tar.xz && sudo rm Hack.tar.xz
+sudo fc-cache -fv
 ```
 
 Configure in `config.toml` — font name or file path both work:
@@ -259,14 +258,6 @@ Configure in `config.toml` — font name or file path both work:
 [font]
 symbols = "Hack Nerd Font Mono"    # by name (recommended)
 # symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"  # by path
-```
-
-If running via **systemd** (root service), install fonts system-wide:
-
-```bash
-sudo mkdir -p /usr/local/share/fonts
-sudo cp ~/.local/share/fonts/HackNerdFont*.ttf /usr/local/share/fonts/
-sudo fc-cache -fv
 ```
 
 The `symbols` font is used as fallback for Powerline glyphs (U+E000-U+F8FF) and Nerd Font icons. If not specified, bcon auto-detects installed Nerd Fonts via fontconfig.

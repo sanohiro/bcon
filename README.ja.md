@@ -94,11 +94,11 @@ sudo apt install bcon
 
 # 2. (任意) Nerd Font をインストール (yazi, lsd 等のアイコン表示用)
 sudo apt install fontconfig curl  # 未インストールの場合
-mkdir -p ~/.local/share/fonts
-cd ~/.local/share/fonts
-curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
-tar xf Hack.tar.xz && rm Hack.tar.xz
-fc-cache -fv
+sudo mkdir -p /usr/local/share/fonts
+cd /usr/local/share/fonts
+sudo curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+sudo tar xf Hack.tar.xz && sudo rm Hack.tar.xz
+sudo fc-cache -fv
 
 # 3. 設定ファイルを生成 (Nerd Font があれば自動検出)
 sudo bcon --init-config=system           # デフォルトキーバインド
@@ -128,11 +128,11 @@ sudo apt install --no-install-recommends fcitx5 fcitx5-mozc
 
 # 2. (任意) Nerd Font をインストール (yazi, lsd 等のアイコン表示用)
 sudo apt install fontconfig curl  # 未インストールの場合
-mkdir -p ~/.local/share/fonts
-cd ~/.local/share/fonts
-curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
-tar xf Hack.tar.xz && rm Hack.tar.xz
-fc-cache -fv
+sudo mkdir -p /usr/local/share/fonts
+cd /usr/local/share/fonts
+sudo curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+sudo tar xf Hack.tar.xz && sudo rm Hack.tar.xz
+sudo fc-cache -fv
 
 # 3. fcitx5 自動起動を設定
 echo 'fcitx5 -d &>/dev/null' >> ~/.bashrc
@@ -246,12 +246,11 @@ screenshot_dir = "~/Pictures"
 
 ```bash
 # Hack Nerd Font をダウンロード・インストール
-mkdir -p ~/.local/share/fonts
-cd ~/.local/share/fonts
-curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
-tar xf Hack.tar.xz
-rm Hack.tar.xz
-fc-cache -fv
+sudo mkdir -p /usr/local/share/fonts
+cd /usr/local/share/fonts
+sudo curl -OL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Hack.tar.xz
+sudo tar xf Hack.tar.xz && sudo rm Hack.tar.xz
+sudo fc-cache -fv
 ```
 
 `config.toml` で設定 — フォント名でもファイルパスでも指定可能:
@@ -260,14 +259,6 @@ fc-cache -fv
 [font]
 symbols = "Hack Nerd Font Mono"    # フォント名で指定 (推奨)
 # symbols = "/usr/local/share/fonts/HackNerdFontMono-Regular.ttf"  # パスでも可
-```
-
-**systemd 経由（root サービス）**で起動する場合は、フォントを system-wide にインストール:
-
-```bash
-sudo mkdir -p /usr/local/share/fonts
-sudo cp ~/.local/share/fonts/HackNerdFont*.ttf /usr/local/share/fonts/
-sudo fc-cache -fv
 ```
 
 `symbols` フォントは Powerline グリフ (U+E000-U+F8FF) や Nerd Font アイコンのフォールバックとして使用されます。指定しない場合、bcon は fontconfig 経由でインストール済みの Nerd Font を自動検出します。
