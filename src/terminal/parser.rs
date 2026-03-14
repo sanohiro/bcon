@@ -733,6 +733,8 @@ impl<'a> Perform for Performer<'a> {
                                 self.cell_width,
                                 self.cell_height,
                                 false, // Sixel always moves cursor
+                                0,     // No explicit display cols
+                                0,     // No explicit display rows
                             );
                         }
                     }

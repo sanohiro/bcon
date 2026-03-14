@@ -40,6 +40,123 @@ impl Pty {
         Self::spawn_with_pixels(cols, rows, 0, 0, term_env, extra_env)
     }
 
+    /// Create PTY and spawn user's shell directly (for split panes / new tabs).
+    ///
+    /// Unlike `spawn()` which runs `/bin/login` when root, this method
+    /// drops privileges to the specified user and runs their shell directly.
+    /// Used when the user is already authenticated (e.g., split pane from existing session).
+    pub fn spawn_as_user(
+        cols: u16,
+        rows: u16,
+        term_env: &str,
+        extra_env: &[(&str, &str)],
+        uid: u32,
+    ) -> Result<Self> {
+        let winsize = Winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+
+        // Look up user info before fork
+        let pwd = unsafe { libc::getpwuid(uid) };
+        if pwd.is_null() {
+            return Err(anyhow!("getpwuid({}) failed", uid));
+        }
+        let (shell, home, user_name, gid) = unsafe {
+            let shell = std::ffi::CStr::from_ptr((*pwd).pw_shell)
+                .to_str()
+                .unwrap_or("/bin/sh")
+                .to_string();
+            let home = std::ffi::CStr::from_ptr((*pwd).pw_dir)
+                .to_str()
+                .unwrap_or("/")
+                .to_string();
+            let name = std::ffi::CStr::from_ptr((*pwd).pw_name)
+                .to_str()
+                .unwrap_or("")
+                .to_string();
+            let gid = (*pwd).pw_gid;
+            (shell, home, name, gid)
+        };
+
+        let ForkptyResult {
+            master,
+            fork_result,
+        } = unsafe { forkpty(Some(&winsize), None)? };
+
+        match fork_result {
+            ForkResult::Child => {
+                // Drop privileges: set groups, gid, uid
+                unsafe {
+                    let user_cstr = std::ffi::CString::new(user_name.as_str())
+                        .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+                    libc::initgroups(user_cstr.as_ptr(), gid);
+                    libc::setgid(gid);
+                    libc::setuid(uid);
+                }
+
+                // Set environment
+                std::env::set_var("TERM", term_env);
+                std::env::set_var("COLORTERM", "truecolor");
+                std::env::set_var("TERM_PROGRAM", "bcon");
+                std::env::set_var("HOME", &home);
+                std::env::set_var("USER", &user_name);
+                std::env::set_var("LOGNAME", &user_name);
+                std::env::set_var("SHELL", &shell);
+
+                for (key, value) in extra_env {
+                    std::env::set_var(key, value);
+                }
+
+                // cd to home directory
+                let _ = std::env::set_current_dir(&home);
+
+                // Exec user's shell as login shell
+                let shell_cstr = match std::ffi::CString::new(shell.as_str()) {
+                    Ok(s) => s,
+                    Err(_) => std::process::exit(1),
+                };
+                let shell_name = std::path::Path::new(&shell)
+                    .file_name()
+                    .map(|n| format!("-{}", n.to_string_lossy()))
+                    .unwrap_or_else(|| "-sh".to_string());
+                let argv0 = match std::ffi::CString::new(shell_name) {
+                    Ok(s) => s,
+                    Err(_) => std::process::exit(1),
+                };
+
+                match nix::unistd::execvp(&shell_cstr, &[&argv0]) {
+                    Ok(infallible) => match infallible {},
+                    Err(e) => {
+                        eprintln!("bcon: failed to spawn shell: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            ForkResult::Parent { child } => {
+                info!(
+                    "PTY spawned: pid={}, master_fd={} (as user uid={})",
+                    child,
+                    master.as_raw_fd(),
+                    uid
+                );
+
+                // Set master fd to non-blocking
+                let flags = nix::fcntl::fcntl(master.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL)?;
+                let mut flags = nix::fcntl::OFlag::from_bits_truncate(flags);
+                flags.insert(nix::fcntl::OFlag::O_NONBLOCK);
+                nix::fcntl::fcntl(master.as_raw_fd(), nix::fcntl::FcntlArg::F_SETFL(flags))?;
+
+                Ok(Self {
+                    master,
+                    child_pid: child,
+                })
+            }
+        }
+    }
+
     /// Create PTY and spawn shell (with pixel size)
     ///
     /// Specify initial terminal size with `cols`, `rows`,
@@ -257,6 +374,12 @@ impl Pty {
         let _ = nix::sys::signal::kill(self.child_pid, nix::sys::signal::Signal::SIGWINCH);
 
         Ok(())
+    }
+
+    /// Send SIGHUP to child process group (for pre-shutdown)
+    pub fn send_sighup(&self) {
+        let pgid = Pid::from_raw(-self.child_pid.as_raw());
+        let _ = nix::sys::signal::kill(pgid, nix::sys::signal::Signal::SIGHUP);
     }
 
     /// Check if child process is alive
@@ -513,9 +636,38 @@ impl Pty {
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        // Send SIGHUP and wait for child process to exit
-        let _ = nix::sys::signal::kill(self.child_pid, nix::sys::signal::Signal::SIGHUP);
-        let _ = waitpid(self.child_pid, None);
+        // Close master fd first — this causes EIO on the slave side,
+        // prompting well-behaved children to exit on their own.
+        // Note: OwnedFd::drop will try to close this fd again (EBADF), which is harmless
+        // during single-threaded shutdown.
+        unsafe {
+            libc::close(self.master.as_raw_fd());
+        }
+
+        // Send SIGHUP to the entire process group (bash + all its children).
+        // forkpty calls setsid(), so child_pid == process group ID.
+        let pgid = Pid::from_raw(-self.child_pid.as_raw());
+        let _ = nix::sys::signal::kill(pgid, nix::sys::signal::Signal::SIGHUP);
+
+        // Wait with timeout: try non-blocking waits for up to 500ms, then SIGKILL
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            match waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)) {
+                Ok(nix::sys::wait::WaitStatus::StillAlive) => {
+                    if std::time::Instant::now() >= deadline {
+                        log::warn!(
+                            "Child {} did not exit after SIGHUP, sending SIGKILL to process group",
+                            self.child_pid
+                        );
+                        let _ = nix::sys::signal::kill(pgid, nix::sys::signal::Signal::SIGKILL);
+                        let _ = waitpid(self.child_pid, None);
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                _ => break, // Exited or error
+            }
+        }
     }
 }
 

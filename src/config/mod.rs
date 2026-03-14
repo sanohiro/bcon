@@ -280,6 +280,60 @@ pub struct KeybindConfig {
     /// Notification mute toggle (default: "ctrl+shift+m")
     #[serde(deserialize_with = "deserialize_keybind")]
     pub notification_mute: Vec<String>,
+
+    // === Pane management ===
+
+    /// Split pane right (default: "ctrl+shift+enter")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub split_right: Vec<String>,
+    /// Split pane down (default: "ctrl+shift+d")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub split_down: Vec<String>,
+    /// Close pane (default: "ctrl+shift+w")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub close_pane: Vec<String>,
+    /// Navigate pane left
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub pane_left: Vec<String>,
+    /// Navigate pane right
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub pane_right: Vec<String>,
+    /// Navigate pane up
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub pane_up: Vec<String>,
+    /// Navigate pane down
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub pane_down: Vec<String>,
+    /// Resize pane left
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub resize_left: Vec<String>,
+    /// Resize pane right
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub resize_right: Vec<String>,
+    /// Resize pane up
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub resize_up: Vec<String>,
+    /// Resize pane down
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub resize_down: Vec<String>,
+    /// Zoom toggle (default: "ctrl+shift+z")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub zoom_pane: Vec<String>,
+
+    // === Tab management ===
+
+    /// New tab (default: "ctrl+shift+t")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub new_tab: Vec<String>,
+    /// Close tab (default: "ctrl+shift+q")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub close_tab: Vec<String>,
+    /// Next tab (default: "ctrl+pagedown")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub next_tab: Vec<String>,
+    /// Previous tab (default: "ctrl+pageup")
+    #[serde(deserialize_with = "deserialize_keybind")]
+    pub prev_tab: Vec<String>,
 }
 
 /// Keybind deserializer: accepts string or array
@@ -552,15 +606,53 @@ impl Default for KeybindConfig {
 }
 
 impl KeybindConfig {
+    /// Default pane/tab keybinds (shared across all presets)
+    fn default_pane_keybinds() -> PaneTabKeybinds {
+        PaneTabKeybinds {
+            split_right: vec!["ctrl+shift+enter".to_string()],
+            split_down: vec!["ctrl+shift+d".to_string()],
+            close_pane: vec!["ctrl+shift+w".to_string()],
+            pane_left: vec!["ctrl+shift+left".to_string()],
+            pane_right: vec!["ctrl+shift+right".to_string()],
+            pane_up: vec!["ctrl+shift+up".to_string()],
+            pane_down: vec!["ctrl+shift+down".to_string()],
+            resize_left: vec!["ctrl+shift+alt+left".to_string()],
+            resize_right: vec!["ctrl+shift+alt+right".to_string()],
+            resize_up: vec!["ctrl+shift+alt+up".to_string()],
+            resize_down: vec!["ctrl+shift+alt+down".to_string()],
+            zoom_pane: vec!["ctrl+shift+z".to_string()],
+            new_tab: vec!["ctrl+shift+t".to_string()],
+            close_tab: vec!["ctrl+shift+q".to_string()],
+            next_tab: vec!["ctrl+pagedown".to_string()],
+            prev_tab: vec!["ctrl+pageup".to_string()],
+        }
+    }
+
+    /// Vim preset pane navigation (hjkl)
+    fn vim_pane_keybinds() -> PaneTabKeybinds {
+        let mut kb = Self::default_pane_keybinds();
+        kb.pane_left = vec!["ctrl+shift+h".to_string(), "ctrl+shift+left".to_string()];
+        kb.pane_right = vec!["ctrl+shift+l".to_string(), "ctrl+shift+right".to_string()];
+        kb.pane_up = vec!["ctrl+shift+k".to_string(), "ctrl+shift+up".to_string()];
+        kb.pane_down = vec!["ctrl+shift+j".to_string(), "ctrl+shift+down".to_string()];
+        kb.resize_left = vec!["ctrl+shift+alt+h".to_string(), "ctrl+shift+alt+left".to_string()];
+        kb.resize_right = vec!["ctrl+shift+alt+l".to_string(), "ctrl+shift+alt+right".to_string()];
+        kb.resize_up = vec!["ctrl+shift+alt+k".to_string(), "ctrl+shift+alt+up".to_string()];
+        kb.resize_down = vec!["ctrl+shift+alt+j".to_string(), "ctrl+shift+alt+down".to_string()];
+        // Vim preset uses Ctrl+Shift+D for scroll down, so use Ctrl+Shift+Backslash for split down
+        kb.split_down = vec!["ctrl+shift+\\".to_string()];
+        kb
+    }
+
     /// Default preset (standard terminal keybindings)
     pub fn default_preset() -> Self {
+        let pane = Self::default_pane_keybinds();
         Self {
             copy: vec!["ctrl+shift+c".to_string()],
             paste: vec!["ctrl+shift+v".to_string()],
             screenshot: vec!["ctrl+shift+s".to_string(), "printscreen".to_string()],
             search: vec!["ctrl+shift+f".to_string()],
             copy_mode: vec!["ctrl+shift+space".to_string()],
-            // "=" is the key that has "+" with Shift on US keyboards
             font_increase: vec!["ctrl+=".to_string(), "ctrl+shift+=".to_string()],
             font_decrease: vec!["ctrl+minus".to_string(), "ctrl+shift+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
@@ -570,54 +662,118 @@ impl KeybindConfig {
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
             notification_panel: vec!["ctrl+shift+n".to_string()],
             notification_mute: vec!["ctrl+shift+m".to_string()],
+            split_right: pane.split_right,
+            split_down: pane.split_down,
+            close_pane: pane.close_pane,
+            pane_left: pane.pane_left,
+            pane_right: pane.pane_right,
+            pane_up: pane.pane_up,
+            pane_down: pane.pane_down,
+            resize_left: pane.resize_left,
+            resize_right: pane.resize_right,
+            resize_up: pane.resize_up,
+            resize_down: pane.resize_down,
+            zoom_pane: pane.zoom_pane,
+            new_tab: pane.new_tab,
+            close_tab: pane.close_tab,
+            next_tab: pane.next_tab,
+            prev_tab: pane.prev_tab,
         }
     }
 
     /// Emacs preset (Emacs-like scroll)
-    /// Ctrl+Shift based for safety, only scroll is Emacs-like
-    /// (Ctrl+S/Y/V/Space conflicts with bash/zsh/tmux, so avoided)
     pub fn emacs_preset() -> Self {
+        let pane = Self::default_pane_keybinds();
         Self {
-            copy: vec!["ctrl+shift+w".to_string()], // M-w (kill-ring-save) style
-            paste: vec!["ctrl+shift+y".to_string()], // C-y (yank) style
+            copy: vec!["ctrl+shift+w".to_string()],
+            paste: vec!["ctrl+shift+y".to_string()],
             screenshot: vec!["printscreen".to_string()],
-            search: vec!["ctrl+shift+s".to_string()], // C-s (isearch) style
-            copy_mode: vec!["ctrl+shift+m".to_string()], // M for Mark/Mode
-            // "=" is the key that has "+" with Shift on US keyboards
+            search: vec!["ctrl+shift+s".to_string()],
+            copy_mode: vec!["ctrl+shift+m".to_string()],
             font_increase: vec!["ctrl+=".to_string(), "ctrl+shift+=".to_string()],
             font_decrease: vec!["ctrl+minus".to_string(), "ctrl+shift+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
-            scroll_up: vec!["alt+shift+v".to_string()], // M-S-v (safe Emacs-like)
-            scroll_down: vec!["alt+shift+n".to_string()], // M-S-n (safe Emacs-like)
+            scroll_up: vec!["alt+shift+v".to_string()],
+            scroll_down: vec!["alt+shift+n".to_string()],
             ime_toggle: vec!["ctrl+shift+j".to_string()],
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
             notification_panel: vec!["ctrl+shift+n".to_string()],
             notification_mute: vec!["alt+shift+m".to_string()],
+            split_right: pane.split_right,
+            split_down: pane.split_down,
+            close_pane: pane.close_pane,
+            pane_left: pane.pane_left,
+            pane_right: pane.pane_right,
+            pane_up: pane.pane_up,
+            pane_down: pane.pane_down,
+            resize_left: pane.resize_left,
+            resize_right: pane.resize_right,
+            resize_up: pane.resize_up,
+            resize_down: pane.resize_down,
+            zoom_pane: pane.zoom_pane,
+            new_tab: pane.new_tab,
+            close_tab: pane.close_tab,
+            next_tab: pane.next_tab,
+            prev_tab: pane.prev_tab,
         }
     }
 
-    /// Vim preset (Vim-like scroll)
-    /// Ctrl+Shift based for safety, only scroll is Vim-like
-    /// (Ctrl+U/D conflicts with bash line deletion, so avoided)
+    /// Vim preset (Vim-like scroll + hjkl pane navigation)
     pub fn vim_preset() -> Self {
+        let pane = Self::vim_pane_keybinds();
         Self {
             copy: vec!["ctrl+shift+c".to_string()],
             paste: vec!["ctrl+shift+v".to_string()],
             screenshot: vec!["ctrl+shift+s".to_string(), "printscreen".to_string()],
             search: vec!["ctrl+shift+f".to_string()],
             copy_mode: vec!["ctrl+shift+space".to_string()],
-            // "=" is the key that has "+" with Shift on US keyboards
             font_increase: vec!["ctrl+=".to_string(), "ctrl+shift+=".to_string()],
             font_decrease: vec!["ctrl+minus".to_string(), "ctrl+shift+minus".to_string()],
             font_reset: vec!["ctrl+0".to_string()],
-            scroll_up: vec!["ctrl+shift+u".to_string()], // Ctrl+Shift+U (safe Vim-like)
-            scroll_down: vec!["ctrl+shift+d".to_string()], // Ctrl+Shift+D (safe Vim-like)
+            scroll_up: vec!["ctrl+shift+u".to_string()],
+            scroll_down: vec!["ctrl+shift+d".to_string()],
             ime_toggle: vec!["ctrl+shift+j".to_string()],
             reset_terminal: vec!["ctrl+shift+escape".to_string()],
             notification_panel: vec!["ctrl+shift+n".to_string()],
             notification_mute: vec!["ctrl+shift+m".to_string()],
+            split_right: pane.split_right,
+            split_down: pane.split_down,
+            close_pane: pane.close_pane,
+            pane_left: pane.pane_left,
+            pane_right: pane.pane_right,
+            pane_up: pane.pane_up,
+            pane_down: pane.pane_down,
+            resize_left: pane.resize_left,
+            resize_right: pane.resize_right,
+            resize_up: pane.resize_up,
+            resize_down: pane.resize_down,
+            zoom_pane: pane.zoom_pane,
+            new_tab: pane.new_tab,
+            close_tab: pane.close_tab,
+            next_tab: pane.next_tab,
+            prev_tab: pane.prev_tab,
         }
     }
+}
+
+/// Internal helper for pane/tab keybind defaults
+struct PaneTabKeybinds {
+    split_right: Vec<String>,
+    split_down: Vec<String>,
+    close_pane: Vec<String>,
+    pane_left: Vec<String>,
+    pane_right: Vec<String>,
+    pane_up: Vec<String>,
+    pane_down: Vec<String>,
+    resize_left: Vec<String>,
+    resize_right: Vec<String>,
+    resize_up: Vec<String>,
+    resize_down: Vec<String>,
+    zoom_pane: Vec<String>,
+    new_tab: Vec<String>,
+    close_tab: Vec<String>,
+    next_tab: Vec<String>,
+    prev_tab: Vec<String>,
 }
 
 impl Config {

@@ -574,6 +574,50 @@ impl Terminal {
         })
     }
 
+    /// Initialize terminal spawning the user's shell directly (for split panes / new tabs).
+    /// Drops privileges to the specified UID instead of running /bin/login.
+    pub fn with_scrollback_as_user(
+        cols: usize,
+        rows: usize,
+        max_scrollback: usize,
+        term_env: &str,
+        extra_env: &[(&str, &str)],
+        uid: u32,
+    ) -> Result<Self> {
+        let grid = Grid::with_scrollback(cols, rows, max_scrollback);
+        let vt_parser = vte::Parser::new();
+        let pty = Pty::spawn_as_user(cols as u16, rows as u16, term_env, extra_env, uid)?;
+
+        Ok(Self {
+            grid,
+            vt_parser,
+            pty,
+            read_buf: vec![0u8; READ_BUF_SIZE],
+            scroll_offset: 0,
+            selection: None,
+            clipboard: String::new(),
+            images: ImageRegistry::new(),
+            dcs_handler: None,
+            kitty_decoder: None,
+            apc_state: ApcState::Normal,
+            apc_buffer: Vec::new(),
+            cell_width: 0,
+            cell_height: 0,
+            search: None,
+            copy_mode: None,
+            clipboard_path: default_clipboard_path(),
+            current_directory: None,
+            pty_response: Vec::with_capacity(256),
+            dirty_image_ids: Vec::new(),
+            notifications: VecDeque::new(),
+            notification_seq: 0,
+            notifications_enabled: true,
+            active_progress: None,
+            pending_notifications: HashMap::new(),
+            allow_kitty_remote: true,
+        })
+    }
+
     /// Set cell size (for image placement calculation)
     pub fn set_cell_size(&mut self, width: u32, height: u32) {
         self.cell_width = width;
@@ -651,10 +695,22 @@ impl Terminal {
             new_rows
         );
 
+        // Clear images/placements BEFORE SIGWINCH so child's response
+        // (new image at new size) won't be immediately cleared
+        self.images.clear();
+        self.grid.image_placements.clear();
+
         // Resize grid
         self.grid.resize(new_cols, new_rows);
 
-        // Resize PTY (with pixel size, clamp to u16::MAX)
+        // Reset scroll offset
+        self.scroll_offset = 0;
+
+        // Clear selection
+        self.selection = None;
+
+        // Resize PTY last — sends SIGWINCH to child, which may
+        // immediately send a new Kitty image at the new dimensions
         let xpixel = (new_cols as u32)
             .saturating_mul(self.cell_width)
             .min(u16::MAX as u32) as u16;
@@ -669,16 +725,6 @@ impl Terminal {
         ) {
             log::warn!("PTY resize failed: {}", e);
         }
-
-        // Reset scroll offset
-        self.scroll_offset = 0;
-
-        // Clear selection
-        self.selection = None;
-
-        // Clear image placements (cell size changed)
-        self.images.clear();
-        self.grid.image_placements.clear();
     }
 
     /// Process PTY output and update Grid
@@ -869,6 +915,8 @@ impl Terminal {
             let action = params.action;
             let quiet = params.quiet;
             let no_cursor_move = params.do_not_move_cursor;
+            let display_cols = params.cols;
+            let display_rows = params.rows;
             let id = if params.id != 0 {
                 params.id
             } else {
@@ -910,6 +958,8 @@ impl Terminal {
                             self.cell_width,
                             self.cell_height,
                             no_cursor_move,
+                            display_cols,
+                            display_rows,
                         );
                     }
                 }
@@ -955,12 +1005,16 @@ impl Terminal {
         match result {
             KittyDecodeResult::Image(kitty_img) => {
                 let no_cursor_move = kitty_img.do_not_move_cursor;
+                let display_cols = kitty_img.display_cols;
+                let display_rows = kitty_img.display_rows;
                 info!(
-                    "Kitty image decode complete: {}x{} (id={}, C={})",
+                    "Kitty image decode complete: {}x{} (id={}, C={}, c={}, r={})",
                     kitty_img.width,
                     kitty_img.height,
                     kitty_img.id,
-                    if no_cursor_move { 1 } else { 0 }
+                    if no_cursor_move { 1 } else { 0 },
+                    display_cols,
+                    display_rows,
                 );
                 let term_img = TerminalImage {
                     id: kitty_img.id,
@@ -977,9 +1031,11 @@ impl Terminal {
                 let width = term_img.width;
                 let height = term_img.height;
 
-                // If image with same ID already exists, mark texture for re-upload
+                // Always mark for GPU texture re-upload (handles both replacement
+                // and re-registration after resize cleared the terminal registry
+                // while GPU cache still holds the old texture)
+                self.dirty_image_ids.push(img_id);
                 if self.images.get(img_id).is_some() {
-                    self.dirty_image_ids.push(img_id);
                     // Remove old placements for this ID (will be replaced)
                     self.grid.image_placements.retain(|p| p.id != img_id);
                 }
@@ -993,6 +1049,8 @@ impl Terminal {
                         self.cell_width,
                         self.cell_height,
                         no_cursor_move,
+                        display_cols,
+                        display_rows,
                     );
                 }
 
@@ -1292,6 +1350,11 @@ impl Terminal {
     /// Check if child process is alive
     pub fn is_alive(&self) -> bool {
         self.pty.is_alive()
+    }
+
+    /// Send SIGHUP to the child process (for graceful shutdown)
+    pub fn send_sighup(&self) {
+        self.pty.send_sighup();
     }
 
     /// Get foreground process name

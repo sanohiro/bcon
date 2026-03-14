@@ -109,8 +109,8 @@ impl ImageShader {
 
 /// Image draw info (for batching)
 struct DrawCall {
-    /// Image ID
-    id: u32,
+    /// Texture key (pane-scoped: upper 32 bits = pane ID, lower 32 = image ID)
+    key: u64,
     /// Draw X coordinate (pixels)
     x: f32,
     /// Draw Y coordinate (pixels)
@@ -122,17 +122,26 @@ struct DrawCall {
 }
 
 /// Image renderer
+///
+/// Texture keys are u64 to support multiple panes with independent image ID spaces.
+/// Use `image_key(pane_id, image_id)` to generate unique keys.
 pub struct ImageRenderer {
     shader: ImageShader,
     vao: glow::VertexArray,
     vbo: glow::Buffer,
     ebo: glow::Buffer,
-    /// Texture cache (image ID -> texture)
-    textures: HashMap<u32, glow::Texture>,
+    /// Texture cache (key -> texture)
+    textures: HashMap<u64, glow::Texture>,
     /// LRU order (most recently used at end)
-    lru_order: Vec<u32>,
+    lru_order: Vec<u64>,
     /// Draw queue
     draw_queue: Vec<DrawCall>,
+}
+
+/// Generate a unique texture key from pane ID and image ID.
+/// Upper 32 bits = pane ID, lower 32 bits = image ID.
+pub fn image_key(pane_id: u16, image_id: u32) -> u64 {
+    ((pane_id as u64) << 32) | (image_id as u64)
 }
 
 impl ImageRenderer {
@@ -202,22 +211,23 @@ impl ImageRenderer {
         }
     }
 
-    /// Upload image texture
-    pub fn upload_image(&mut self, gl: &glow::Context, image: &TerminalImage) {
-        if self.textures.contains_key(&image.id) {
+    /// Upload image texture with explicit key.
+    /// Use `image_key(pane_id, image_id)` to generate the key.
+    pub fn upload_image(&mut self, gl: &glow::Context, key: u64, image: &TerminalImage) {
+        if self.textures.contains_key(&key) {
             // Already cached - update LRU order
-            self.touch_lru(image.id);
+            self.touch_lru(key);
             return;
         }
 
         // Evict oldest textures if cache is full
         while self.textures.len() >= MAX_CACHED_TEXTURES && !self.lru_order.is_empty() {
-            let oldest_id = self.lru_order.remove(0);
-            if let Some(texture) = self.textures.remove(&oldest_id) {
+            let oldest_key = self.lru_order.remove(0);
+            if let Some(texture) = self.textures.remove(&oldest_key) {
                 unsafe {
                     gl.delete_texture(texture);
                 }
-                log::debug!("Evicted texture id={} (LRU)", oldest_id);
+                log::debug!("Evicted texture key=0x{:x} (LRU)", oldest_key);
             }
         }
 
@@ -269,11 +279,11 @@ impl ImageRenderer {
 
             gl.bind_texture(glow::TEXTURE_2D, None);
 
-            self.textures.insert(image.id, texture);
-            self.lru_order.push(image.id);
+            self.textures.insert(key, texture);
+            self.lru_order.push(key);
             info!(
-                "Image texture uploaded: id={} {}x{} (cache: {}/{})",
-                image.id,
+                "Image texture uploaded: key=0x{:x} {}x{} (cache: {}/{})",
+                key,
                 image.width,
                 image.height,
                 self.textures.len(),
@@ -282,17 +292,17 @@ impl ImageRenderer {
         }
     }
 
-    /// Update LRU order (move id to end = most recently used)
-    fn touch_lru(&mut self, id: u32) {
-        if let Some(pos) = self.lru_order.iter().position(|&x| x == id) {
+    /// Update LRU order (move key to end = most recently used)
+    fn touch_lru(&mut self, key: u64) {
+        if let Some(pos) = self.lru_order.iter().position(|&x| x == key) {
             self.lru_order.remove(pos);
-            self.lru_order.push(id);
+            self.lru_order.push(key);
         }
     }
 
     /// Check if texture exists
-    pub fn has_texture(&self, id: u32) -> bool {
-        self.textures.contains_key(&id)
+    pub fn has_texture(&self, key: u64) -> bool {
+        self.textures.contains_key(&key)
     }
 
     /// Clear draw queue
@@ -301,11 +311,11 @@ impl ImageRenderer {
     }
 
     /// Add image to draw queue
-    pub fn draw(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32) {
+    pub fn draw(&mut self, key: u64, x: f32, y: f32, w: f32, h: f32) {
         if self.draw_queue.len() >= MAX_IMAGES {
             return;
         }
-        self.draw_queue.push(DrawCall { id, x, y, w, h });
+        self.draw_queue.push(DrawCall { key, x, y, w, h });
     }
 
     /// Flush draw queue
@@ -333,7 +343,7 @@ impl ImageRenderer {
 
             // Draw per image (cannot batch due to different textures)
             for call in &self.draw_queue {
-                let texture = match self.textures.get(&call.id) {
+                let texture = match self.textures.get(&call.key) {
                     Some(t) => *t,
                     None => continue,
                 };
@@ -370,13 +380,13 @@ impl ImageRenderer {
     }
 
     /// Delete texture
-    pub fn remove_texture(&mut self, gl: &glow::Context, id: u32) {
-        if let Some(texture) = self.textures.remove(&id) {
+    pub fn remove_texture(&mut self, gl: &glow::Context, key: u64) {
+        if let Some(texture) = self.textures.remove(&key) {
             unsafe {
                 gl.delete_texture(texture);
             }
             // Remove from LRU order
-            if let Some(pos) = self.lru_order.iter().position(|&x| x == id) {
+            if let Some(pos) = self.lru_order.iter().position(|&x| x == key) {
                 self.lru_order.remove(pos);
             }
         }

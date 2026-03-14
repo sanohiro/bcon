@@ -76,6 +76,10 @@ pub struct KittyImage {
     pub data: Vec<u8>, // RGBA - root frame data (frame 1)
     /// Do not move cursor after display (C=1)
     pub do_not_move_cursor: bool,
+    /// Display columns (c= parameter, 0 = auto-calculate from pixel size)
+    pub display_cols: u32,
+    /// Display rows (r= parameter, 0 = auto-calculate from pixel size)
+    pub display_rows: u32,
 }
 
 /// Frame data result from a=f action
@@ -579,6 +583,8 @@ impl KittyDecoder {
             height,
             data: rgba,
             do_not_move_cursor: params.do_not_move_cursor,
+            display_cols: params.cols,
+            display_rows: params.rows,
         }))
     }
 

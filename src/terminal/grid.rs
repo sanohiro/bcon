@@ -2317,15 +2317,25 @@ impl Grid {
         cell_width: u32,
         cell_height: u32,
         do_not_move_cursor: bool,
+        display_cols: u32,
+        display_rows: u32,
     ) {
         if cell_width == 0 || cell_height == 0 {
             log::warn!("place_image: cell size not set, skipping placement");
             return;
         }
 
-        // Calculate occupied cells (round up)
-        let width_cells = ((pixel_width + cell_width - 1) / cell_width) as usize;
-        let height_cells = ((pixel_height + cell_height - 1) / cell_height) as usize;
+        // Use explicit c=/r= if provided, otherwise calculate from pixel size (round up)
+        let width_cells = if display_cols > 0 {
+            display_cols as usize
+        } else {
+            ((pixel_width + cell_width - 1) / cell_width) as usize
+        };
+        let height_cells = if display_rows > 0 {
+            display_rows as usize
+        } else {
+            ((pixel_height + cell_height - 1) / cell_height) as usize
+        };
 
         log::info!(
             "place_image: id={} at ({},{}) {}x{} cells, C={}",

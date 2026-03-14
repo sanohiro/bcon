@@ -20,17 +20,15 @@ Look around — the only thing running on your X11/Wayland session might be a te
 
 **bcon** is the answer. It brings the modern terminal experience of Ghostty or Alacritty directly to the Linux console. GPU acceleration, True Color, Sixel/Kitty graphics, Japanese input — no X11 required.
 
-### What bcon does (and doesn't do)
+### What bcon does
 
-bcon is the **foundation layer**. Leave session management and multiplexing to the tools that do it best:
+bcon includes **built-in split panes and tabs** — no need for tmux or screen for basic multiplexing. This is important because terminal multiplexers often break Kitty graphics protocol passthrough, defeating bcon's image rendering capabilities.
 
-- **Sessions**: tmux (recommended), screen, zellij*
+Of course, you can still use external tools alongside bcon:
+
+- **Sessions**: tmux, screen (for persistent sessions / SSH)
 - **Files**: yazi, ranger
 - **Editors**: Emacs, Neovim, Helix
-
-*zellij does not support Kitty graphics protocol passthrough. Image preview in yazi won't work through zellij.
-
-Following the Unix philosophy, bcon does one thing well: beautiful, fast rendering.
 
 **Enjoy your CLI life.**
 
@@ -66,6 +64,15 @@ Following the Unix philosophy, bcon does one thing well: beautiful, fast renderi
 - **Japanese Input**: fcitx5 integration via D-Bus
 - **IME Auto-disable**: Automatically disable IME for vim/emacs/etc.
 - **Key Repeat**: Configurable key repeat delay/rate
+
+### Split Panes & Tabs
+- **Split Panes**: Horizontal and vertical split with binary tree layout
+- **Pane Navigation**: Move focus between panes (arrow keys or hjkl in vim preset)
+- **Pane Resize**: Adjust split ratios with keyboard shortcuts
+- **Pane Zoom**: Toggle zoom to expand active pane to full screen
+- **Tabs**: Multiple tabs with tab bar display
+- **Auto Close**: Dead panes are automatically cleaned up
+- **Mouse Focus**: Click to switch pane focus
 
 ### UX
 - **Copy Mode**: Vim-like keyboard navigation for text selection
@@ -280,6 +287,16 @@ Note: Powerline arrow glyphs (E0B0-E0B7) are drawn programmatically for pixel-pe
 | Scroll Down | `Shift+PageDown` | `Ctrl+Shift+D` | `Alt+Shift+N` | Scroll forward |
 | Notifications | `Ctrl+Shift+N` | same | same | Toggle notification panel |
 | Mute | `Ctrl+Shift+M` | same | `Alt+Shift+M` | Toggle notification mute |
+| Split Right | `Ctrl+Shift+Enter` | same | same | Split pane horizontally |
+| Split Down | `Ctrl+Shift+D` | `Ctrl+Shift+\` | `Ctrl+Shift+D` | Split pane vertically |
+| Close Pane | `Ctrl+Shift+W` | same | same | Close active pane |
+| Pane Navigate | `Ctrl+Shift+Arrow` | `Ctrl+Shift+H/J/K/L` | `Ctrl+Shift+Arrow` | Move focus between panes |
+| Pane Resize | `Ctrl+Shift+Alt+Arrow` | `Ctrl+Shift+Alt+H/J/K/L` | `Ctrl+Shift+Alt+Arrow` | Resize active pane |
+| Zoom Pane | `Ctrl+Shift+Z` | same | same | Toggle pane zoom |
+| New Tab | `Ctrl+Shift+T` | same | same | Open new tab |
+| Close Tab | `Ctrl+Shift+Q` | same | same | Close active tab |
+| Next Tab | `Ctrl+Shift+PageDown` | same | same | Switch to next tab |
+| Prev Tab | `Ctrl+Shift+PageUp` | same | same | Switch to previous tab |
 
 Multiple keys can be assigned to a single action in config:
 

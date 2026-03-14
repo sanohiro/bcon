@@ -25,17 +25,15 @@ Think "Ghostty for the console" - bringing modern terminal features (True Color,
 
 ## Design Philosophy
 
-**bcon は「縁の下の力持ち」— 基盤レイヤーに徹する。**
+**bcon = GPU レンダリング基盤 + 内蔵ペイン分割・タブ**
 
-- セッション管理は tmux / screen / zellij に任せる（車輪の再発明をしない）
-- 画面分割・ペイン管理も既存ツールに任せる
-- bcon が提供するのは：美しく、ヌルヌル動く、モダンなレンダリング基盤
+- 画面分割・タブは内蔵（tmux/zellij は Kitty graphics パススルーを壊すため）
+- セッション永続化が必要な場合は tmux / screen を併用可能
+- bcon が提供するのは：美しく、ヌルヌル動く、モダンなターミナル体験
 
 ```
 ┌─────────────────────────────────┐
-│  tmux / zellij / screen        │  ← セッション管理
-├─────────────────────────────────┤
-│  bcon                          │  ← GPU レンダリング基盤
+│  bcon                          │  ← GPU レンダリング + ペイン/タブ
 ├─────────────────────────────────┤
 │  DRM/KMS + OpenGL ES           │  ← ハードウェア
 └─────────────────────────────────┘
@@ -80,6 +78,13 @@ Think "Ghostty for the console" - bringing modern terminal features (True Color,
 - Automatic IME disable for vim/emacs/etc.
 - Configurable key repeat delay/rate
 
+### Split Panes & Tabs
+- Binary tree pane layout (horizontal/vertical split)
+- Pane navigation, resize, zoom
+- Multiple tabs with tab bar
+- Mouse click to switch pane focus
+- Dead pane auto-close
+
 ### UX
 - Vim-like copy mode for text selection
 - Incremental search in scrollback (Ctrl+Shift+F)
@@ -113,6 +118,11 @@ src/
 │   ├── emoji_renderer.rs # Color emoji rendering
 │   ├── image_renderer.rs # Sixel/Kitty image rendering
 │   └── ui_renderer.rs    # UI overlay rendering
+├── pane/
+│   ├── mod.rs            # Pane, PaneId, PaneRect types
+│   ├── split_tree.rs     # Arena-based binary split tree
+│   ├── tab.rs            # Tab, TabManager
+│   └── layout.rs         # Tree → pixel rect calculation
 ├── font/
 │   ├── mod.rs
 │   ├── atlas.rs          # Glyph texture atlas

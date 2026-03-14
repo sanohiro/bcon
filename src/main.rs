@@ -21,6 +21,7 @@ mod drm;
 mod font;
 mod gpu;
 mod input;
+mod pane;
 mod session;
 mod terminal;
 mod utils;
@@ -933,6 +934,25 @@ fn test_shaper_mode() -> Result<()> {
     Ok(())
 }
 
+/// Setup and split a new terminal into the active tab
+fn new_term_setup(
+    cfg: &config::Config,
+    tab_mgr: &mut pane::tab::TabManager,
+    mut new_term: terminal::Terminal,
+    direction: pane::Direction,
+    available_rect: pane::PaneRect,
+    cell_w: f32,
+    cell_h: f32,
+) {
+    new_term.set_cell_size(cell_w as u32, cell_h as u32);
+    new_term.set_clipboard_path(&cfg.paths.clipboard_file);
+    new_term.grid.set_ansi_palette(cfg.colors.to_palette());
+    new_term.notifications_enabled = cfg.notifications.enabled;
+    new_term.allow_kitty_remote = cfg.security.allow_kitty_remote;
+    tab_mgr.split(direction, new_term, available_rect);
+    tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+}
+
 /// Update text selection range with Shift+Arrow keys
 fn handle_selection_key(term: &mut terminal::Terminal, keycode: u32, cols: usize) {
     let cur_row = term.grid.cursor_row;
@@ -1228,6 +1248,23 @@ fn main() -> Result<()> {
     let mut kb_reset_terminal = config::ParsedKeybinds::parse(&cfg.keybinds.reset_terminal);
     let mut kb_notification_panel = config::ParsedKeybinds::parse(&cfg.keybinds.notification_panel);
     let mut kb_notification_mute = config::ParsedKeybinds::parse(&cfg.keybinds.notification_mute);
+    // Pane/tab keybinds
+    let mut kb_split_right = config::ParsedKeybinds::parse(&cfg.keybinds.split_right);
+    let mut kb_split_down = config::ParsedKeybinds::parse(&cfg.keybinds.split_down);
+    let mut kb_close_pane = config::ParsedKeybinds::parse(&cfg.keybinds.close_pane);
+    let mut kb_pane_left = config::ParsedKeybinds::parse(&cfg.keybinds.pane_left);
+    let mut kb_pane_right = config::ParsedKeybinds::parse(&cfg.keybinds.pane_right);
+    let mut kb_pane_up = config::ParsedKeybinds::parse(&cfg.keybinds.pane_up);
+    let mut kb_pane_down = config::ParsedKeybinds::parse(&cfg.keybinds.pane_down);
+    let mut kb_resize_left = config::ParsedKeybinds::parse(&cfg.keybinds.resize_left);
+    let mut kb_resize_right = config::ParsedKeybinds::parse(&cfg.keybinds.resize_right);
+    let mut kb_resize_up = config::ParsedKeybinds::parse(&cfg.keybinds.resize_up);
+    let mut kb_resize_down = config::ParsedKeybinds::parse(&cfg.keybinds.resize_down);
+    let mut kb_zoom_pane = config::ParsedKeybinds::parse(&cfg.keybinds.zoom_pane);
+    let mut kb_new_tab = config::ParsedKeybinds::parse(&cfg.keybinds.new_tab);
+    let mut kb_close_tab = config::ParsedKeybinds::parse(&cfg.keybinds.close_tab);
+    let mut kb_next_tab = config::ParsedKeybinds::parse(&cfg.keybinds.next_tab);
+    let mut kb_prev_tab = config::ParsedKeybinds::parse(&cfg.keybinds.prev_tab);
 
     // Config file change watcher (Linux only)
     // Watch the actual loaded config path, not just the default path
@@ -1709,7 +1746,7 @@ Make sure seatd/logind is running and you're on an active VT."
     };
 
     info!("PTY fork...");
-    let mut term = terminal::Terminal::with_scrollback_env(
+    let init_term = terminal::Terminal::with_scrollback_env(
         grid_cols,
         grid_rows,
         cfg.terminal.scrollback_lines,
@@ -1718,20 +1755,34 @@ Make sure seatd/logind is running and you're on an active VT."
     )
     .context("Failed to initialize terminal")?;
 
-    // Set cell size for Sixel image placement
-    term.set_cell_size(cell_w as u32, cell_h as u32);
+    // Wrap terminal in TabManager (pane/tab abstraction)
+    let mut available_rect = pane::PaneRect::new(
+        margin_x,
+        margin_y,
+        screen_w as f32 - margin_x * 2.0,
+        screen_h as f32 - margin_y * 2.0,
+    );
+    let mut tab_mgr = pane::tab::TabManager::new(init_term, available_rect);
+    let mut prev_tab_bar_visible = false;
 
-    // Set clipboard path
-    term.set_clipboard_path(&cfg.paths.clipboard_file);
+    // Configure the initial terminal
+    {
+        let term = tab_mgr.active_terminal_mut();
+        // Set cell size for Sixel image placement
+        term.set_cell_size(cell_w as u32, cell_h as u32);
 
-    // Set custom ANSI 16 colors palette from config
-    term.grid.set_ansi_palette(cfg.colors.to_palette());
+        // Set clipboard path
+        term.set_clipboard_path(&cfg.paths.clipboard_file);
 
-    // Apply notification settings from config
-    term.notifications_enabled = cfg.notifications.enabled;
+        // Set custom ANSI 16 colors palette from config
+        term.grid.set_ansi_palette(cfg.colors.to_palette());
 
-    // Apply security settings from config
-    term.allow_kitty_remote = cfg.security.allow_kitty_remote;
+        // Apply notification settings from config
+        term.notifications_enabled = cfg.notifications.enabled;
+
+        // Apply security settings from config
+        term.allow_kitty_remote = cfg.security.allow_kitty_remote;
+    }
 
     // Display /etc/issue (like getty does) if running as root on a VT.
     // In seatd mode this usually isn't needed, but in VT mode it improves login UX.
@@ -1740,6 +1791,7 @@ Make sure seatd/logind is running and you're on an active VT."
         if let Some(ref vt_switcher) = vt_switcher {
             let tty_name = format!("tty{}", vt_switcher.target_vt());
             if let Some(issue) = terminal::pty::read_issue(&tty_name) {
+                let term = tab_mgr.active_terminal_mut();
                 // Process issue text through terminal to display it.
                 term.process_output(issue.as_bytes());
                 // Ensure cursor is at column 0 for login prompt.
@@ -1934,7 +1986,66 @@ Make sure seatd/logind is running and you're on an active VT."
     let config_selection = cfg.appearance.selection_rgb();
     let config_cursor_opacity = cfg.appearance.cursor_opacity;
 
-    loop {
+    'main_loop: loop {
+        // Adjust available rect for tab bar (when 2+ tabs, reserve space at bottom)
+        let tab_bar_visible = tab_mgr.tab_count() > 1;
+        available_rect = pane::PaneRect::new(
+            margin_x,
+            margin_y,
+            screen_w as f32 - margin_x * 2.0,
+            screen_h as f32 - margin_y * 2.0 - if tab_bar_visible { cell_h + 6.0 } else { 0.0 },
+        );
+
+        // When tab bar visibility changes, relayout all tabs to fit the new available area
+        if tab_bar_visible != prev_tab_bar_visible {
+            prev_tab_bar_visible = tab_bar_visible;
+            tab_mgr.relayout_all(available_rect);
+            tab_mgr.resize_all_terminals_to_rects(cell_w, cell_h);
+        }
+
+        // Compute pane-aware mouse offsets before borrowing term
+        let (mouse_offset_x, mouse_offset_y) = if tab_mgr.active_tab().pane_count() > 1
+            && tab_mgr.active_tab().zoomed_pane.is_none()
+        {
+            let ap = tab_mgr.active_tab().active_pane();
+            (ap.rect.x as f64, ap.rect.y as f64)
+        } else {
+            (margin_x as f64, margin_y as f64)
+        };
+        // Capture pane hit-test data for mouse routing (before borrowing term)
+        let multi_pane_mouse = tab_mgr.active_tab().pane_count() > 1
+            && tab_mgr.active_tab().zoomed_pane.is_none();
+        let pane_hit_rects: Vec<(pane::PaneId, pane::PaneRect)> = if multi_pane_mouse {
+            tab_mgr.active_tab().panes.iter().map(|(&id, p)| (id, p.rect)).collect()
+        } else {
+            Vec::new()
+        };
+        let current_active_pid = tab_mgr.active_pane_id();
+
+        // Pre-compute tab hit rects for mouse click detection (before borrowing term)
+        let tab_hit_rects: Vec<(usize, f32, f32)> = if tab_bar_visible {
+            let pad = cell_w * 2.0;
+            let sep_w = 1.0_f32;
+            let mut tx = 0.0_f32;
+            tab_mgr.tabs.iter().enumerate().map(|(i, tab)| {
+                let label_len = if tab.title.is_empty() {
+                    format!("{}:Tab {}", i + 1, i + 1).chars().count()
+                } else {
+                    format!("{}:{}", i + 1, tab.title).chars().count()
+                };
+                let tab_w = (label_len as f32 * cell_w + pad * 2.0).min(200.0);
+                let x_start = tx;
+                tx += tab_w + sep_w;
+                (i, x_start, x_start + tab_w)
+            }).collect()
+        } else {
+            Vec::new()
+        };
+
+        // Borrow the active terminal for this iteration.
+        // The borrow is released at the end of each iteration (or via `continue 'main_loop`).
+        let term = tab_mgr.active_terminal_mut();
+
         // Poll for session events (VT switching)
         #[cfg(all(target_os = "linux", feature = "seatd"))]
         if let Some(ref seat_session) = seat_session {
@@ -2196,16 +2307,22 @@ Make sure seatd/logind is running and you're on an active VT."
         if now.duration_since(last_blink_toggle).as_millis() >= CURSOR_BLINK_INTERVAL_MS as u128 {
             cursor_blink_visible = !cursor_blink_visible;
             last_blink_toggle = now;
-            // Mark all rows dirty so BLINK text gets re-rendered in FBO
-            term.grid.mark_all_dirty();
+            // Cursor is drawn outside FBO, so only needs_redraw (for blit+cursor overlay)
             needs_redraw = true;
         }
 
-        // Check child process alive
+        // Check child process alive — auto-close dead panes
         if !term.is_alive() {
-            info!("Child process terminated");
-            let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Stopping]);
-            break;
+            let _ = term;
+            // Try to close the dead pane; if it was the last one, exit
+            if !tab_mgr.close_active_pane(available_rect) {
+                info!("Last pane terminated, exiting");
+                let _ = sd_notify::notify(true, &[sd_notify::NotifyState::Stopping]);
+                break 'main_loop;
+            }
+            tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+            needs_redraw = true;
+            continue 'main_loop;
         }
 
         // Config hot-reload (Linux only)
@@ -2231,6 +2348,23 @@ Make sure seatd/logind is running and you're on an active VT."
                     config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_panel);
                 kb_notification_mute =
                     config::ParsedKeybinds::parse(&new_cfg.keybinds.notification_mute);
+                // Pane/tab keybinds
+                kb_split_right = config::ParsedKeybinds::parse(&new_cfg.keybinds.split_right);
+                kb_split_down = config::ParsedKeybinds::parse(&new_cfg.keybinds.split_down);
+                kb_close_pane = config::ParsedKeybinds::parse(&new_cfg.keybinds.close_pane);
+                kb_pane_left = config::ParsedKeybinds::parse(&new_cfg.keybinds.pane_left);
+                kb_pane_right = config::ParsedKeybinds::parse(&new_cfg.keybinds.pane_right);
+                kb_pane_up = config::ParsedKeybinds::parse(&new_cfg.keybinds.pane_up);
+                kb_pane_down = config::ParsedKeybinds::parse(&new_cfg.keybinds.pane_down);
+                kb_resize_left = config::ParsedKeybinds::parse(&new_cfg.keybinds.resize_left);
+                kb_resize_right = config::ParsedKeybinds::parse(&new_cfg.keybinds.resize_right);
+                kb_resize_up = config::ParsedKeybinds::parse(&new_cfg.keybinds.resize_up);
+                kb_resize_down = config::ParsedKeybinds::parse(&new_cfg.keybinds.resize_down);
+                kb_zoom_pane = config::ParsedKeybinds::parse(&new_cfg.keybinds.zoom_pane);
+                kb_new_tab = config::ParsedKeybinds::parse(&new_cfg.keybinds.new_tab);
+                kb_close_tab = config::ParsedKeybinds::parse(&new_cfg.keybinds.close_tab);
+                kb_next_tab = config::ParsedKeybinds::parse(&new_cfg.keybinds.next_tab);
+                kb_prev_tab = config::ParsedKeybinds::parse(&new_cfg.keybinds.prev_tab);
                 term.notifications_enabled = new_cfg.notifications.enabled;
                 term.allow_kitty_remote = new_cfg.security.allow_kitty_remote;
 
@@ -2500,6 +2634,196 @@ Make sure seatd/logind is running and you're on an active VT."
                     // Fall through to normal key handling
                 }
 
+                // === Pane management keybinds ===
+                // These drop `term` before accessing tab_mgr, then `continue 'main_loop`
+
+                if kb_split_right.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let logged_uid = term.logged_in_uid();
+                    let _ = term;
+                    let new_term = if let Some(uid) = logged_uid {
+                        terminal::Terminal::with_scrollback_as_user(
+                            grid_cols, grid_rows,
+                            cfg.terminal.scrollback_lines, &cfg.terminal.term_env, &extra_env, uid,
+                        )
+                    } else {
+                        terminal::Terminal::with_scrollback_env(
+                            grid_cols, grid_rows,
+                            cfg.terminal.scrollback_lines, &cfg.terminal.term_env, &extra_env,
+                        )
+                    };
+                    if let Ok(new_term) = new_term {
+                        new_term_setup(&cfg, &mut tab_mgr, new_term,
+                            pane::Direction::Horizontal, available_rect, cell_w, cell_h);
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_split_down.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let logged_uid = term.logged_in_uid();
+                    let _ = term;
+                    let new_term = if let Some(uid) = logged_uid {
+                        terminal::Terminal::with_scrollback_as_user(
+                            grid_cols, grid_rows,
+                            cfg.terminal.scrollback_lines, &cfg.terminal.term_env, &extra_env, uid,
+                        )
+                    } else {
+                        terminal::Terminal::with_scrollback_env(
+                            grid_cols, grid_rows,
+                            cfg.terminal.scrollback_lines, &cfg.terminal.term_env, &extra_env,
+                        )
+                    };
+                    if let Ok(new_term) = new_term {
+                        new_term_setup(&cfg, &mut tab_mgr, new_term,
+                            pane::Direction::Vertical, available_rect, cell_w, cell_h);
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_close_pane.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    if !tab_mgr.close_active_pane(available_rect) {
+                        info!("Last pane closed, exiting");
+                        break 'main_loop;
+                    }
+                    tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_pane_left.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().navigate(pane::NavDirection::Left);
+                    // Mark all panes dirty so FBO is fully re-rendered (images, dividers)
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_pane_right.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().navigate(pane::NavDirection::Right);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_pane_up.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().navigate(pane::NavDirection::Up);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_pane_down.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().navigate(pane::NavDirection::Down);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_resize_left.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().resize_active(-0.05, available_rect);
+                    tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_resize_right.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().resize_active(0.05, available_rect);
+                    tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_resize_up.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().resize_active(-0.05, available_rect);
+                    tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_resize_down.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().resize_active(0.05, available_rect);
+                    tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_zoom_pane.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.active_tab_mut().toggle_zoom();
+                    if tab_mgr.is_zoomed() {
+                        let cols = (available_rect.width / cell_w).floor() as usize;
+                        let rows = (available_rect.height / cell_h).floor() as usize;
+                        let t = tab_mgr.active_terminal_mut();
+                        t.resize(cols.max(1), rows.max(1));
+                    } else {
+                        tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_new_tab.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let logged_uid = term.logged_in_uid();
+                    let _ = term;
+                    let new_term = if let Some(uid) = logged_uid {
+                        terminal::Terminal::with_scrollback_as_user(
+                            grid_cols, grid_rows,
+                            cfg.terminal.scrollback_lines, &cfg.terminal.term_env, &extra_env, uid,
+                        )
+                    } else {
+                        terminal::Terminal::with_scrollback_env(
+                            grid_cols, grid_rows,
+                            cfg.terminal.scrollback_lines, &cfg.terminal.term_env, &extra_env,
+                        )
+                    };
+                    if let Ok(mut new_term) = new_term {
+                        new_term.set_cell_size(cell_w as u32, cell_h as u32);
+                        new_term.set_clipboard_path(&cfg.paths.clipboard_file);
+                        new_term.grid.set_ansi_palette(cfg.colors.to_palette());
+                        new_term.notifications_enabled = cfg.notifications.enabled;
+                        new_term.allow_kitty_remote = cfg.security.allow_kitty_remote;
+                        tab_mgr.new_tab(new_term, available_rect);
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_close_tab.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    if !tab_mgr.close_active_tab() {
+                        if !tab_mgr.close_active_pane(available_rect) {
+                            info!("Last tab closed, exiting");
+                            break 'main_loop;
+                        }
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_next_tab.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.next_tab();
+                    // Mark all panes dirty so FBO is fully re-rendered
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+                if kb_prev_tab.matches(ctrl, shift, alt, raw.keycode, keysym) {
+                    let _ = term;
+                    tab_mgr.prev_tab();
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
+                    needs_redraw = true;
+                    continue 'main_loop;
+                }
+
                 // Copy mode start (configurable)
                 if kb_copy_mode.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     if term.copy_mode.is_none() {
@@ -2683,16 +3007,24 @@ Make sure seatd/logind is running and you're on an active VT."
                     cell_h = new_cell_h.max(1.0);
                     grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
                     grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
-                    term.resize(grid_cols, grid_rows);
-                    term.set_cell_size(cell_w as u32, cell_h as u32);
+                    // Resize all panes in all tabs
+                    let _ = term;
+                    tab_mgr.relayout_all(available_rect);
+                    tab_mgr.resize_all_terminals_to_rects(cell_w, cell_h);
+                    // Set cell size for all panes in all tabs
+                    for tab in &mut tab_mgr.tabs {
+                        for pane in tab.panes.values_mut() {
+                            pane.terminal.set_cell_size(cell_w as u32, cell_h as u32);
+                        }
+                    }
                     emoji_atlas.resize(cell_h as u32);
                     needs_redraw = true;
-                    continue;
+                    continue 'main_loop;
                 }
 
                 // Shift+Arrow: Text selection
                 if shift && matches!(raw.keycode, 105 | 106 | 103 | 108 | 102 | 107) {
-                    handle_selection_key(&mut term, raw.keycode, grid_cols);
+                    handle_selection_key(term, raw.keycode, grid_cols);
                     needs_redraw = true;
                     continue;
                 }
@@ -2788,11 +3120,58 @@ Make sure seatd/logind is running and you're on an active VT."
                     }
                 }
 
+                // Tab bar click: switch tab
+                if let input::MouseEvent::ButtonPress { button, x, y, .. } = mouse {
+                    if *button == input::BTN_LEFT && !tab_hit_rects.is_empty() {
+                        let tab_bar_y = screen_h as f32 - (cell_h + 6.0);
+                        if *y as f32 >= tab_bar_y {
+                            if let Some(idx) = tab_hit_rects.iter()
+                                .find(|(_, xs, xe)| (*x as f32) >= *xs && (*x as f32) < *xe)
+                                .map(|(i, _, _)| *i)
+                            {
+                                // Drop term borrow before accessing tab_mgr
+                                let _ = term;
+                                if idx != tab_mgr.active_tab {
+                                    tab_mgr.active_tab = idx;
+                                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                                        pane.terminal.mark_all_dirty();
+                                    }
+                                    needs_redraw = true;
+                                }
+                                continue 'main_loop;
+                            }
+                            // Clicked on tab bar but not on a tab — consume the click
+                            continue;
+                        }
+                    }
+                }
+
+                // Multi-pane: switch focus on click in a different pane
+                if let input::MouseEvent::ButtonPress { x, y, .. } = mouse {
+                    if multi_pane_mouse {
+                        let clicked = pane_hit_rects.iter()
+                            .find(|(_, r)| r.contains(*x as f32, *y as f32))
+                            .map(|(id, _)| *id);
+                        if let Some(pid) = clicked {
+                            if pid != current_active_pid {
+                                let _ = term;
+                                tab_mgr.active_tab_mut().active_pane = pid;
+                                // Mark all panes dirty so FBO is fully re-rendered
+                                for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                                    pane.terminal.mark_all_dirty();
+                                }
+                                needs_redraw = true;
+                                continue 'main_loop;
+                            }
+                        }
+                    }
+                }
+
                 match mouse {
                     input::MouseEvent::ButtonPress { button, x, y } => {
                         // Account for terminal margin when converting to cell coordinates
-                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
-                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
+                        let col = ((*x - mouse_offset_x).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - mouse_offset_y).max(0.0) / cell_h as f64) as usize;
 
                         // Ctrl+Left click: Copy URL to clipboard
                         if ctrl_pressed && *button == input::BTN_LEFT {
@@ -2874,8 +3253,8 @@ Make sure seatd/logind is running and you're on an active VT."
                     }
                     input::MouseEvent::Move { x, y } => {
                         // Account for terminal margin when converting to cell coordinates
-                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
-                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
+                        let col = ((*x - mouse_offset_x).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - mouse_offset_y).max(0.0) / cell_h as f64) as usize;
 
                         // Send move event if mouse mode is enabled
                         if term.mouse_mode_enabled() {
@@ -2897,8 +3276,8 @@ Make sure seatd/logind is running and you're on an active VT."
                     }
                     input::MouseEvent::ButtonRelease { button, x, y } => {
                         // Account for terminal margin when converting to cell coordinates
-                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
-                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
+                        let col = ((*x - mouse_offset_x).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - mouse_offset_y).max(0.0) / cell_h as f64) as usize;
 
                         // Send to PTY if mouse mode is enabled
                         if term.mouse_mode_enabled() {
@@ -2930,8 +3309,8 @@ Make sure seatd/logind is running and you're on an active VT."
                     }
                     input::MouseEvent::Scroll { delta, x, y } => {
                         // Account for terminal margin when converting to cell coordinates
-                        let col = ((*x - margin_x as f64).max(0.0) / cell_w as f64) as usize;
-                        let row = ((*y - margin_y as f64).max(0.0) / cell_h as f64) as usize;
+                        let col = ((*x - mouse_offset_x).max(0.0) / cell_w as f64) as usize;
+                        let row = ((*y - mouse_offset_y).max(0.0) / cell_h as f64) as usize;
 
                         // Send wheel to PTY if any mouse mode is active
                         // (xterm sends wheel events even in X10 mode)
@@ -3090,20 +3469,17 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
 
-        // Process PTY output
-        let mut total_read = 0;
-        loop {
-            match term.process_pty_output() {
-                Ok(0) => break,
-                Ok(n) => total_read += n,
-                Err(e) => {
-                    log::warn!("PTY read error: {}", e);
-                    break;
-                }
-            }
+        // Process PTY output for all panes in all tabs (prevents buffer overflow)
+        let _ = term;
+        let any_pty_output = tab_mgr.process_all_pty();
+        // Update tab title from active pane's window title (OSC 0/2)
+        let new_title = tab_mgr.active_tab().active_pane().terminal.grid.window_title.clone();
+        if let Some(title) = new_title {
+            tab_mgr.active_tab_mut().title = title;
         }
+        let term = tab_mgr.active_terminal_mut();
 
-        if total_read > 0 {
+        if any_pty_output {
             // Synchronized Update: defer rendering while mode 2026 is active
             if term.grid.modes.synchronized_update {
                 sync_update_pending = true;
@@ -3211,18 +3587,234 @@ Make sure seatd/logind is running and you're on an active VT."
         }
         needs_redraw = false;
 
+        // Drop the active terminal borrow before rendering
+        // (We'll re-borrow per-pane for multi-pane rendering)
+        let _ = term;
+
         // Render screen to FBO
         // Use OSC 11 dynamic background if set, otherwise config background
-        let bg_color = if let Some((r, g, b)) = term.grid.colors.bg {
-            (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
-        } else {
-            config_bg
+        let bg_color = {
+            let active_term = tab_mgr.active_terminal();
+            if let Some((r, g, b)) = active_term.grid.colors.bg {
+                (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
+            } else {
+                config_bg
+            }
         };
 
         // Cursor is drawn outside FBO (after blit), so no need to mark cursor rows dirty
 
         // Bind FBO for rendering
         fbo.bind(gl);
+
+        // Multi-pane: check if we have multiple panes
+        let multi_pane = tab_mgr.active_tab().pane_count() > 1
+            && tab_mgr.active_tab().zoomed_pane.is_none();
+
+        // Check if any pane has dirty content requiring FBO re-render
+        let any_content_dirty = if multi_pane {
+            tab_mgr.active_tab().panes.values()
+                .any(|p| p.terminal.grid.has_dirty_rows())
+        } else {
+            true // single-pane handles its own dirty tracking
+        };
+
+        // When multi-pane, only clear FBO if any pane has dirty content
+        // (otherwise keep cached FBO from previous frame)
+        if multi_pane && any_content_dirty {
+            fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
+        }
+
+        // Render INACTIVE panes only when FBO was cleared (otherwise cached)
+        if multi_pane && any_content_dirty {
+            let tab = tab_mgr.active_tab();
+            let active_pid = tab.active_pane;
+            for (&pane_id, pane) in &tab.panes {
+                if pane_id == active_pid {
+                    continue; // Active pane is rendered by the main rendering section
+                }
+                let term = &pane.terminal;
+                let grid = &term.grid;
+                let pane_x = pane.rect.x;
+                let pane_y = pane.rect.y;
+                let pane_cols = grid.cols();
+                let pane_rows = grid.rows();
+
+                // Per-pane colors
+                let pane_fg = if let Some((r, g, b)) = grid.colors.fg {
+                    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+                } else {
+                    [config_fg.0, config_fg.1, config_fg.2, 1.0]
+                };
+                let pane_bg = [bg_color.0, bg_color.1, bg_color.2, 1.0];
+
+                text_renderer.begin();
+
+                // Background pass
+                for row in 0..pane_rows {
+                    let y = pane_y + row as f32 * cell_h;
+                    for col in 0..pane_cols {
+                        let cell = term.display_cell(row, col);
+                        let bg = if matches!(cell.bg, terminal::grid::Color::Default) {
+                            pane_bg
+                        } else {
+                            grid.color_to_rgba(&cell.bg, false)
+                        };
+                        if bg != pane_bg {
+                            let x = pane_x + col as f32 * cell_w;
+                            text_renderer.push_rect(x, y, cell_w, cell_h, bg, &glyph_atlas);
+                        }
+                    }
+                }
+
+                // Text pass (simplified: character-by-character, no shaping)
+                let pane_ascent = glyph_atlas.ascent;
+                for row in 0..pane_rows {
+                    let y = pane_y + row as f32 * cell_h;
+                    let baseline_y = (y + pane_ascent).round();
+                    for col in 0..pane_cols {
+                        let cell = term.display_cell(row, col);
+                        if cell.grapheme.is_empty() || cell.grapheme == " " || cell.width == 0 {
+                            continue;
+                        }
+                        let fg = if matches!(cell.fg, terminal::grid::Color::Default) {
+                            pane_fg
+                        } else {
+                            grid.color_to_rgba(&cell.fg, true)
+                        };
+                        let cell_bg = if matches!(cell.bg, terminal::grid::Color::Default) {
+                            pane_bg
+                        } else {
+                            grid.color_to_rgba(&cell.bg, false)
+                        };
+                        let x = pane_x + col as f32 * cell_w;
+                        for ch in cell.grapheme.chars() {
+                            text_renderer.push_char_with_bg(ch, x, baseline_y, fg, [cell_bg[0], cell_bg[1], cell_bg[2]], 0.0, &glyph_atlas);
+                        }
+                    }
+                }
+
+                text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+
+                // Image pass (Sixel/Kitty) for inactive panes
+                let inactive_pane_num = pane_id.0;
+                log::debug!(
+                    "Inactive pane {:?}: {} image placements, {} dirty_image_ids",
+                    pane_id, grid.image_placements.len(), term.dirty_image_ids.len()
+                );
+                if !grid.image_placements.is_empty() {
+                    // Upload dirty textures
+                    for dirty_id in &term.dirty_image_ids {
+                        let key = gpu::image_key(inactive_pane_num, *dirty_id);
+                        if image_renderer.has_texture(key) {
+                            image_renderer.remove_texture(gl, key);
+                        }
+                    }
+                    image_renderer.begin();
+                    let mut draw_count = 0u32;
+                    for placement in &grid.image_placements {
+                        if let Some(image) = term.images.get(placement.id) {
+                            let key = gpu::image_key(inactive_pane_num, placement.id);
+                            if !image_renderer.has_texture(key) {
+                                log::debug!(
+                                    "  Uploading image id={} key=0x{:x} {}x{} for inactive pane {:?}",
+                                    placement.id, key, image.width, image.height, pane_id
+                                );
+                                image_renderer.upload_image(gl, key, image);
+                            }
+                            let scrollback_rows_shown = term.scroll_offset.min(pane_rows) as isize;
+                            let display_row = placement.row as isize + scrollback_rows_shown;
+                            if display_row + (placement.height_cells as isize) <= 0 {
+                                continue;
+                            }
+                            if display_row >= pane_rows as isize {
+                                continue;
+                            }
+                            let x = pane_x + placement.col as f32 * cell_w;
+                            let y = pane_y + display_row as f32 * cell_h;
+                            let draw_w = placement.width_cells as f32 * cell_w;
+                            let draw_h = placement.height_cells as f32 * cell_h;
+                            image_renderer.draw(key, x, y, draw_w, draw_h);
+                            draw_count += 1;
+                        } else {
+                            log::warn!(
+                                "  Image id={} not found in registry for inactive pane {:?}",
+                                placement.id, pane_id
+                            );
+                        }
+                    }
+                    if draw_count > 0 {
+                        log::debug!(
+                            "  Flushing {} image draws for inactive pane {:?}",
+                            draw_count, pane_id
+                        );
+                    }
+                    image_renderer.flush(gl, screen_w, screen_h);
+                }
+            }
+        }
+
+        // Clear dirty flags on inactive panes after rendering them
+        // (prevents any_content_dirty from being always true)
+        if multi_pane && any_content_dirty {
+            let tab = tab_mgr.active_tab_mut();
+            let active_pid = tab.active_pane;
+            let inactive_ids: Vec<pane::PaneId> = tab.panes.keys()
+                .filter(|&&pid| pid != active_pid)
+                .copied()
+                .collect();
+            for pid in inactive_ids {
+                if let Some(pane) = tab.panes.get_mut(&pid) {
+                    pane.terminal.dirty_image_ids.clear();
+                    pane.terminal.clear_dirty();
+                }
+            }
+        }
+
+        // === Active pane rendering (full pipeline with overlays) ===
+        // Compute pane-aware margins and capture border/tab info before borrowing term
+        let pane_dividers: Vec<pane::layout::Divider> = if multi_pane {
+            let tab = tab_mgr.active_tab();
+            pane::layout::calculate_dividers(&tab.tree, available_rect)
+        } else {
+            Vec::new()
+        };
+        // Capture tab bar info (title, is_active, x_start, x_end) when 2+ tabs
+        // Each tab width is content-based (text width + padding), max 200px
+        let tab_bar_info: Vec<(String, bool, f32, f32)> = if tab_mgr.tab_count() > 1 {
+            let pad = cell_w * 2.0; // padding on each side
+            let sep_w = 1.0_f32; // separator width
+            let mut x = 0.0_f32;
+            tab_mgr.tabs.iter().enumerate().map(|(i, tab)| {
+                let label = if tab.title.is_empty() {
+                    format!("{}:Tab {}", i + 1, i + 1)
+                } else {
+                    format!("{}:{}", i + 1, tab.title)
+                };
+                let text_w = label.chars().count() as f32 * cell_w;
+                let tab_w = (text_w + pad * 2.0).min(200.0);
+                let x_start = x;
+                let x_end = x + tab_w;
+                x = x_end + sep_w;
+                (label, i == tab_mgr.active_tab, x_start, x_end)
+            }).collect()
+        } else {
+            Vec::new()
+        };
+        let (margin_x, margin_y) = if multi_pane {
+            let ap = tab_mgr.active_tab().active_pane();
+            (ap.rect.x, ap.rect.y)
+        } else {
+            (margin_x, margin_y)
+        };
+        // Re-borrow the active terminal (mutable for clear_dirty at end)
+        let term = tab_mgr.active_terminal_mut();
+
+        // If FBO was cleared in multi-pane mode, force full re-render of active pane
+        // (FBO clear wiped cached content, so all rows must be redrawn)
+        if multi_pane && any_content_dirty {
+            term.grid.mark_all_dirty();
+        }
 
         // Overlays that require full FBO clear (dynamic content that doesn't use dirty tracking)
         let has_overlays = term.selection.is_some()
@@ -3239,14 +3831,17 @@ Make sure seatd/logind is running and you're on an active VT."
         prev_had_overlays = has_overlays;
 
         // Clear FBO: full clear when overlays active/just-cleared or all dirty, otherwise only dirty rows
-        if term.grid.is_all_dirty() || has_overlays || overlays_just_cleared {
-            fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
-        } else if term.has_dirty_rows() {
-            for row in 0..term.grid.rows() {
-                if term.grid.is_row_dirty(row) {
-                    fbo.clear_rows(
-                        gl, row, row, cell_h, margin_y, bg_color.0, bg_color.1, bg_color.2,
-                    );
+        // (Skip if already cleared for multi-pane)
+        if !multi_pane {
+            if term.grid.is_all_dirty() || has_overlays || overlays_just_cleared {
+                fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
+            } else if term.has_dirty_rows() {
+                for row in 0..term.grid.rows() {
+                    if term.grid.is_row_dirty(row) {
+                        fbo.clear_rows(
+                            gl, row, row, cell_h, margin_y, bg_color.0, bg_color.1, bg_color.2,
+                        );
+                    }
                 }
             }
         }
@@ -4603,9 +5198,11 @@ Make sure seatd/logind is running and you're on an active VT."
 
         // === Pass 3: Sixel/Kitty image rendering (after text+emoji, so images overlay text) ===
         // Re-upload textures for images whose data was updated (same ID, new content)
+        let active_pane_num = current_active_pid.0;
         for dirty_id in term.dirty_image_ids.drain(..) {
-            if image_renderer.has_texture(dirty_id) {
-                image_renderer.remove_texture(gl, dirty_id);
+            let key = gpu::image_key(active_pane_num, dirty_id);
+            if image_renderer.has_texture(key) {
+                image_renderer.remove_texture(gl, key);
             }
         }
         image_renderer.begin();
@@ -4617,25 +5214,27 @@ Make sure seatd/logind is running and you're on an active VT."
         }
         for placement in &term.grid.image_placements {
             if let Some(image) = term.images.get(placement.id) {
+                let key = gpu::image_key(active_pane_num, placement.id);
                 // Upload texture if not already uploaded
-                if !image_renderer.has_texture(placement.id) {
-                    image_renderer.upload_image(gl, image);
+                if !image_renderer.has_texture(key) {
+                    image_renderer.upload_image(gl, key, image);
                 }
                 // Drawing coordinates (accounting for scroll offset)
                 // When scrolling, grid rows shift down by scrollback_rows_shown
-                let scrollback_rows_shown = term.scroll_offset.min(grid_rows) as isize;
+                let pane_rows = grid.rows();
+                let scrollback_rows_shown = term.scroll_offset.min(pane_rows) as isize;
                 let display_row = placement.row as isize + scrollback_rows_shown;
                 if display_row + (placement.height_cells as isize) <= 0 {
                     continue; // Off-screen (above)
                 }
-                if display_row >= grid_rows as isize {
+                if display_row >= pane_rows as isize {
                     continue; // Off-screen (below)
                 }
                 let x = margin_x + placement.col as f32 * cell_w;
                 let y = margin_y + display_row as f32 * cell_h;
                 let draw_w = placement.width_cells as f32 * cell_w;
                 let draw_h = placement.height_cells as f32 * cell_h;
-                image_renderer.draw(placement.id, x, y, draw_w, draw_h);
+                image_renderer.draw(key, x, y, draw_w, draw_h);
             }
         }
         image_renderer.flush(gl, screen_w, screen_h);
@@ -5326,9 +5925,92 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
 
+        // === Pane dividers (drawn in FBO, after all pane content) ===
+        // Only draw divider lines between panes (not around outer edges)
+        if !pane_dividers.is_empty() && any_content_dirty {
+            text_renderer.begin();
+            let divider_color = [0.3, 0.3, 0.35, 1.0];
+            for div in &pane_dividers {
+                text_renderer.push_rect(div.x, div.y, div.width, div.height, divider_color, &glyph_atlas);
+            }
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
+
         // Unbind FBO and blit to screen
         fbo.unbind(gl);
         fbo.blit_to_screen(gl, screen_w, screen_h);
+
+        // === Tab bar (drawn directly to screen, outside FBO) ===
+        // Drawn every frame to avoid FBO caching artifacts
+        if !tab_bar_info.is_empty() {
+            let tab_bar_h = cell_h + 6.0; // slightly taller than one cell
+            let tab_bar_y = screen_h as f32 - tab_bar_h;
+            let tab_bar_bg = [0.12, 0.12, 0.15, 1.0];
+            let indicator_h = 2.0_f32;
+            let tab_radius = 6.0_f32;
+            let tab_pad_v = 4.0_f32; // vertical padding for rounded tab background
+
+            // Pass 1: Full-width opaque background strip
+            text_renderer.begin();
+            text_renderer.push_rect(0.0, tab_bar_y, screen_w as f32, tab_bar_h, tab_bar_bg, &glyph_atlas);
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+
+            // Pass 2: Rounded tab backgrounds via UiRenderer (SDF shader)
+            ui_renderer.begin();
+            for (_, is_active, x_start, x_end) in &tab_bar_info {
+                if *is_active {
+                    let tab_w = x_end - x_start;
+                    ui_renderer.push_rounded_rect(
+                        *x_start + 2.0, tab_bar_y + tab_pad_v,
+                        tab_w - 4.0, tab_bar_h - tab_pad_v,
+                        tab_radius, [0.2, 0.3, 0.5, 1.0],
+                    );
+                }
+            }
+            ui_renderer.flush(gl, screen_w, screen_h);
+
+            // Pass 3: Active indicator line + text labels
+            text_renderer.begin();
+            for (_, is_active, x_start, x_end) in &tab_bar_info {
+                if *is_active {
+                    let tab_w = x_end - x_start;
+                    text_renderer.push_rect(
+                        *x_start + 2.0, tab_bar_y + tab_bar_h - indicator_h,
+                        tab_w - 4.0, indicator_h,
+                        [0.4, 0.6, 1.0, 1.0], &glyph_atlas,
+                    );
+                }
+            }
+            // Text labels with per-character background (LCD renderer handles bg natively)
+            let ascent = glyph_atlas.ascent;
+            let text_baseline_y = tab_bar_y + (tab_bar_h + ascent) * 0.5;
+            for (label, is_active, x_start, x_end) in &tab_bar_info {
+                let tab_w = x_end - x_start;
+                let fg = if *is_active {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    [0.6, 0.6, 0.6, 1.0]
+                };
+                let char_bg = if *is_active {
+                    [0.2, 0.3, 0.5]
+                } else {
+                    [tab_bar_bg[0], tab_bar_bg[1], tab_bar_bg[2]]
+                };
+                let pad = cell_w;
+                let max_chars = ((tab_w - pad * 2.0) / cell_w).floor().max(0.0) as usize;
+                let display_title: String = label.chars().take(max_chars).collect();
+                let text_x = x_start + pad;
+                for ch in display_title.chars() {
+                    glyph_atlas.ensure_glyph(ch);
+                }
+                text_renderer.push_text_with_bg(
+                    &display_title, text_x, text_baseline_y.round(),
+                    fg, char_bg, &glyph_atlas,
+                );
+            }
+            glyph_atlas.upload_if_dirty(gl);
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
 
         // Draw text cursor directly to screen (outside FBO cache)
         // This prevents cursor trails in cached content
@@ -5682,8 +6364,19 @@ Make sure seatd/logind is running and you're on an active VT."
         }
     }
 
+    // Pre-shutdown: send SIGHUP to ALL child processes in parallel
+    // (so they start exiting while we clean up GPU resources)
+    for tab in &tab_mgr.tabs {
+        for pane in tab.panes.values() {
+            pane.terminal.send_sighup();
+        }
+    }
+
     // Keyboard restoration (automatic on drop)
     drop(keyboard);
+
+    // Drop TabManager early (PTY Drop will waitpid with timeout + SIGKILL)
+    drop(tab_mgr);
 
     // Resource cleanup
     fbo.destroy(gl);
