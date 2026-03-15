@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdrm-dev libgbm-dev \
+            libegl1-mesa-dev libgles2-mesa-dev \
+            libxkbcommon-dev libinput-dev libudev-dev \
+            libdbus-1-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libseat-dev \
+            pkg-config cmake clang
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
