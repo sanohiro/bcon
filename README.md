@@ -129,7 +129,7 @@ sudo systemctl enable --now bcon@tty2
 ## Requirements
 
 - Linux with DRM/KMS support (Debian/Ubuntu recommended)
-- GPU with OpenGL ES 2.0+
+- GPU with OpenGL ES 3.0+
 
 ## Limitations
 

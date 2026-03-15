@@ -129,7 +129,7 @@ sudo systemctl enable --now bcon@tty2
 ## 動作要件
 
 - DRM/KMS サポートのある Linux (Debian/Ubuntu 推奨)
-- OpenGL ES 2.0+ 対応 GPU
+- OpenGL ES 3.0+ 対応 GPU
 
 ## 制限事項
 
