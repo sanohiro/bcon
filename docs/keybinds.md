@@ -1,5 +1,7 @@
 # Keybinds
 
+English | **[Japanese](keybinds.ja.md)**
+
 ## Default Keybinds
 
 | Action | Default | Vim | Emacs | Description |

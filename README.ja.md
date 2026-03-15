@@ -128,9 +128,9 @@ sudo systemctl enable --now bcon@tty2
 
 | ドキュメント | 内容 |
 |-------------|------|
-| **[インストールガイド](docs/installation.md)** | apt、日本語環境、ログインセッション、ソースビルド、rootless |
-| **[設定リファレンス](docs/configuration.md)** | 設定ファイル詳細、プリセット、フォント、Nerd Fonts |
-| **[キーバインド](docs/keybinds.md)** | キーバインド一覧 (Default / Vim / Emacs) + コピーモード |
+| **[インストールガイド](docs/installation.ja.md)** | apt、日本語環境、ログインセッション、ソースビルド、rootless |
+| **[設定リファレンス](docs/configuration.ja.md)** | 設定ファイル詳細、プリセット、フォント、Nerd Fonts |
+| **[キーバインド](docs/keybinds.ja.md)** | キーバインド一覧 (Default / Vim / Emacs) + コピーモード |
 
 ## 動作要件
 

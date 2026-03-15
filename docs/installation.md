@@ -1,5 +1,7 @@
 # Installation Guide
 
+English | **[Japanese](installation.ja.md)**
+
 ## Basic Setup (Debian/Ubuntu)
 
 For Japanese environment, see [Japanese Environment Setup](#japanese-environment-setup) below.

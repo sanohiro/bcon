@@ -1,5 +1,7 @@
 # Configuration
 
+English | **[Japanese](configuration.ja.md)**
+
 ## Config File Locations
 
 - `/etc/bcon/config.toml` — system config (for systemd service)
