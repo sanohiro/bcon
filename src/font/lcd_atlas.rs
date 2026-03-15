@@ -873,6 +873,30 @@ impl LcdGlyphAtlas {
         None
     }
 
+    /// Ensure glyph by glyph ID (for ligature support via text shaper)
+    /// Rasterizes from main font using glyph ID and caches in glyph_id_map
+    pub fn ensure_glyph_id(&mut self, key: GlyphKey) {
+        if self.glyph_id_map.contains_key(&key) {
+            return;
+        }
+
+        // Currently only support main font (font_idx=0)
+        if key.font_idx != 0 {
+            return;
+        }
+
+        if let Some(ft_glyph) = self.font_main.rasterize_glyph_id(key.glyph_id as u32) {
+            if let Some(info) = self.pack_glyph(&ft_glyph, &format!("GID:{}", key.glyph_id)) {
+                self.glyph_id_map.insert(key, info);
+            }
+        }
+    }
+
+    /// Get cached glyph by glyph ID
+    pub fn get_glyph_by_id(&self, key: &GlyphKey) -> Option<&GlyphInfo> {
+        self.glyph_id_map.get(key)
+    }
+
     pub fn bind(&self, gl: &glow::Context, unit: u32) {
         unsafe {
             gl.active_texture(glow::TEXTURE0 + unit);

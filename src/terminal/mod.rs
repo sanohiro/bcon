@@ -1533,11 +1533,17 @@ impl Terminal {
     }
 
     /// Send clipboard contents to PTY (paste)
+    /// Reads from clipboard file to share clipboard across split panes.
     /// If bracketed_paste is enabled, wrap with \e[200~ and \e[201~
-    pub fn paste_clipboard(&self) -> Result<()> {
+    pub fn paste_clipboard(&mut self) -> Result<()> {
+        // Read from shared clipboard file (enables cross-pane clipboard sharing)
+        if let Ok(text) = std::fs::read_to_string(&self.clipboard_path) {
+            if !text.is_empty() {
+                self.clipboard = text;
+            }
+        }
         if !self.clipboard.is_empty() {
             if self.grid.modes.bracketed_paste {
-                // Bracketed paste mode: use write_all for reliable delivery
                 self.pty.write_all(b"\x1b[200~")?;
                 self.pty.write_all(self.clipboard.as_bytes())?;
                 self.pty.write_all(b"\x1b[201~")?;

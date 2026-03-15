@@ -503,6 +503,23 @@ impl LcdTextRendererInstanced {
         }
     }
 
+    /// Add glyph by GlyphInfo directly (for ligature rendering via text shaper)
+    /// Bypasses character lookup - uses pre-resolved glyph info
+    pub fn push_glyph_with_info(
+        &mut self,
+        glyph: &GlyphInfo,
+        x: f32,
+        y: f32,
+        fg: [f32; 4],
+        bg: [f32; 3],
+        lcd_disable: f32,
+    ) {
+        if self.glyph_count >= MAX_GLYPHS {
+            return;
+        }
+        self.push_glyph_info(glyph, x, y, fg, bg, lcd_disable);
+    }
+
     /// Add glyph info as instance data
     fn push_glyph_info(
         &mut self,

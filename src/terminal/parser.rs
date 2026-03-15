@@ -1128,7 +1128,12 @@ impl<'a> Performer<'a> {
         trace!("OSC 52: data len={}", data.len());
 
         if data == b"?" {
-            // Query: respond with current clipboard contents in base64
+            // Query: read from shared clipboard file for cross-pane sharing
+            if let Ok(text) = std::fs::read_to_string(self.clipboard_path) {
+                if !text.is_empty() {
+                    *self.clipboard = text;
+                }
+            }
             use std::fmt::Write;
             let encoded = base64_encode(self.clipboard.as_bytes());
             let mut response = String::new();

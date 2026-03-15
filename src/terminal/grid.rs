@@ -42,6 +42,8 @@ use smol_str::SmolStr;
 use unicode_normalization::UnicodeNormalization;
 use unicode_width::UnicodeWidthChar;
 
+use crate::font::emoji::is_emoji_presentation;
+
 /// Convert char to SmolStr efficiently
 /// For ASCII (1 byte), uses inline storage directly
 #[inline]
@@ -74,69 +76,6 @@ pub struct Hyperlink {
 
 /// Maximum scrollback lines
 const MAX_SCROLLBACK: usize = 10000;
-
-/// Check if codepoint should be treated as emoji (width=2 + color emoji rendering)
-///
-/// Only includes codepoints with Emoji_Presentation=Yes from Unicode spec.
-/// Text-default emoji (Emoji_Presentation=No) like ♠♥☀✂ are NOT included —
-/// they should be width=1 unless followed by VS16 (U+FE0F).
-/// This matches Ghostty/kitty behavior and avoids width mismatches with applications.
-fn is_emoji_codepoint(cp: u32) -> bool {
-    matches!(cp,
-        // === BMP: Emoji_Presentation=Yes only ===
-        // Individual codepoints/small ranges that default to color emoji rendering
-        0x231A..=0x231B |    // ⌚⌛ Watch, Hourglass done
-        0x23E9..=0x23EC |    // ⏩⏪⏫⏬ Fast-forward/rewind buttons
-        0x23F0 |             // ⏰ Alarm clock
-        0x23F3 |             // ⏳ Hourglass not done
-        0x25FD..=0x25FE |    // ◽◾ Medium-small squares
-        0x2614..=0x2615 |    // ☔☕ Umbrella with rain, Hot beverage
-        0x2648..=0x2653 |    // ♈..♓ Zodiac signs
-        0x267F |             // ♿ Wheelchair symbol
-        0x2693 |             // ⚓ Anchor
-        0x26A1 |             // ⚡ High voltage
-        0x26AA..=0x26AB |    // ⚪⚫ White/Black circles
-        0x26BD..=0x26BE |    // ⚽⚾ Soccer/Baseball
-        0x26C4..=0x26C5 |    // ⛄⛅ Snowman, Sun behind cloud
-        0x26CE |             // ⛎ Ophiuchus
-        0x26D4 |             // ⛔ No entry
-        0x26EA |             // ⛪ Church
-        0x26F2..=0x26F3 |    // ⛲⛳ Fountain, Flag in hole
-        0x26F5 |             // ⛵ Sailboat
-        0x26FA |             // ⛺ Tent
-        0x26FD |             // ⛽ Fuel pump
-        0x2705 |             // ✅ Check mark button
-        0x270A..=0x270B |    // ✊✋ Raised fist/hand
-        0x2728 |             // ✨ Sparkles
-        0x274C |             // ❌ Cross mark
-        0x274E |             // ❎ Cross mark button
-        0x2753..=0x2755 |    // ❓❔❕ Question/exclamation marks
-        0x2757 |             // ❗ Red exclamation
-        0x2795..=0x2797 |    // ➕➖➗ Plus, Minus, Divide
-        0x27B0 |             // ➰ Curly loop
-        0x27BF |             // ➿ Double curly loop
-        0x2B1B..=0x2B1C |    // ⬛⬜ Black/White large squares
-        0x2B50 |             // ⭐ Star
-        0x2B55 |             // ⭕ Hollow red circle
-        // === SMP: Emoji_Presentation=Yes ===
-        0x1F004 |            // 🀄 Mahjong Red Dragon
-        0x1F0CF |            // 🃏 Playing Card Black Joker
-        0x1F18E |            // 🆎 AB button
-        0x1F191..=0x1F19A |  // 🆑..🆚 Squared Latin symbols
-        0x1F1E0..=0x1F1FF |  // 🇦..🇿 Regional Indicator Symbols (flags)
-        0x1F200..=0x1F202 |  // 🈀🈁🈂 Squared Katakana
-        0x1F210..=0x1F23B |  // 🈐..🈻 Squared CJK Ideographs
-        0x1F240..=0x1F248 |  // 🉀..🉈 Tortoise shell bracket CJK
-        0x1F250..=0x1F251 |  // 🉐🉑 Circled Ideographs
-        0x1F260..=0x1F265 |  // 🉠..🉥 Rounded symbols
-        0x1F300..=0x1F5FF |  // Miscellaneous Symbols and Pictographs
-        0x1F600..=0x1F64F |  // Emoticons (😀😁...)
-        0x1F680..=0x1F6FF |  // Transport and Map Symbols
-        0x1F7E0..=0x1F7FF |  // Geometric Shapes Extended (🟠🟡🟢🟣🟤)
-        0x1F900..=0x1F9FF |  // Supplemental Symbols and Pictographs
-        0x1FA00..=0x1FAFF    // Symbols and Pictographs Extended
-    )
-}
 
 /// Image placement information
 #[derive(Debug, Clone)]
@@ -1075,12 +1014,44 @@ impl Grid {
         // Add to grapheme
         let mut combined = base_grapheme.to_string();
         combined.push(ch);
+        let cols = self.cols;
         let cell = self.cell_mut(row, col);
         cell.grapheme = SmolStr::new(&combined);
 
         // Set IS_EMOJI flag if combining emoji character
-        if is_emoji_codepoint(ch as u32) {
+        if is_emoji_presentation(ch as u32) {
             cell.attrs.insert(CellAttrs::IS_EMOJI);
+        }
+
+        // VS16 (U+FE0F) forces emoji presentation: set IS_EMOJI and widen to 2 cells
+        if ch == '\u{FE0F}' {
+            cell.attrs.insert(CellAttrs::IS_EMOJI);
+            if cell.width == 1 && col + 1 < cols {
+                cell.width = 2;
+                // Create continuation cell
+                let fg = cell.fg;
+                let bg = cell.bg;
+                let attrs = cell.attrs;
+                let underline_style = cell.underline_style;
+                let underline_color = cell.underline_color;
+                let hyperlink = cell.hyperlink.clone();
+                self.clear_wide_char_at(row, col + 1);
+                static EMPTY: SmolStr = SmolStr::new_inline("");
+                *self.cell_mut(row, col + 1) = Cell {
+                    grapheme: EMPTY.clone(),
+                    fg,
+                    bg,
+                    attrs,
+                    width: 0,
+                    hyperlink,
+                    underline_style,
+                    underline_color,
+                };
+                // Advance cursor past the widened cell so next char doesn't
+                // overwrite the continuation cell (which would clear the head)
+                self.cursor_col = (col + 2).min(self.cols);
+                self.mark_dirty(row);
+            }
         }
     }
 
@@ -1158,15 +1129,68 @@ impl Grid {
             return;
         }
 
-        // During ZWJ sequence, next emoji also combines with previous cell
+        // Combining Enclosing Keycap: combines with previous cell to form keycap emoji
+        // Keycap sequence: digit/# + VS16 + U+20E3
+        if ch == '\u{20E3}' {
+            self.combine_grapheme(ch);
+            self.in_zwj_sequence = false;
+            // Force IS_EMOJI on the combined cell and widen to 2 cells
+            let (row, col) = if self.cursor_col > 0 {
+                (self.cursor_row, self.cursor_col - 1)
+            } else if self.cursor_row > 0 {
+                (self.cursor_row - 1, self.cols - 1)
+            } else {
+                return;
+            };
+            let col = if self.cell(row, col).width == 0 && col > 0 { col - 1 } else { col };
+            let cols = self.cols;
+            let cell = self.cell_mut(row, col);
+            cell.attrs.insert(CellAttrs::IS_EMOJI);
+            if cell.width == 1 && col + 1 < cols {
+                cell.width = 2;
+                let fg = cell.fg;
+                let bg = cell.bg;
+                let attrs = cell.attrs;
+                let underline_style = cell.underline_style;
+                let underline_color = cell.underline_color;
+                let hyperlink = cell.hyperlink.clone();
+                self.clear_wide_char_at(row, col + 1);
+                static EMPTY: SmolStr = SmolStr::new_inline("");
+                *self.cell_mut(row, col + 1) = Cell {
+                    grapheme: EMPTY.clone(),
+                    fg, bg, attrs, width: 0, hyperlink, underline_style, underline_color,
+                };
+                // Advance cursor past the widened cell
+                self.cursor_col = (col + 2).min(self.cols);
+                self.mark_dirty(row);
+            }
+            return;
+        }
+
+        // Tag characters for subdivision flag sequences (🏴󠁧󠁢󠁥󠁮󠁧󠁿)
+        // U+E0020..U+E007E (tag characters) and U+E007F (cancel tag)
+        if ('\u{E0020}'..='\u{E007F}').contains(&ch) {
+            self.combine_grapheme(ch);
+            self.in_zwj_sequence = false;
+            return;
+        }
+
+        // During ZWJ sequence, next character combines with previous cell
+        // (includes emoji, skin tone modifiers, etc.)
         if self.in_zwj_sequence {
             self.in_zwj_sequence = false;
-            // Combine if emoji, otherwise normal processing
             let cp = ch as u32;
-            if is_emoji_codepoint(cp) {
+            if is_emoji_presentation(cp) || ('\u{1F3FB}'..='\u{1F3FF}').contains(&ch) {
                 self.combine_grapheme(ch);
                 return;
             }
+        }
+
+        // Fitzpatrick skin tone modifiers combine with previous emoji cell
+        // Must be after ZWJ check so ZWJ+emoji+skin_tone sequences work correctly
+        if ('\u{1F3FB}'..='\u{1F3FF}').contains(&ch) {
+            self.combine_grapheme(ch);
+            return;
         }
 
         // Regional Indicator: merge as flag if previous cell is also RI
@@ -1179,7 +1203,7 @@ impl Grid {
 
         // Determine character width
         // Emoji may return 1 from unicode-width but terminals need 2 cells
-        let char_width = if is_emoji_codepoint(cp) {
+        let char_width = if is_emoji_presentation(cp) {
             2 // Force emoji to width=2
         } else {
             match ch.width() {
@@ -1249,7 +1273,7 @@ impl Grid {
         let underline_color = self.pen.underline_color;
 
         // Set IS_EMOJI flag for emoji characters (cached for rendering)
-        if is_emoji_codepoint(cp) {
+        if is_emoji_presentation(cp) {
             attrs.insert(CellAttrs::IS_EMOJI);
         }
 

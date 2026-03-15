@@ -12,43 +12,88 @@ use std::path::Path;
 use log::{info, trace, warn};
 
 /// Determines if a character is an emoji
+/// Emoji_Presentation=Yes: characters that default to emoji (color) presentation.
+/// These get width=2 in the terminal grid without needing VS16 (U+FE0F).
+/// This is the single source of truth — grid.rs imports this.
+pub fn is_emoji_presentation(cp: u32) -> bool {
+    matches!(cp,
+        // === BMP: Emoji_Presentation=Yes ===
+        0x231A..=0x231B |        // ⌚⌛ Watch, Hourglass done
+        0x23E9..=0x23EC |        // ⏩⏪⏫⏬ Fast-forward/rewind buttons
+        0x23F0 |                 // ⏰ Alarm clock
+        0x23F3 |                 // ⏳ Hourglass not done
+        0x25FD..=0x25FE |        // ◽◾ Medium-small squares
+        0x2614..=0x2615 |        // ☔☕ Umbrella with rain, Hot beverage
+        0x2648..=0x2653 |        // ♈..♓ Zodiac signs
+        0x267F |                 // ♿ Wheelchair symbol
+        0x2693 |                 // ⚓ Anchor
+        0x26A1 |                 // ⚡ High voltage
+        0x26AA..=0x26AB |        // ⚪⚫ White/Black circles
+        0x26BD..=0x26BE |        // ⚽⚾ Soccer/Baseball
+        0x26C4..=0x26C5 |        // ⛄⛅ Snowman, Sun behind cloud
+        0x26CE |                 // ⛎ Ophiuchus
+        0x26D4 |                 // ⛔ No entry
+        0x26EA |                 // ⛪ Church
+        0x26F2..=0x26F3 |        // ⛲⛳ Fountain, Flag in hole
+        0x26F5 |                 // ⛵ Sailboat
+        0x26FA |                 // ⛺ Tent
+        0x26FD |                 // ⛽ Fuel pump
+        0x2705 |                 // ✅ Check mark button
+        0x270A..=0x270B |        // ✊✋ Raised fist/hand
+        0x2728 |                 // ✨ Sparkles
+        0x274C |                 // ❌ Cross mark
+        0x274E |                 // ❎ Cross mark button
+        0x2753..=0x2755 |        // ❓❔❕ Question/exclamation marks
+        0x2757 |                 // ❗ Red exclamation
+        0x2795..=0x2797 |        // ➕➖➗ Plus, Minus, Divide
+        0x27B0 |                 // ➰ Curly loop
+        0x27BF |                 // ➿ Double curly loop
+        0x2B1B..=0x2B1C |        // ⬛⬜ Black/White large squares
+        0x2B50 |                 // ⭐ Star
+        0x2B55 |                 // ⭕ Hollow red circle
+        // === SMP: Emoji_Presentation=Yes ===
+        0x1F004 |                // 🀄 Mahjong Red Dragon
+        0x1F0CF |                // 🃏 Playing Card Black Joker
+        0x1F18E |                // 🆎 AB button
+        0x1F191..=0x1F19A |      // 🆑..🆚 Squared Latin symbols
+        0x1F1E0..=0x1F1FF |      // 🇦..🇿 Regional Indicator Symbols (flags)
+        0x1F200..=0x1F202 |      // 🈀🈁🈂 Squared Katakana
+        0x1F210..=0x1F23B |      // 🈐..🈻 Squared CJK Ideographs
+        0x1F240..=0x1F248 |      // 🉀..🉈 Tortoise shell bracket CJK
+        0x1F250..=0x1F251 |      // 🉐🉑 Circled Ideographs
+        0x1F260..=0x1F265 |      // 🉠..🉥 Rounded symbols
+        0x1F300..=0x1F5FF |      // Miscellaneous Symbols and Pictographs
+        0x1F600..=0x1F64F |      // Emoticons (😀😁...)
+        0x1F680..=0x1F6FF |      // Transport and Map Symbols
+        0x1F7E0..=0x1F7FF |      // Geometric Shapes Extended (🟠🟡🟢🟣🟤)
+        0x1F900..=0x1F9FF |      // Supplemental Symbols and Pictographs
+        0x1FA00..=0x1FAFF        // Symbols and Pictographs Extended
+    )
+}
+
+/// Checks if a character could be an emoji (for rendering decisions).
+/// Superset of is_emoji_presentation — also includes text-default emoji
+/// that may appear as emoji via VS16 (U+FE0F) or in emoji sequences.
 pub fn is_emoji(c: char) -> bool {
     let cp = c as u32;
+    if is_emoji_presentation(cp) {
+        return true;
+    }
     matches!(cp,
-        // Miscellaneous Symbols and Pictographs
-        0x1F300..=0x1F5FF |
-        // Emoticons
-        0x1F600..=0x1F64F |
-        // Transport and Map Symbols
-        0x1F680..=0x1F6FF |
-        // Supplemental Symbols and Pictographs
-        0x1F900..=0x1F9FF |
-        // Symbols and Pictographs Extended-A
-        0x1FA00..=0x1FA6F |
-        // Symbols and Pictographs Extended-B
-        0x1FA70..=0x1FAFF |
-        // Dingbats
-        0x2700..=0x27BF |
-        // Miscellaneous Symbols
-        0x2600..=0x26FF |
-        // Regional Indicator Symbols
-        0x1F1E0..=0x1F1FF |
-        // Various common emoji
+        // Text-default emoji (Emoji_Presentation=No, rendered as emoji with VS16)
         0x203C | 0x2049 | 0x2122 | 0x2139 |
         0x2194..=0x2199 |
         0x21A9..=0x21AA |
-        0x231A..=0x231B |
         0x2328 | 0x23CF |
-        0x23E9..=0x23F3 |
         0x23F8..=0x23FA |
         0x24C2 |
         0x25AA..=0x25AB |
         0x25B6 | 0x25C0 |
-        0x25FB..=0x25FE |
+        0x25FB..=0x25FC |        // 25FD-FE are in is_emoji_presentation
+        0x2600..=0x26FF |        // Miscellaneous Symbols (broad: ☀♥☠ etc.)
+        0x2700..=0x27BF |        // Dingbats (broad: ❤✂✏ etc.)
         0x2934..=0x2935 |
         0x2B05..=0x2B07 |
-        0x2B1B..=0x2B1C |
-        0x2B50 | 0x2B55 |
         0x3030 | 0x303D | 0x3297 | 0x3299
     )
 }

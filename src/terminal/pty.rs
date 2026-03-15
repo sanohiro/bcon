@@ -660,7 +660,24 @@ impl Drop for Pty {
                             self.child_pid
                         );
                         let _ = nix::sys::signal::kill(pgid, nix::sys::signal::Signal::SIGKILL);
-                        let _ = waitpid(self.child_pid, None);
+                        // Non-blocking wait after SIGKILL (max 500ms)
+                        let kill_deadline =
+                            std::time::Instant::now() + std::time::Duration::from_millis(500);
+                        loop {
+                            match waitpid(self.child_pid, Some(WaitPidFlag::WNOHANG)) {
+                                Ok(nix::sys::wait::WaitStatus::StillAlive) => {
+                                    if std::time::Instant::now() >= kill_deadline {
+                                        log::error!(
+                                            "Child {} still alive after SIGKILL, abandoning",
+                                            self.child_pid
+                                        );
+                                        break;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(10));
+                                }
+                                _ => break,
+                            }
+                        }
                         break;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(10));

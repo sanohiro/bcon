@@ -1556,12 +1556,22 @@ Make sure seatd/logind is running and you're on an active VT."
     let gl = renderer.gl();
 
     // Load font (supports both file paths and font family names via fontconfig)
+    // Falls back to system monospace if the configured font cannot be resolved
     let font_data: &'static [u8] = if !cfg.font.main.is_empty() {
-        Box::leak(
-            font::fontconfig::resolve_font(&cfg.font.main)
-                .with_context(|| format!("Failed to resolve font: {}", cfg.font.main))?
-                .into_boxed_slice(),
-        )
+        match font::fontconfig::resolve_font(&cfg.font.main) {
+            Ok(data) => Box::leak(data.into_boxed_slice()),
+            Err(e) => {
+                warn!(
+                    "Font \"{}\" not found ({}), falling back to system monospace",
+                    cfg.font.main, e
+                );
+                Box::leak(
+                    font::atlas::load_system_font()
+                        .context("Failed to load fallback font")?
+                        .into_boxed_slice(),
+                )
+            }
+        }
     } else {
         Box::leak(
             font::atlas::load_system_font()
@@ -1585,18 +1595,29 @@ Make sure seatd/logind is running and you're on an active VT."
 
     // Load CJK font (supports file paths and font names, continue on failure)
     let cjk_font_data: Option<&[u8]> = if !cfg.font.cjk.is_empty() {
-        font::fontconfig::resolve_font(&cfg.font.cjk)
-            .ok()
-            .map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
+        match font::fontconfig::resolve_font(&cfg.font.cjk) {
+            Ok(d) => Some(Box::leak(d.into_boxed_slice()) as &'static [u8]),
+            Err(e) => {
+                warn!("CJK font \"{}\" not found ({}), disabled", cfg.font.cjk, e);
+                None
+            }
+        }
     } else {
         font::atlas::load_cjk_font().map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
     };
 
     // Load symbols/Nerd Font (supports file paths and font names, continue on failure)
     let symbols_font_data: Option<&[u8]> = if !cfg.font.symbols.is_empty() {
-        font::fontconfig::resolve_font(&cfg.font.symbols)
-            .ok()
-            .map(|d| -> &'static [u8] { Box::leak(d.into_boxed_slice()) })
+        match font::fontconfig::resolve_font(&cfg.font.symbols) {
+            Ok(d) => Some(Box::leak(d.into_boxed_slice()) as &'static [u8]),
+            Err(e) => {
+                warn!(
+                    "Symbols font \"{}\" not found ({}), disabled",
+                    cfg.font.symbols, e
+                );
+                None
+            }
+        }
     } else {
         // Auto-detect Nerd Font via fontconfig
         font::fontconfig::load_nerd_font_fc()
@@ -1633,6 +1654,22 @@ Make sure seatd/logind is running and you're on an active VT."
         glyph_atlas.is_subpixel_positioning_enabled(),
         hinting_mode
     );
+
+    // Text shaper for ligature support (rustybuzz)
+    let font_main_fontdue = fontdue::Font::from_bytes(
+        font_data as &[u8],
+        fontdue::FontSettings::default(),
+    )
+    .ok();
+
+    let mut text_shaper = if font_main_fontdue.is_some() {
+        font::shaper::TextShaper::new(font_data, cjk_font_data)
+    } else {
+        None
+    };
+    if text_shaper.is_some() {
+        info!("Text shaper initialized (ligatures enabled)");
+    }
 
     // Create emoji atlas (resolve font name to path if needed)
     let emoji_resolved_path: Option<String> = if !cfg.font.emoji.is_empty() {
@@ -1909,6 +1946,9 @@ Make sure seatd/logind is running and you're on an active VT."
     let mut prev_fb = initial_fb;
     let mut key_buf = [0u8; 256];
     let mut needs_redraw = true;
+    // Tight-poll counter: skip sleep for N iterations after input events
+    // to catch PTY responses (keystroke echo) without 8ms delay
+    let mut tight_poll_remaining: u8 = 0;
 
     // Mouse state
     let mut mouse_selecting = false;
@@ -2321,6 +2361,10 @@ Make sure seatd/logind is running and you're on an active VT."
                 break 'main_loop;
             }
             tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+            // Mark all panes dirty so FBO is fully re-rendered
+            for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                pane.terminal.mark_all_dirty();
+            }
             needs_redraw = true;
             continue 'main_loop;
         }
@@ -2655,6 +2699,9 @@ Make sure seatd/logind is running and you're on an active VT."
                         new_term_setup(&cfg, &mut tab_mgr, new_term,
                             pane::Direction::Horizontal, available_rect, cell_w, cell_h);
                     }
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
                     needs_redraw = true;
                     continue 'main_loop;
                 }
@@ -2676,6 +2723,9 @@ Make sure seatd/logind is running and you're on an active VT."
                         new_term_setup(&cfg, &mut tab_mgr, new_term,
                             pane::Direction::Vertical, available_rect, cell_w, cell_h);
                     }
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
                     needs_redraw = true;
                     continue 'main_loop;
                 }
@@ -2686,6 +2736,9 @@ Make sure seatd/logind is running and you're on an active VT."
                         break 'main_loop;
                     }
                     tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
                     needs_redraw = true;
                     continue 'main_loop;
                 }
@@ -2728,29 +2781,41 @@ Make sure seatd/logind is running and you're on an active VT."
                 }
                 if kb_resize_left.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     let _ = term;
-                    tab_mgr.active_tab_mut().resize_active(-0.05, available_rect);
+                    tab_mgr.active_tab_mut().resize_active(-0.05, pane::Direction::Horizontal, available_rect);
                     tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
                     needs_redraw = true;
                     continue 'main_loop;
                 }
                 if kb_resize_right.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     let _ = term;
-                    tab_mgr.active_tab_mut().resize_active(0.05, available_rect);
+                    tab_mgr.active_tab_mut().resize_active(0.05, pane::Direction::Horizontal, available_rect);
                     tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
                     needs_redraw = true;
                     continue 'main_loop;
                 }
                 if kb_resize_up.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     let _ = term;
-                    tab_mgr.active_tab_mut().resize_active(-0.05, available_rect);
+                    tab_mgr.active_tab_mut().resize_active(-0.05, pane::Direction::Vertical, available_rect);
                     tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
                     needs_redraw = true;
                     continue 'main_loop;
                 }
                 if kb_resize_down.matches(ctrl, shift, alt, raw.keycode, keysym) {
                     let _ = term;
-                    tab_mgr.active_tab_mut().resize_active(0.05, available_rect);
+                    tab_mgr.active_tab_mut().resize_active(0.05, pane::Direction::Vertical, available_rect);
                     tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
+                    }
                     needs_redraw = true;
                     continue 'main_loop;
                 }
@@ -2764,6 +2829,9 @@ Make sure seatd/logind is running and you're on an active VT."
                         t.resize(cols.max(1), rows.max(1));
                     } else {
                         tab_mgr.resize_terminals_to_rects(cell_w, cell_h);
+                    }
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
                     }
                     needs_redraw = true;
                     continue 'main_loop;
@@ -2800,6 +2868,10 @@ Make sure seatd/logind is running and you're on an active VT."
                             info!("Last tab closed, exiting");
                             break 'main_loop;
                         }
+                    }
+                    // Mark all panes dirty so FBO is fully re-rendered with new active tab
+                    for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                        pane.terminal.mark_all_dirty();
                     }
                     needs_redraw = true;
                     continue 'main_loop;
@@ -3342,8 +3414,10 @@ Make sure seatd/logind is running and you're on an active VT."
                 }
             }
 
+            // After input events, tight-poll for a few iterations to catch
+            // PTY responses (keystroke echo) without sleeping 8ms
             if !key_events.is_empty() || !mouse_events.is_empty() {
-                needs_redraw = true;
+                tight_poll_remaining = 2;
             }
         }
 
@@ -3532,6 +3606,7 @@ Make sure seatd/logind is running and you're on an active VT."
                 while toast_notifications.len() > MAX_TOAST_NOTIFICATIONS {
                     toast_notifications.remove(0);
                 }
+                needs_redraw = true;
             }
             last_notification_seq = current_seq;
         }
@@ -3578,13 +3653,19 @@ Make sure seatd/logind is running and you're on an active VT."
 
         // Sleep briefly if no changes (reduce CPU load)
         if !needs_redraw {
-            std::thread::sleep(Duration::from_millis(8));
             if drm::shutdown_requested() {
                 info!("Shutdown signal received, exiting...");
                 break;
             }
+            if tight_poll_remaining > 0 {
+                // After recent input: skip sleep, loop immediately to catch PTY echo
+                tight_poll_remaining -= 1;
+            } else {
+                std::thread::sleep(Duration::from_millis(8));
+            }
             continue;
         }
+        tight_poll_remaining = 0;
         needs_redraw = false;
 
         // Drop the active terminal borrow before rendering
@@ -3817,14 +3898,13 @@ Make sure seatd/logind is running and you're on an active VT."
         }
 
         // Overlays that require full FBO clear (dynamic content that doesn't use dirty tracking)
+        // Note: toast notifications and progress bar are drawn outside FBO, so excluded here
         let has_overlays = term.selection.is_some()
             || search_mode
             || term.copy_mode.is_some()
             || !preedit.is_empty()  // IME preedit changes without dirty tracking
             || candidate_state.is_some() // IME candidate window
-            || notification_panel_open
-            || !toast_notifications.is_empty()
-            || term.active_progress.is_some();
+            || notification_panel_open;
 
         // Force full clear when overlays just disappeared (FBO still has old overlay content)
         let overlays_just_cleared = prev_had_overlays && !has_overlays;
@@ -4055,6 +4135,25 @@ Make sure seatd/logind is running and you're on an active VT."
             };
             let current_match_idx = term.current_search_match();
 
+            // Build shaped glyph map for this row (ligature detection)
+            // Only shape when not scrolling back (scroll_offset == 0)
+            let shaped_glyphs = if term.scroll_offset == 0 {
+                if let (Some(ref mut shaper), Some(ref fontdue_font)) =
+                    (&mut text_shaper, &font_main_fontdue)
+                {
+                    Some(shaper.shape_line(grid, row, fontdue_font))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            // Build HashMap for O(1) lookup by column
+            let shaped_map: Option<std::collections::HashMap<usize, &font::shaper::ShapedGlyph>> =
+                shaped_glyphs.as_ref().map(|glyphs| {
+                    glyphs.iter().map(|(col, sg)| (*col, sg)).collect()
+                });
+
             // Underline rendering: batch consecutive cells with same style into runs
             let mut col = 0;
             while col < grid.cols() {
@@ -4257,11 +4356,17 @@ Make sure seatd/logind is running and you're on an active VT."
 
             // Character-based rendering (FreeType LCD mode) + overline/strikethrough
             // Combined into single loop to reduce grid traversals
+            // Track ligature continuation columns to skip glyph drawing
+            let mut ligature_skip_until: usize = 0;
             for col in 0..grid.cols() {
                 let cell = term.display_cell(row, col);
                 if cell.width == 0 {
                     continue;
                 }
+
+                // Skip glyph drawing for ligature continuation cells
+                // (decorations like overline/strikethrough are still drawn below)
+                let in_ligature_continuation = col < ligature_skip_until;
 
                 let x = margin_x + col as f32 * cell_w;
                 let y = margin_y + row as f32 * cell_h;
@@ -4320,7 +4425,7 @@ Make sure seatd/logind is running and you're on an active VT."
                         continue;
                     }
                 }
-                if !grapheme.is_empty() && grapheme != " " {
+                if !grapheme.is_empty() && grapheme != " " && !in_ligature_continuation {
                     // Handle INVERSE attribute (SGR 7): swap fg and bg (is_inverse defined above)
                     let mut fg = if is_inverse {
                         effective_bg(&cell.bg)
@@ -4974,10 +5079,6 @@ Make sure seatd/logind is running and you're on an active VT."
                             (false, false) => font::lcd_atlas::FontStyle::Regular,
                         };
 
-                        // Ensure all glyphs in grapheme are in atlas
-                        for ch in grapheme.chars() {
-                            glyph_atlas.ensure_glyph_styled(ch, font_style);
-                        }
                         let baseline_y = (y + ascent).round();
 
                         // Calculate LCD mix factor for colored backgrounds
@@ -5012,28 +5113,89 @@ Make sure seatd/logind is running and you're on an active VT."
                         lcd_mix = lcd_mix.max(bright * 0.75);
                         lcd_mix = lcd_mix.clamp(0.0, 0.85);
 
-                        // Render full grapheme with style (bold/italic/regular)
+                        // Try ligature rendering via shaped glyph map
+                        let mut ligature_drawn = false;
                         if matches!(font_style, font::lcd_atlas::FontStyle::Regular) {
-                            text_renderer.push_text_with_bg_lcd(
-                                grapheme,
-                                x,
-                                baseline_y,
-                                fg,
-                                bg,
-                                lcd_mix,
-                                &glyph_atlas,
-                            );
-                        } else {
-                            text_renderer.push_text_with_bg_lcd_styled(
-                                grapheme,
-                                x,
-                                baseline_y,
-                                fg,
-                                bg,
-                                lcd_mix,
-                                font_style,
-                                &glyph_atlas,
-                            );
+                            if let Some(ref smap) = shaped_map {
+                                if let Some(sg) = smap.get(&col) {
+                                    if sg.key.glyph_id > 0 && sg.cell_span > 1 {
+                                        // Ligature glyph: spans multiple cells
+                                        let lcd_key = font::lcd_atlas::GlyphKey {
+                                            font_idx: sg.key.font_idx,
+                                            glyph_id: sg.key.glyph_id,
+                                        };
+                                        glyph_atlas.ensure_glyph_id(lcd_key);
+                                        if let Some(glyph_info) =
+                                            glyph_atlas.get_glyph_by_id(&lcd_key)
+                                        {
+                                            text_renderer.push_glyph_with_info(
+                                                glyph_info,
+                                                x,
+                                                baseline_y,
+                                                fg,
+                                                bg,
+                                                lcd_mix,
+                                            );
+                                            // Mark next cells as ligature continuation
+                                            ligature_skip_until = col + sg.cell_span as usize;
+                                            ligature_drawn = true;
+                                        }
+                                    } else if sg.key.glyph_id > 0 && sg.cell_span == 1 {
+                                        // Contextual alternate: single cell, different glyph
+                                        let lcd_key = font::lcd_atlas::GlyphKey {
+                                            font_idx: sg.key.font_idx,
+                                            glyph_id: sg.key.glyph_id,
+                                        };
+                                        glyph_atlas.ensure_glyph_id(lcd_key);
+                                        if let Some(glyph_info) =
+                                            glyph_atlas.get_glyph_by_id(&lcd_key)
+                                        {
+                                            text_renderer.push_glyph_with_info(
+                                                glyph_info,
+                                                x,
+                                                baseline_y,
+                                                fg,
+                                                bg,
+                                                lcd_mix,
+                                            );
+                                            ligature_drawn = true;
+                                        }
+                                    }
+                                    // glyph_id == 0: fall through to char-based rendering
+                                }
+                            }
+                        }
+
+                        // Fallback: character-based rendering
+                        if !ligature_drawn {
+                            // Ensure all glyphs in grapheme are in atlas
+                            for ch in grapheme.chars() {
+                                glyph_atlas.ensure_glyph_styled(ch, font_style);
+                            }
+
+                            // Render full grapheme with style (bold/italic/regular)
+                            if matches!(font_style, font::lcd_atlas::FontStyle::Regular) {
+                                text_renderer.push_text_with_bg_lcd(
+                                    grapheme,
+                                    x,
+                                    baseline_y,
+                                    fg,
+                                    bg,
+                                    lcd_mix,
+                                    &glyph_atlas,
+                                );
+                            } else {
+                                text_renderer.push_text_with_bg_lcd_styled(
+                                    grapheme,
+                                    x,
+                                    baseline_y,
+                                    fg,
+                                    bg,
+                                    lcd_mix,
+                                    font_style,
+                                    &glyph_atlas,
+                                );
+                            }
                         }
                     }
                 }
@@ -5562,158 +5724,8 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
 
-        // === Toast notifications + progress bar (bottom-right corner) ===
-        if !toast_notifications.is_empty() || term.active_progress.is_some() {
-            let toast_w = (screen_w as f32 * 0.30).min(400.0);
-            let toast_h = cell_h * 2.0 + 12.0;
-            let progress_bar_h = 24.0_f32; // Standalone progress bar height
-            let toast_x = screen_w as f32 - toast_w - 12.0;
-            let mut toast_y = screen_h as f32 - 12.0;
-            if search_mode {
-                toast_y -= cell_h + 8.0; // Avoid search bar overlap
-            }
-
-            // Pass 1: Backgrounds
-            ui_renderer.begin();
-
-            // Standalone progress bar (below toasts)
-            if term.active_progress.is_some() {
-                toast_y -= progress_bar_h + 6.0;
-                ui_renderer.push_shadow_rounded_rect(
-                    toast_x,
-                    toast_y,
-                    toast_w,
-                    progress_bar_h,
-                    6.0,
-                    [0.12, 0.14, 0.20, 0.92],
-                    3.0,
-                    [0.0, 0.0, 0.0, 0.4],
-                );
-            }
-
-            for toast in toast_notifications.iter().rev().take(3) {
-                toast_y -= toast_h + 6.0;
-                let bg = match toast.urgency {
-                    2 => [0.5, 0.1, 0.1, 0.92],
-                    _ => [0.15, 0.18, 0.25, 0.92],
-                };
-                ui_renderer.push_shadow_rounded_rect(
-                    toast_x,
-                    toast_y,
-                    toast_w,
-                    toast_h,
-                    6.0,
-                    bg,
-                    3.0,
-                    [0.0, 0.0, 0.0, 0.4],
-                );
-            }
-            ui_renderer.flush(gl, screen_w, screen_h);
-
-            // Pass 2: Text
-            text_renderer.begin();
-            let toast_bg = [0.15, 0.18, 0.25]; // Normal toast bg for LCD compositing
-
-            // Reset toast_y for text pass
-            toast_y = screen_h as f32 - 12.0;
-            if search_mode {
-                toast_y -= cell_h + 8.0;
-            }
-
-            // Standalone progress bar rendering
-            if let Some(ref progress) = term.active_progress {
-                toast_y -= progress_bar_h + 6.0;
-                let progress_bg = [0.12, 0.14, 0.20];
-                let bar_color = match progress.state {
-                    1 => [0.2, 0.7, 0.3, 1.0], // Normal (green)
-                    2 => [0.8, 0.2, 0.2, 1.0], // Error (red)
-                    3 => [0.4, 0.4, 0.8, 1.0], // Indeterminate (blue)
-                    4 => [0.8, 0.6, 0.1, 1.0], // Warning (yellow)
-                    _ => [0.4, 0.4, 0.8, 1.0],
-                };
-                // Percent label (left side)
-                let pct_text = format!("{}%", progress.percent);
-                for ch in pct_text.chars() {
-                    glyph_atlas.ensure_glyph(ch);
-                }
-                let label_x = toast_x + 8.0;
-                let label_baseline = (toast_y + (progress_bar_h + ascent) / 2.0).round();
-                text_renderer.push_text_with_bg(
-                    &pct_text,
-                    label_x,
-                    label_baseline,
-                    [0.8, 0.8, 0.85, 1.0],
-                    progress_bg,
-                    &glyph_atlas,
-                );
-                // Bar (right of label) — reserve 5 chars width for "100%"
-                let label_w = cell_w * 5.0;
-                let bar_x = toast_x + 8.0 + label_w;
-                let bar_w = toast_w - 16.0 - label_w;
-                let bar_y = toast_y + (progress_bar_h - 6.0) / 2.0;
-                let fill_w = bar_w * (progress.percent as f32 / 100.0);
-                // Background bar track
-                text_renderer.push_rect(
-                    bar_x,
-                    bar_y,
-                    bar_w,
-                    6.0,
-                    [0.25, 0.25, 0.3, 0.6],
-                    &glyph_atlas,
-                );
-                // Filled portion
-                text_renderer.push_rect(bar_x, bar_y, fill_w, 6.0, bar_color, &glyph_atlas);
-            }
-
-            // Max characters that fit in toast width (with padding)
-            let toast_text_w = toast_w - 16.0; // 8px padding each side
-            let max_chars = (toast_text_w / cell_w).floor() as usize;
-
-            for toast in toast_notifications.iter().rev().take(3) {
-                toast_y -= toast_h + 6.0;
-                let item_bg = match toast.urgency {
-                    2 => [0.5, 0.1, 0.1],
-                    _ => toast_bg,
-                };
-                let title_color = [1.0, 1.0, 1.0, 1.0];
-                let body_color = [0.7, 0.7, 0.75, 1.0];
-
-                // Title (truncate to fit toast width)
-                let title_x = toast_x + 8.0;
-                let title_baseline = (toast_y + 4.0 + ascent).round();
-                let title = truncate_to_width(&toast.title, max_chars);
-                for ch in title.chars() {
-                    glyph_atlas.ensure_glyph(ch);
-                }
-                text_renderer.push_text_with_bg(
-                    &title,
-                    title_x,
-                    title_baseline,
-                    title_color,
-                    item_bg,
-                    &glyph_atlas,
-                );
-
-                // Body (second line, truncate to fit)
-                if !toast.body.is_empty() {
-                    let body_baseline = (toast_y + 4.0 + cell_h + ascent).round();
-                    let body = truncate_to_width(&toast.body, max_chars);
-                    for ch in body.chars() {
-                        glyph_atlas.ensure_glyph(ch);
-                    }
-                    text_renderer.push_text_with_bg(
-                        &body,
-                        title_x,
-                        body_baseline,
-                        body_color,
-                        item_bg,
-                        &glyph_atlas,
-                    );
-                }
-            }
-            glyph_atlas.upload_if_dirty(gl);
-            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
-        }
+        // === Toast notifications + progress bar ===
+        // (Moved to after FBO blit + tab bar, so toasts draw on top of everything)
 
         // === Notification panel (right side) ===
         if notification_panel_open {
@@ -5848,7 +5860,9 @@ Make sure seatd/logind is running and you're on an active VT."
                     / cell_w) as usize;
                 let title = truncate_to_width(&notif.title, max_title_cols);
                 for ch in title.chars() {
-                    glyph_atlas.ensure_glyph(ch);
+                    if !font::emoji::is_emoji(ch) {
+                        glyph_atlas.ensure_glyph(ch);
+                    }
                 }
                 let title_color = match notif.urgency {
                     2 => [1.0, 0.4, 0.4, 1.0],
@@ -5869,7 +5883,9 @@ Make sure seatd/logind is running and you're on an active VT."
                     let max_body_cols = ((panel_w - padding * 3.0) / cell_w) as usize;
                     let body = truncate_to_width(&notif.body, max_body_cols);
                     for ch in body.chars() {
-                        glyph_atlas.ensure_glyph(ch);
+                        if !font::emoji::is_emoji(ch) {
+                            glyph_atlas.ensure_glyph(ch);
+                        }
                     }
                     text_renderer.push_text_with_bg(
                         &body,
@@ -6010,6 +6026,223 @@ Make sure seatd/logind is running and you're on an active VT."
             }
             glyph_atlas.upload_if_dirty(gl);
             text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+        }
+
+        // === Toast notifications + progress bar (drawn outside FBO, on top of tab bar) ===
+        if !toast_notifications.is_empty() || term.active_progress.is_some() {
+            let toast_w = (screen_w as f32 * 0.30).min(400.0);
+            let toast_h = cell_h * 2.0 + 12.0;
+            let progress_bar_h = 24.0_f32;
+            let toast_x = screen_w as f32 - toast_w - 12.0;
+            let mut toast_y = screen_h as f32 - 12.0;
+            // Avoid overlap with tab bar
+            if !tab_bar_info.is_empty() {
+                toast_y -= cell_h + 6.0;
+            }
+            if search_mode {
+                toast_y -= cell_h + 8.0;
+            }
+
+            // Pass 1: Backgrounds
+            ui_renderer.begin();
+
+            if term.active_progress.is_some() {
+                toast_y -= progress_bar_h + 6.0;
+                ui_renderer.push_shadow_rounded_rect(
+                    toast_x,
+                    toast_y,
+                    toast_w,
+                    progress_bar_h,
+                    6.0,
+                    [0.12, 0.14, 0.20, 0.92],
+                    3.0,
+                    [0.0, 0.0, 0.0, 0.4],
+                );
+            }
+
+            for toast in toast_notifications.iter().rev().take(3) {
+                toast_y -= toast_h + 6.0;
+                let bg = match toast.urgency {
+                    2 => [0.5, 0.1, 0.1, 0.92],
+                    _ => [0.15, 0.18, 0.25, 0.92],
+                };
+                ui_renderer.push_shadow_rounded_rect(
+                    toast_x,
+                    toast_y,
+                    toast_w,
+                    toast_h,
+                    6.0,
+                    bg,
+                    3.0,
+                    [0.0, 0.0, 0.0, 0.4],
+                );
+            }
+            ui_renderer.flush(gl, screen_w, screen_h);
+
+            // Pass 2: Text
+            text_renderer.begin();
+            let toast_bg = [0.15, 0.18, 0.25];
+
+            // Reset toast_y for text pass
+            toast_y = screen_h as f32 - 12.0;
+            if !tab_bar_info.is_empty() {
+                toast_y -= cell_h + 6.0;
+            }
+            if search_mode {
+                toast_y -= cell_h + 8.0;
+            }
+
+            // Standalone progress bar rendering
+            if let Some(ref progress) = term.active_progress {
+                toast_y -= progress_bar_h + 6.0;
+                let progress_bg = [0.12, 0.14, 0.20];
+                let bar_color = match progress.state {
+                    1 => [0.2, 0.7, 0.3, 1.0],
+                    2 => [0.8, 0.2, 0.2, 1.0],
+                    3 => [0.4, 0.4, 0.8, 1.0],
+                    4 => [0.8, 0.6, 0.1, 1.0],
+                    _ => [0.4, 0.4, 0.8, 1.0],
+                };
+                let pct_text = format!("{}%", progress.percent);
+                for ch in pct_text.chars() {
+                    glyph_atlas.ensure_glyph(ch);
+                }
+                let label_x = toast_x + 8.0;
+                let label_baseline = (toast_y + (progress_bar_h + ascent) / 2.0).round();
+                text_renderer.push_text_with_bg(
+                    &pct_text,
+                    label_x,
+                    label_baseline,
+                    [0.8, 0.8, 0.85, 1.0],
+                    progress_bg,
+                    &glyph_atlas,
+                );
+                let label_w = cell_w * 5.0;
+                let bar_x = toast_x + 8.0 + label_w;
+                let bar_w = toast_w - 16.0 - label_w;
+                let bar_y = toast_y + (progress_bar_h - 6.0) / 2.0;
+                let fill_w = bar_w * (progress.percent as f32 / 100.0);
+                text_renderer.push_rect(
+                    bar_x,
+                    bar_y,
+                    bar_w,
+                    6.0,
+                    [0.25, 0.25, 0.3, 0.6],
+                    &glyph_atlas,
+                );
+                text_renderer.push_rect(bar_x, bar_y, fill_w, 6.0, bar_color, &glyph_atlas);
+            }
+
+            let toast_text_w = toast_w - 16.0;
+            let max_chars = (toast_text_w / cell_w).floor() as usize;
+
+            for toast in toast_notifications.iter().rev().take(3) {
+                toast_y -= toast_h + 6.0;
+                let item_bg = match toast.urgency {
+                    2 => [0.5, 0.1, 0.1],
+                    _ => toast_bg,
+                };
+                let title_color = [1.0, 1.0, 1.0, 1.0];
+                let body_color = [0.7, 0.7, 0.75, 1.0];
+
+                let title_x = toast_x + 8.0;
+                let title_baseline = (toast_y + 4.0 + ascent).round();
+                let title = truncate_to_width(&toast.title, max_chars);
+                for ch in title.chars() {
+                    if !font::emoji::is_emoji(ch) {
+                        glyph_atlas.ensure_glyph(ch);
+                    }
+                }
+                text_renderer.push_text_with_bg(
+                    &title,
+                    title_x,
+                    title_baseline,
+                    title_color,
+                    item_bg,
+                    &glyph_atlas,
+                );
+
+                if !toast.body.is_empty() {
+                    let body_baseline = (toast_y + 4.0 + cell_h + ascent).round();
+                    let body = truncate_to_width(&toast.body, max_chars);
+                    for ch in body.chars() {
+                        if !font::emoji::is_emoji(ch) {
+                            glyph_atlas.ensure_glyph(ch);
+                        }
+                    }
+                    text_renderer.push_text_with_bg(
+                        &body,
+                        title_x,
+                        body_baseline,
+                        body_color,
+                        item_bg,
+                        &glyph_atlas,
+                    );
+                }
+            }
+            glyph_atlas.upload_if_dirty(gl);
+            text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+
+            // Pass 3: Emoji overlay (render color emoji on top of tofu placeholders)
+            if emoji_atlas.is_available() {
+                emoji_renderer.begin();
+
+                // Reset toast_y for emoji pass
+                let mut emoji_toast_y = screen_h as f32 - 12.0;
+                if !tab_bar_info.is_empty() {
+                    emoji_toast_y -= cell_h + 6.0;
+                }
+                if search_mode {
+                    emoji_toast_y -= cell_h + 8.0;
+                }
+                if term.active_progress.is_some() {
+                    emoji_toast_y -= progress_bar_h + 6.0;
+                }
+
+                for toast in toast_notifications.iter().rev().take(3) {
+                    emoji_toast_y -= toast_h + 6.0;
+                    let title = truncate_to_width(&toast.title, max_chars);
+                    let title_y = emoji_toast_y + 4.0;
+
+                    // Scan title for emoji
+                    let mut cx = toast_x + 8.0;
+                    for ch in title.chars() {
+                        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                        if font::emoji::is_emoji(ch) {
+                            if let Some(info) = emoji_atlas.ensure_glyph(ch, cell_h as u32) {
+                                let emoji_size = cell_h;
+                                emoji_renderer.push_emoji(
+                                    cx, title_y, emoji_size, emoji_size,
+                                    info.uv_x, info.uv_y, info.uv_w, info.uv_h,
+                                );
+                            }
+                        }
+                        cx += cell_w * cw as f32;
+                    }
+
+                    // Scan body for emoji
+                    if !toast.body.is_empty() {
+                        let body = truncate_to_width(&toast.body, max_chars);
+                        let body_y = emoji_toast_y + 4.0 + cell_h;
+                        let mut cx = toast_x + 8.0;
+                        for ch in body.chars() {
+                            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                            if font::emoji::is_emoji(ch) {
+                                if let Some(info) = emoji_atlas.ensure_glyph(ch, cell_h as u32) {
+                                    let emoji_size = cell_h;
+                                    emoji_renderer.push_emoji(
+                                        cx, body_y, emoji_size, emoji_size,
+                                        info.uv_x, info.uv_y, info.uv_w, info.uv_h,
+                                    );
+                                }
+                            }
+                            cx += cell_w * cw as f32;
+                        }
+                    }
+                }
+                emoji_atlas.upload_if_dirty(gl);
+                emoji_renderer.flush(gl, &emoji_atlas, screen_w, screen_h);
+            }
         }
 
         // Draw text cursor directly to screen (outside FBO cache)

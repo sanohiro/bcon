@@ -264,20 +264,62 @@ impl SplitTree {
         best.map(|(pid, _)| pid)
     }
 
-    /// Adjust the split ratio of the parent of `pane_id`.
+    /// Adjust the split ratio of the nearest ancestor with matching direction.
     /// `delta` is added to the ratio (positive = grow first child).
-    pub fn resize_ratio(&mut self, pane_id: PaneId, delta: f32) -> bool {
+    /// `target_dir` specifies which split direction to look for:
+    ///   - Horizontal for left/right resize
+    ///   - Vertical for up/down resize
+    pub fn resize_ratio(&mut self, pane_id: PaneId, delta: f32, target_dir: Direction) -> bool {
         let root = match self.root {
             Some(r) => r,
             None => return false,
         };
-        if let Some((parent_id, _)) = self.find_parent(root, pane_id) {
-            if let Some(Node::Split { ratio, .. }) = self.nodes[parent_id].as_mut() {
-                *ratio = (*ratio + delta).clamp(0.1, 0.9);
-                return true;
+        let mut path = Vec::new();
+        if !self.path_to_leaf(root, pane_id, &mut path) {
+            return false;
+        }
+        // Walk path from leaf towards root, find nearest split with matching direction
+        for &nid in path.iter().rev() {
+            if let Some(Node::Split { direction, .. }) = self.get(nid) {
+                if *direction == target_dir {
+                    if let Some(Node::Split { ratio, .. }) = self.nodes[nid].as_mut() {
+                        *ratio = (*ratio + delta).clamp(0.1, 0.9);
+                        return true;
+                    }
+                }
             }
         }
         false
+    }
+
+    /// Collect the path of node IDs from root to a leaf with the given PaneId.
+    fn path_to_leaf(&self, node_id: NodeId, pane_id: PaneId, path: &mut Vec<NodeId>) -> bool {
+        path.push(node_id);
+        match self.get(node_id) {
+            Some(Node::Leaf { pane_id: pid }) => {
+                if *pid == pane_id {
+                    return true;
+                }
+                path.pop();
+                false
+            }
+            Some(Node::Split { first, second, .. }) => {
+                let f = *first;
+                let s = *second;
+                if self.path_to_leaf(f, pane_id, path) {
+                    return true;
+                }
+                if self.path_to_leaf(s, pane_id, path) {
+                    return true;
+                }
+                path.pop();
+                false
+            }
+            None => {
+                path.pop();
+                false
+            }
+        }
     }
 
     /// Count total leaves
@@ -374,16 +416,48 @@ mod tests {
         let mut tree = SplitTree::new(PaneId(0));
         tree.split(PaneId(0), PaneId(1), Direction::Horizontal, 0.5);
 
-        assert!(tree.resize_ratio(PaneId(0), 0.1));
+        assert!(tree.resize_ratio(PaneId(0), 0.1, Direction::Horizontal));
         // Check ratio changed
         if let Some(Node::Split { ratio, .. }) = tree.get(tree.root.unwrap()) {
             assert!((ratio - 0.6).abs() < 0.001);
         }
 
         // Clamp test
-        assert!(tree.resize_ratio(PaneId(0), 1.0));
+        assert!(tree.resize_ratio(PaneId(0), 1.0, Direction::Horizontal));
         if let Some(Node::Split { ratio, .. }) = tree.get(tree.root.unwrap()) {
             assert!((ratio - 0.9).abs() < 0.001);
+        }
+
+        // Wrong direction: should not find a matching split
+        let mut tree2 = SplitTree::new(PaneId(0));
+        tree2.split(PaneId(0), PaneId(1), Direction::Horizontal, 0.5);
+        assert!(!tree2.resize_ratio(PaneId(0), 0.1, Direction::Vertical));
+    }
+
+    #[test]
+    fn test_resize_nested_finds_ancestor() {
+        // Left | Right, Right has Top / Bottom
+        let mut tree = SplitTree::new(PaneId(0));
+        tree.split(PaneId(0), PaneId(1), Direction::Horizontal, 0.5); // Left | Right
+        tree.split(PaneId(1), PaneId(2), Direction::Vertical, 0.5);   // Right: Top / Bottom
+
+        // From PaneId(1) (right-top), horizontal resize should adjust the outer H-split
+        let root = tree.root.unwrap();
+        let orig_ratio = if let Some(Node::Split { ratio, .. }) = tree.get(root) {
+            *ratio
+        } else {
+            panic!("root should be split");
+        };
+
+        assert!(tree.resize_ratio(PaneId(1), 0.1, Direction::Horizontal));
+        if let Some(Node::Split { ratio, .. }) = tree.get(root) {
+            assert!((ratio - (orig_ratio + 0.1)).abs() < 0.001);
+        }
+
+        // From PaneId(2) (right-bottom), horizontal resize should also adjust outer H-split
+        assert!(tree.resize_ratio(PaneId(2), -0.1, Direction::Horizontal));
+        if let Some(Node::Split { ratio, .. }) = tree.get(root) {
+            assert!((ratio - orig_ratio).abs() < 0.001);
         }
     }
 

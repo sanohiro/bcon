@@ -108,9 +108,9 @@ impl Tab {
         }
     }
 
-    /// Resize the active pane's split ratio
-    pub fn resize_active(&mut self, delta: f32, available: PaneRect) -> bool {
-        if self.tree.resize_ratio(self.active_pane, delta) {
+    /// Resize the active pane's split ratio in the given direction
+    pub fn resize_active(&mut self, delta: f32, direction: super::Direction, available: PaneRect) -> bool {
+        if self.tree.resize_ratio(self.active_pane, delta, direction) {
             self.relayout(available);
             true
         } else {
