@@ -32,13 +32,23 @@ Of course, you can still use external tools alongside bcon:
 
 **Enjoy your CLI life.**
 
+## Demo
+
+### Script & Basic Features
+
+https://github.com/user-attachments/assets/8576c907-1f7b-4582-8eb8-de04a853b604
+
+### Real-World Usage (yazi, btop, Claude Code, etc.)
+
+https://github.com/user-attachments/assets/083f80f6-17ec-4026-ab2f-52ba151631e5
+
 ## Features
 
 ### Rendering
 - **GPU Rendering**: OpenGL ES via DRM/KMS + EGL + GBM
 - **Sharp Text**: Pixel-aligned glyph rendering
 - **True Color**: Full 24-bit color support
-- **Ligatures**: Font ligature support (FiraCode, JetBrains Mono, etc.)
+- **Ligatures**: Font ligature support (requires a ligature font — see [Recommended Fonts](#recommended-fonts))
 - **Emoji**: Color emoji rendering (Noto Color Emoji)
 - **Powerline**: Pixel-perfect Powerline/Nerd Font glyphs
 - **HiDPI Scaling**: Configurable display scale (1.0x - 2.0x)
@@ -212,7 +222,7 @@ Config file locations:
 
 ```toml
 [font]
-main = "FiraCode"                   # Font family name (resolved via fontconfig)
+main = "JetBrains Mono"             # Ligature font recommended (see Recommended Fonts)
 cjk = "Noto Sans CJK JP"           # or full path: "/usr/share/fonts/.../X.ttf"
 emoji = "Noto Color Emoji"
 symbols = "Hack Nerd Font Mono"
@@ -270,6 +280,21 @@ symbols = "Hack Nerd Font Mono"    # by name (recommended)
 The `symbols` font is used as fallback for Powerline glyphs (U+E000-U+F8FF) and Nerd Font icons. If not specified, bcon auto-detects installed Nerd Fonts via fontconfig.
 
 Note: Powerline arrow glyphs (E0B0-E0B7) are drawn programmatically for pixel-perfect rendering regardless of font.
+
+### Recommended Fonts
+
+The default monospace font (DejaVu Sans Mono) does **not** support ligatures. To enable ligatures like `=>` `->` `!=` `===`, install a ligature-capable font:
+
+| Font | Ligatures | Install (Debian/Ubuntu) | Notes |
+|------|-----------|------------------------|-------|
+| **JetBrains Mono** | `=>` `->` `!=` `<=` | `sudo apt install fonts-jetbrains-mono` | Recommended for daily use — balanced readability |
+| **FiraCode** | `=>` `->` `!=` `===` `>=` `|>` ... | `sudo apt install fonts-firacode` | Most ligature variants — great for demos |
+| **Cascadia Code** | `=>` `->` `!=` `<=` | [GitHub releases](https://github.com/microsoft/cascadia-code/releases) | Microsoft's coding font |
+
+```toml
+[font]
+main = "JetBrains Mono"    # or "Fira Code"
+```
 
 ### Keybinds
 

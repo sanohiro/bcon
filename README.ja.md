@@ -28,13 +28,23 @@ bcon は**画面分割とタブを内蔵**しています — 基本的なマル
 
 **楽しい CLI ライフを。**
 
+## デモ
+
+### スクリプト & 基本機能
+
+https://github.com/user-attachments/assets/8576c907-1f7b-4582-8eb8-de04a853b604
+
+### 実用例 (yazi, btop, Claude Code など)
+
+https://github.com/user-attachments/assets/083f80f6-17ec-4026-ab2f-52ba151631e5
+
 ## 機能
 
 ### レンダリング
 - **GPU レンダリング**: DRM/KMS + EGL + GBM 経由の OpenGL ES
 - **シャープなテキスト**: ピクセルアライン済みグリフレンダリング
 - **True Color**: 24bit フルカラーサポート
-- **リガチャ**: フォントリガチャ対応 (FiraCode, JetBrains Mono など)
+- **リガチャ**: フォントリガチャ対応 (リガチャフォントが必要 — [推奨フォント](#推奨フォント)参照)
 - **絵文字**: カラー絵文字レンダリング (Noto Color Emoji)
 - **Powerline**: ピクセル精度の Powerline/Nerd Font グリフ
 - **LCD サブピクセル**: LCD モニター向け最適化
@@ -213,7 +223,7 @@ bcon --init-config=vim,jp    # ~/.config/bcon/config.toml に保存
 
 ```toml
 [font]
-main = "FiraCode"                   # フォント名 (fontconfig で自動解決)
+main = "JetBrains Mono"             # リガチャフォント推奨 (推奨フォント参照)
 cjk = "Noto Sans CJK JP"           # またはフルパス: "/usr/share/fonts/.../X.ttf"
 emoji = "Noto Color Emoji"
 symbols = "Hack Nerd Font Mono"
@@ -271,6 +281,21 @@ symbols = "Hack Nerd Font Mono"    # フォント名で指定 (推奨)
 `symbols` フォントは Powerline グリフ (U+E000-U+F8FF) や Nerd Font アイコンのフォールバックとして使用されます。指定しない場合、bcon は fontconfig 経由でインストール済みの Nerd Font を自動検出します。
 
 注: Powerline 矢印グリフ (E0B0-E0B7) はフォントに関係なくプログラムでピクセルパーフェクトに描画されます。
+
+### 推奨フォント
+
+デフォルトの等幅フォント (DejaVu Sans Mono) は**リガチャ非対応**です。`=>` `->` `!=` `===` などのリガチャを有効にするには、リガチャ対応フォントをインストールしてください:
+
+| フォント | リガチャ | インストール (Debian/Ubuntu) | 備考 |
+|---------|---------|---------------------------|------|
+| **JetBrains Mono** | `=>` `->` `!=` `<=` | `sudo apt install fonts-jetbrains-mono` | 普段使いにおすすめ — 可読性のバランスが良い |
+| **FiraCode** | `=>` `->` `!=` `===` `>=` `\|>` ... | `sudo apt install fonts-firacode` | リガチャの種類が最も多い — デモ映えする |
+| **Cascadia Code** | `=>` `->` `!=` `<=` | [GitHub releases](https://github.com/microsoft/cascadia-code/releases) | Microsoft 製コーディングフォント |
+
+```toml
+[font]
+main = "JetBrains Mono"    # または "Fira Code"
+```
 
 ### キーバインド
 

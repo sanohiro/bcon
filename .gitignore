@@ -26,5 +26,9 @@ config.toml
 # Work directory (test files)
 /work/
 
+# Demo assets (originals are large, only keep compressed versions)
+/demo/*.mp4
+!/demo/*_small.mp4
+
 # Claude Code
 /.claude/
