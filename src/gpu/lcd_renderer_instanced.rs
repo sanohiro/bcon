@@ -7,6 +7,7 @@ use anyhow::{anyhow, Result};
 use glow::HasContext;
 use log::info;
 
+use crate::constants::{LCD_DEFAULT_CONTRAST, LCD_DEFAULT_GAMMA};
 use crate::font::lcd_atlas::{GlyphInfo, LcdGlyphAtlas};
 use crate::gpu::shader;
 
@@ -243,10 +244,10 @@ impl LcdShaderInstanced {
     }
 }
 
+use super::MAX_TEXT_QUADS;
+
 /// Per-instance data: pos_size(4) + uv_pos_size(4) + fg(4) + bg(3) + lcd_disable(1) = 16 floats
 const INSTANCE_FLOATS: usize = 16;
-/// Maximum glyphs per batch (32K supports 4K displays)
-const MAX_GLYPHS: usize = 32768;
 
 /// LCD text renderer using GPU instancing
 pub struct LcdTextRendererInstanced {
@@ -277,7 +278,7 @@ impl LcdTextRendererInstanced {
                 .create_buffer()
                 .map_err(|e| anyhow!("Failed to create VBO: {}", e))?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            let vbo_size = MAX_GLYPHS * INSTANCE_FLOATS * 4;
+            let vbo_size = MAX_TEXT_QUADS * INSTANCE_FLOATS * 4;
             gl.buffer_data_size(glow::ARRAY_BUFFER, vbo_size as i32, glow::DYNAMIC_DRAW);
 
             let stride = (INSTANCE_FLOATS * 4) as i32;
@@ -315,13 +316,13 @@ impl LcdTextRendererInstanced {
                 shader,
                 vao,
                 vbo,
-                instances: Vec::with_capacity(MAX_GLYPHS * INSTANCE_FLOATS),
+                instances: Vec::with_capacity(MAX_TEXT_QUADS * INSTANCE_FLOATS),
                 glyph_count: 0,
                 default_bg: [0.0, 0.0, 0.0],
                 subpixel_bgr: false,
-                gamma: 1.15,
+                gamma: LCD_DEFAULT_GAMMA,
                 stem_darkening: 0.0,
-                contrast: 1.15,
+                contrast: LCD_DEFAULT_CONTRAST,
                 fringe_reduction: 0.1,
             })
         }
@@ -367,7 +368,7 @@ impl LcdTextRendererInstanced {
         lcd_disable: f32,
         atlas: &LcdGlyphAtlas,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
 
@@ -514,7 +515,7 @@ impl LcdTextRendererInstanced {
         bg: [f32; 3],
         lcd_disable: f32,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
         self.push_glyph_info(glyph, x, y, fg, bg, lcd_disable);
@@ -605,7 +606,7 @@ impl LcdTextRendererInstanced {
         lcd_disable: f32,
         _atlas: &LcdGlyphAtlas,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
         if glyph.width == 0 || glyph.height == 0 {
@@ -658,7 +659,7 @@ impl LcdTextRendererInstanced {
         bg: [f32; 3],
         atlas: &LcdGlyphAtlas,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
 

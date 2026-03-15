@@ -10,6 +10,8 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::constants::{LCD_DEFAULT_CONTRAST, LCD_DEFAULT_GAMMA};
+
 #[cfg(target_os = "linux")]
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 #[cfg(target_os = "linux")]
@@ -403,11 +405,11 @@ impl Default for FontConfig {
             lcd_filter: "default".to_string(), // Sharp (less blur than light)
             lcd_weights: None,
             lcd_subpixel: "rgb".to_string(),  // For common panels
-            lcd_gamma: 1.15,                  // Thinner/tighter look (iTerm2-like)
+            lcd_gamma: LCD_DEFAULT_GAMMA,      // Thinner/tighter look (iTerm2-like)
             lcd_stem_darkening: 0.0,          // Disabled (sharpness priority)
             lcd_subpixel_positioning: true,   // 1/3px phase rendering (highest quality)
             lcd_hinting: "light".to_string(), // Natural curves, thin (recommended)
-            lcd_contrast: 1.15,               // Contrast enhancement
+            lcd_contrast: LCD_DEFAULT_CONTRAST, // Contrast enhancement
             lcd_fringe_reduction: 0.1,        // Light fringe reduction
         }
     }

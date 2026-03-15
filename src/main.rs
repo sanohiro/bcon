@@ -72,10 +72,14 @@ fn has_user_session() -> bool {
 
 // Import constants from the dedicated module
 use constants::{
-    AA_WIDTH_OUTLINE, AA_WIDTH_SOLID, ALPHA_THRESHOLD, ALPHA_THRESHOLD_OUTLINE,
+    rgb, AA_WIDTH_OUTLINE, AA_WIDTH_SOLID, ALPHA_THRESHOLD, ALPHA_THRESHOLD_OUTLINE,
     BELL_FLASH_DURATION_MS, CURSOR_BLINK_INTERVAL_MS, DOUBLE_CLICK_THRESHOLD_MS,
     LINE_THICKNESS_SCALE, MAX_DISPLAY_SCALE, MAX_FONT_SIZE, MIN_DISPLAY_SCALE, MIN_FONT_SIZE,
-    OUTLINE_STROKE_HALF, XKB_MOD_ALT, XKB_MOD_CONTROL, XKB_MOD_SHIFT,
+    OUTLINE_STROKE_HALF, PROGRESS_DEFAULT, PROGRESS_ERROR, PROGRESS_SUCCESS, PROGRESS_WARNING,
+    UI_CANDIDATE_BG, UI_CANDIDATE_SEL, UI_COPY_MODE_BG, UI_CORNER_RADIUS, UI_DIVIDER_COLOR,
+    UI_HEADER_BG, UI_HIGHLIGHT_RADIUS, UI_PANEL_BG, UI_PROGRESS_BG, UI_SHADOW_COLOR,
+    UI_SHADOW_OFFSET, UI_TAB_ACTIVE_BG, UI_TAB_BAR_BG, UI_TAB_INDICATOR, UI_TOAST_BG,
+    UI_TOAST_ERROR_BG, XKB_MOD_ALT, XKB_MOD_CONTROL, XKB_MOD_SHIFT,
 };
 
 // ============================================================================
@@ -1957,6 +1961,15 @@ Make sure seatd/logind is running and you're on an active VT."
     let mut scroll_accum: f64 = 0.0;
     let mut mouse_button_held: Option<u8> = None;
 
+    // Hardware cursor (DRM cursor plane — zero-latency, display controller composited)
+    let hw_cursor = drm::HardwareCursor::new(&drm_device, display_config.crtc_handle);
+    if hw_cursor.is_some() {
+        info!("Using DRM hardware cursor");
+    } else {
+        warn!("Hardware cursor unavailable, falling back to software cursor");
+    }
+    let use_hw_cursor = hw_cursor.is_some();
+
     // Double/triple click detection
     let mut last_click_time = std::time::Instant::now();
     let mut click_count = 0u8;
@@ -2270,6 +2283,11 @@ Make sure seatd/logind is running and you're on an active VT."
                                 drm_master_held = true;
                                 drm_master_ever_held = true;
                                 needs_redraw = true;
+                                // Restore hardware cursor after VT switch
+                                if let Some(ref hc) = hw_cursor {
+                                    hc.show();
+                                    hc.move_to(mouse_x, mouse_y);
+                                }
                             }
                         }
                         // Acknowledge acquire.
@@ -3179,10 +3197,13 @@ Make sure seatd/logind is running and you're on an active VT."
                             continue;
                         }
                         input::MouseEvent::Move { x, y, .. } => {
-                            // Always update cursor position for rendering
                             mouse_x = *x;
                             mouse_y = *y;
-                            needs_redraw = true;
+                            if let Some(ref hc) = hw_cursor {
+                                hc.move_to(mouse_x, mouse_y);
+                            } else {
+                                needs_redraw = true;
+                            }
                             continue;
                         }
                         // Release events are consumed while panel is open
@@ -3345,6 +3366,12 @@ Make sure seatd/logind is running and you're on an active VT."
                         }
                         mouse_x = *x;
                         mouse_y = *y;
+                        // Hardware cursor: update position directly (no frame render needed)
+                        if let Some(ref hc) = hw_cursor {
+                            hc.move_to(mouse_x, mouse_y);
+                        } else {
+                            needs_redraw = true;
+                        }
                     }
                     input::MouseEvent::ButtonRelease { button, x, y } => {
                         // Account for terminal margin when converting to cell coordinates
@@ -3706,153 +3733,7 @@ Make sure seatd/logind is running and you're on an active VT."
             fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
         }
 
-        // Render INACTIVE panes only when FBO was cleared (otherwise cached)
-        if multi_pane && any_content_dirty {
-            let tab = tab_mgr.active_tab();
-            let active_pid = tab.active_pane;
-            for (&pane_id, pane) in &tab.panes {
-                if pane_id == active_pid {
-                    continue; // Active pane is rendered by the main rendering section
-                }
-                let term = &pane.terminal;
-                let grid = &term.grid;
-                let pane_x = pane.rect.x;
-                let pane_y = pane.rect.y;
-                let pane_cols = grid.cols();
-                let pane_rows = grid.rows();
-
-                // Per-pane colors
-                let pane_fg = if let Some((r, g, b)) = grid.colors.fg {
-                    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
-                } else {
-                    [config_fg.0, config_fg.1, config_fg.2, 1.0]
-                };
-                let pane_bg = [bg_color.0, bg_color.1, bg_color.2, 1.0];
-
-                text_renderer.begin();
-
-                // Background pass
-                for row in 0..pane_rows {
-                    let y = pane_y + row as f32 * cell_h;
-                    for col in 0..pane_cols {
-                        let cell = term.display_cell(row, col);
-                        let bg = if matches!(cell.bg, terminal::grid::Color::Default) {
-                            pane_bg
-                        } else {
-                            grid.color_to_rgba(&cell.bg, false)
-                        };
-                        if bg != pane_bg {
-                            let x = pane_x + col as f32 * cell_w;
-                            text_renderer.push_rect(x, y, cell_w, cell_h, bg, &glyph_atlas);
-                        }
-                    }
-                }
-
-                // Text pass (simplified: character-by-character, no shaping)
-                let pane_ascent = glyph_atlas.ascent;
-                for row in 0..pane_rows {
-                    let y = pane_y + row as f32 * cell_h;
-                    let baseline_y = (y + pane_ascent).round();
-                    for col in 0..pane_cols {
-                        let cell = term.display_cell(row, col);
-                        if cell.grapheme.is_empty() || cell.grapheme == " " || cell.width == 0 {
-                            continue;
-                        }
-                        let fg = if matches!(cell.fg, terminal::grid::Color::Default) {
-                            pane_fg
-                        } else {
-                            grid.color_to_rgba(&cell.fg, true)
-                        };
-                        let cell_bg = if matches!(cell.bg, terminal::grid::Color::Default) {
-                            pane_bg
-                        } else {
-                            grid.color_to_rgba(&cell.bg, false)
-                        };
-                        let x = pane_x + col as f32 * cell_w;
-                        for ch in cell.grapheme.chars() {
-                            text_renderer.push_char_with_bg(ch, x, baseline_y, fg, [cell_bg[0], cell_bg[1], cell_bg[2]], 0.0, &glyph_atlas);
-                        }
-                    }
-                }
-
-                text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
-
-                // Image pass (Sixel/Kitty) for inactive panes
-                let inactive_pane_num = pane_id.0;
-                log::debug!(
-                    "Inactive pane {:?}: {} image placements, {} dirty_image_ids",
-                    pane_id, grid.image_placements.len(), term.dirty_image_ids.len()
-                );
-                if !grid.image_placements.is_empty() {
-                    // Upload dirty textures
-                    for dirty_id in &term.dirty_image_ids {
-                        let key = gpu::image_key(inactive_pane_num, *dirty_id);
-                        if image_renderer.has_texture(key) {
-                            image_renderer.remove_texture(gl, key);
-                        }
-                    }
-                    image_renderer.begin();
-                    let mut draw_count = 0u32;
-                    for placement in &grid.image_placements {
-                        if let Some(image) = term.images.get(placement.id) {
-                            let key = gpu::image_key(inactive_pane_num, placement.id);
-                            if !image_renderer.has_texture(key) {
-                                log::debug!(
-                                    "  Uploading image id={} key=0x{:x} {}x{} for inactive pane {:?}",
-                                    placement.id, key, image.width, image.height, pane_id
-                                );
-                                image_renderer.upload_image(gl, key, image);
-                            }
-                            let scrollback_rows_shown = term.scroll_offset.min(pane_rows) as isize;
-                            let display_row = placement.row as isize + scrollback_rows_shown;
-                            if display_row + (placement.height_cells as isize) <= 0 {
-                                continue;
-                            }
-                            if display_row >= pane_rows as isize {
-                                continue;
-                            }
-                            let x = pane_x + placement.col as f32 * cell_w;
-                            let y = pane_y + display_row as f32 * cell_h;
-                            let draw_w = placement.width_cells as f32 * cell_w;
-                            let draw_h = placement.height_cells as f32 * cell_h;
-                            image_renderer.draw(key, x, y, draw_w, draw_h);
-                            draw_count += 1;
-                        } else {
-                            log::warn!(
-                                "  Image id={} not found in registry for inactive pane {:?}",
-                                placement.id, pane_id
-                            );
-                        }
-                    }
-                    if draw_count > 0 {
-                        log::debug!(
-                            "  Flushing {} image draws for inactive pane {:?}",
-                            draw_count, pane_id
-                        );
-                    }
-                    image_renderer.flush(gl, screen_w, screen_h);
-                }
-            }
-        }
-
-        // Clear dirty flags on inactive panes after rendering them
-        // (prevents any_content_dirty from being always true)
-        if multi_pane && any_content_dirty {
-            let tab = tab_mgr.active_tab_mut();
-            let active_pid = tab.active_pane;
-            let inactive_ids: Vec<pane::PaneId> = tab.panes.keys()
-                .filter(|&&pid| pid != active_pid)
-                .copied()
-                .collect();
-            for pid in inactive_ids {
-                if let Some(pane) = tab.panes.get_mut(&pid) {
-                    pane.terminal.dirty_image_ids.clear();
-                    pane.terminal.clear_dirty();
-                }
-            }
-        }
-
-        // === Active pane rendering (full pipeline with overlays) ===
+        // === Full rendering pipeline for all panes ===
         // Compute pane-aware margins and capture border/tab info before borrowing term
         let pane_dividers: Vec<pane::layout::Divider> = if multi_pane {
             let tab = tab_mgr.active_tab();
@@ -3882,29 +3763,26 @@ Make sure seatd/logind is running and you're on an active VT."
         } else {
             Vec::new()
         };
-        let (margin_x, margin_y) = if multi_pane {
-            let ap = tab_mgr.active_tab().active_pane();
-            (ap.rect.x, ap.rect.y)
-        } else {
-            (margin_x, margin_y)
-        };
-        // Re-borrow the active terminal (mutable for clear_dirty at end)
-        let term = tab_mgr.active_terminal_mut();
-
-        // If FBO was cleared in multi-pane mode, force full re-render of active pane
+        // If FBO was cleared in multi-pane mode, force full re-render of all panes
         // (FBO clear wiped cached content, so all rows must be redrawn)
         if multi_pane && any_content_dirty {
-            term.grid.mark_all_dirty();
+            let tab = tab_mgr.active_tab_mut();
+            for pane in tab.panes.values_mut() {
+                pane.terminal.grid.mark_all_dirty();
+            }
         }
 
         // Overlays that require full FBO clear (dynamic content that doesn't use dirty tracking)
         // Note: toast notifications and progress bar are drawn outside FBO, so excluded here
-        let has_overlays = term.selection.is_some()
-            || search_mode
-            || term.copy_mode.is_some()
-            || !preedit.is_empty()  // IME preedit changes without dirty tracking
-            || candidate_state.is_some() // IME candidate window
-            || notification_panel_open;
+        let has_overlays = {
+            let term = tab_mgr.active_terminal();
+            term.selection.is_some()
+                || search_mode
+                || term.copy_mode.is_some()
+                || !preedit.is_empty()  // IME preedit changes without dirty tracking
+                || candidate_state.is_some() // IME candidate window
+                || notification_panel_open
+        };
 
         // Force full clear when overlays just disappeared (FBO still has old overlay content)
         let overlays_just_cleared = prev_had_overlays && !has_overlays;
@@ -3913,6 +3791,7 @@ Make sure seatd/logind is running and you're on an active VT."
         // Clear FBO: full clear when overlays active/just-cleared or all dirty, otherwise only dirty rows
         // (Skip if already cleared for multi-pane)
         if !multi_pane {
+            let term = tab_mgr.active_terminal();
             if term.grid.is_all_dirty() || has_overlays || overlays_just_cleared {
                 fbo.clear(gl, bg_color.0, bg_color.1, bg_color.2, 1.0);
             } else if term.has_dirty_rows() {
@@ -3926,13 +3805,49 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
 
+        // Build pane render list: inactive panes first, active pane last
+        // (active pane is rendered last so its overlays are on top)
+        let pane_render_list: Vec<(pane::PaneId, bool)> = if multi_pane {
+            let tab = tab_mgr.active_tab();
+            let active_pid = tab.active_pane;
+            let mut list: Vec<_> = tab.panes.keys()
+                .map(|&pid| (pid, pid == active_pid))
+                .collect();
+            list.sort_by_key(|&(_, is_active)| is_active);
+            list
+        } else {
+            vec![(current_active_pid, true)]
+        };
+
+        let ascent = glyph_atlas.ascent;
+
+        // Preedit total columns (computed during active pane rendering)
+        let mut preedit_total_cols = 0usize;
+
+        for &(render_pane_id, is_active) in &pane_render_list {
+        // --- Per-pane variable setup ---
+        // Shadow margin_x/margin_y with per-pane values so existing code works unchanged
+        #[allow(unused_variables)]
+        let (margin_x, margin_y) = if multi_pane {
+            let tab = tab_mgr.active_tab();
+            let pane = &tab.panes[&render_pane_id];
+            (pane.rect.x, pane.rect.y)
+        } else {
+            (margin_x, margin_y)
+        };
+
+        let tab = tab_mgr.active_tab();
+        let pane = &tab.panes[&render_pane_id];
+        let term = &pane.terminal;
+        let grid = &term.grid;
+
         text_renderer.begin();
         text_renderer.set_bg_color(bg_color.0, bg_color.1, bg_color.2);
         emoji_renderer.begin();
         curly_renderer.begin();
 
         // Effective foreground color: OSC 10 > config > hardcoded white
-        let mut default_fg = if let Some((r, g, b)) = term.grid.colors.fg {
+        let mut default_fg = if let Some((r, g, b)) = grid.colors.fg {
             [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
         } else {
             [config_fg.0, config_fg.1, config_fg.2, 1.0]
@@ -3942,11 +3857,9 @@ Make sure seatd/logind is running and you're on an active VT."
         let mut default_bg = [bg_color.0, bg_color.1, bg_color.2, 1.0];
 
         // DECSCNM (Mode 5): Reverse video — swap default fg/bg for entire screen
-        if term.grid.reverse_video() {
+        if grid.reverse_video() {
             std::mem::swap(&mut default_fg, &mut default_bg);
         }
-
-        let grid = &term.grid;
 
         // Helper to get foreground color, using default_fg for Color::Default
         // Uses grid.color_to_rgba for custom ANSI palette support
@@ -3967,11 +3880,10 @@ Make sure seatd/logind is running and you're on an active VT."
                 grid.color_to_rgba(color, false)
             }
         };
-        let ascent = glyph_atlas.ascent;
 
         // Determine if partial rendering is possible (no overlays active)
         // When overlays are active, we must render all rows for correctness
-        let partial_render = !has_overlays && !overlays_just_cleared && !grid.is_all_dirty();
+        let partial_render = is_active && !has_overlays && !overlays_just_cleared && !grid.is_all_dirty();
 
         // === Pass 1: Background color (run-length encoded) ===
         // Selection is blended into background here (not in separate pass)
@@ -4088,7 +4000,8 @@ Make sure seatd/logind is running and you're on an active VT."
         }
 
         // === Pass 1.6: Search match highlight (one rect per match) ===
-        if search_mode {
+        // Only show search highlights on the active pane
+        if is_active && search_mode {
             let current_match = term.current_search_match();
             for row in 0..grid.rows() {
                 let matches = term.get_search_matches_for_display_row(row);
@@ -4126,14 +4039,13 @@ Make sure seatd/logind is running and you're on an active VT."
                 .as_ref()
                 .and_then(|s| s.cols_for_row(row, max_cols));
 
-            // Pre-compute search matches for this row (avoids per-cell function call)
-            // Returns slice reference - no allocation needed
-            let row_search_matches = if search_mode {
+            // Pre-compute search matches for this row (active pane only)
+            let row_search_matches = if is_active && search_mode {
                 term.get_search_matches_for_display_row(row)
             } else {
                 &[][..]
             };
-            let current_match_idx = term.current_search_match();
+            let current_match_idx = if is_active { term.current_search_match() } else { None };
 
             // Build shaped glyph map for this row (ligature detection)
             // Only shape when not scrolling back (scroll_offset == 0)
@@ -5235,10 +5147,8 @@ Make sure seatd/logind is running and you're on an active VT."
         curly_renderer.flush(gl, screen_w, screen_h);
 
         // === Preedit rendering (IME composition text) ===
-        // Hide preedit and cursor during scrollback display
-        let preedit_total_cols = if term.scroll_offset > 0 {
-            0
-        } else if !preedit.is_empty() {
+        // Only render preedit on the active pane
+        if is_active && !preedit.is_empty() && term.scroll_offset == 0 {
             let pe_col = grid.cursor_col;
             let pe_row = grid.cursor_row;
             let pe_y = margin_y + pe_row as f32 * cell_h;
@@ -5341,15 +5251,13 @@ Make sure seatd/logind is running and you're on an active VT."
                 }
             }
 
-            total_cols
-        } else {
-            0
-        };
+            preedit_total_cols = total_cols;
+        }
 
         // Text cursor and mouse cursor are drawn after FBO blit (outside FBO cache)
         // to avoid cursor trails in cached content
 
-        // === Pass 1: Text rendering (grid + preedit + cursor) ===
+        // === Flush text rendering (grid + preedit) ===
         glyph_atlas.upload_if_dirty(gl);
         text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
 
@@ -5360,23 +5268,24 @@ Make sure seatd/logind is running and you're on an active VT."
 
         // === Pass 3: Sixel/Kitty image rendering (after text+emoji, so images overlay text) ===
         // Re-upload textures for images whose data was updated (same ID, new content)
-        let active_pane_num = current_active_pid.0;
-        for dirty_id in term.dirty_image_ids.drain(..) {
-            let key = gpu::image_key(active_pane_num, dirty_id);
+        let pane_num = render_pane_id.0;
+        for dirty_id in &term.dirty_image_ids {
+            let key = gpu::image_key(pane_num, *dirty_id);
             if image_renderer.has_texture(key) {
                 image_renderer.remove_texture(gl, key);
             }
         }
         image_renderer.begin();
-        if !term.grid.image_placements.is_empty() {
+        if !grid.image_placements.is_empty() {
             trace!(
-                "Image render: {} placements",
-                term.grid.image_placements.len()
+                "Image render: {} placements for pane {:?}",
+                grid.image_placements.len(),
+                render_pane_id
             );
         }
-        for placement in &term.grid.image_placements {
+        for placement in &grid.image_placements {
             if let Some(image) = term.images.get(placement.id) {
-                let key = gpu::image_key(active_pane_num, placement.id);
+                let key = gpu::image_key(pane_num, placement.id);
                 // Upload texture if not already uploaded
                 if !image_renderer.has_texture(key) {
                     image_renderer.upload_image(gl, key, image);
@@ -5401,14 +5310,69 @@ Make sure seatd/logind is running and you're on an active VT."
         }
         image_renderer.flush(gl, screen_w, screen_h);
 
+        } // end of per-pane rendering loop
+
+        // Clear dirty flags for all panes after rendering
+        {
+            let tab = tab_mgr.active_tab_mut();
+            for pane in tab.panes.values_mut() {
+                pane.terminal.dirty_image_ids.clear();
+                pane.terminal.clear_dirty();
+            }
+        }
+
+        // Re-bind active terminal for post-rendering overlays (candidate window, copy mode, etc.)
+        let term = tab_mgr.active_terminal();
+        let grid = &term.grid;
+        // Restore active pane margin for overlay positioning
+        #[allow(unused_variables)]
+        let margin_x = if multi_pane {
+            tab_mgr.active_tab().active_pane().rect.x
+        } else {
+            margin_x
+        };
+        #[allow(unused_variables)]
+        let margin_y = if multi_pane {
+            tab_mgr.active_tab().active_pane().rect.y
+        } else {
+            margin_y
+        };
+
+        // Re-define effective color helpers for post-loop overlay rendering
+        let mut default_fg = if let Some((r, g, b)) = grid.colors.fg {
+            [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
+        } else {
+            [config_fg.0, config_fg.1, config_fg.2, 1.0]
+        };
+        let mut default_bg = [bg_color.0, bg_color.1, bg_color.2, 1.0];
+        if grid.reverse_video() {
+            std::mem::swap(&mut default_fg, &mut default_bg);
+        }
+        let effective_fg = |color: &terminal::grid::Color| -> [f32; 4] {
+            if matches!(color, terminal::grid::Color::Default) {
+                default_fg
+            } else {
+                grid.color_to_rgba(color, true)
+            }
+        };
+        let effective_bg = |color: &terminal::grid::Color| -> [f32; 4] {
+            if matches!(color, terminal::grid::Color::Default) {
+                default_bg
+            } else {
+                grid.color_to_rgba(color, false)
+            }
+        };
+        let selection_color = [config_selection.0, config_selection.1, config_selection.2];
+        let selection_alpha = 0.35_f32;
+
         // === Candidate window rendering (3 passes: UI background -> candidate text) ===
         if let Some(ref cands) = candidate_state {
             if !cands.candidates.is_empty() {
                 // Layout constants
                 let padding = 8.0_f32;
                 let item_gap = 4.0_f32;
-                let corner_radius = 6.0_f32;
-                let highlight_radius = 4.0_f32;
+                let corner_radius = UI_CORNER_RADIUS;
+                let highlight_radius = UI_HIGHLIGHT_RADIUS;
 
                 // Calculate candidate text width (use unwrap_or(0) for control chars)
                 let mut max_label_w = 0.0_f32;
@@ -5462,9 +5426,9 @@ Make sure seatd/logind is running and you're on an active VT."
                     win_w,
                     win_h,
                     corner_radius,
-                    [0.15, 0.15, 0.18, 0.95], // Window background
-                    3.0,                      // Shadow offset
-                    [0.0, 0.0, 0.0, 0.4],     // Shadow color
+                    UI_CANDIDATE_BG,
+                    UI_SHADOW_OFFSET,
+                    UI_SHADOW_COLOR,
                 );
 
                 // Selection highlight
@@ -5478,7 +5442,7 @@ Make sure seatd/logind is running and you're on an active VT."
                         win_w - padding,
                         cell_h,
                         highlight_radius,
-                        [0.3, 0.45, 0.7, 0.9], // Selection highlight color
+                        UI_CANDIDATE_SEL,
                     );
                 }
 
@@ -5488,8 +5452,8 @@ Make sure seatd/logind is running and you're on an active VT."
                 text_renderer.begin();
 
                 // Background colors for LCD subpixel compositing
-                let win_bg = [0.15, 0.15, 0.18]; // Window background (matches ui_renderer)
-                let sel_bg = [0.3, 0.45, 0.7]; // Selection highlight background
+                let win_bg = rgb(UI_CANDIDATE_BG);
+                let sel_bg = rgb(UI_CANDIDATE_SEL);
 
                 for (i, (label, text)) in cands.candidates.iter().enumerate() {
                     let is_selected = i as i32 == cands.selected_index;
@@ -5591,7 +5555,7 @@ Make sure seatd/logind is running and you're on an active VT."
                 screen_w as f32,
                 bar_h,
                 0.0,
-                [0.2, 0.15, 0.1, 0.95], // Warm color
+                UI_COPY_MODE_BG,
             );
             ui_renderer.flush(gl, screen_w, screen_h);
 
@@ -5610,7 +5574,7 @@ Make sure seatd/logind is running and you're on an active VT."
             };
 
             // Background color for LCD compositing (matches ui_renderer bar)
-            let bar_bg = [0.2, 0.15, 0.1];
+            let bar_bg = rgb(UI_COPY_MODE_BG);
 
             for ch in status.chars() {
                 glyph_atlas.ensure_glyph(ch);
@@ -5643,7 +5607,7 @@ Make sure seatd/logind is running and you're on an active VT."
                     screen_w as f32,
                     bar_h,
                     0.0,
-                    [0.15, 0.15, 0.2, 0.95],
+                    UI_HEADER_BG,
                 );
                 ui_renderer.flush(gl, screen_w, screen_h);
 
@@ -5651,7 +5615,7 @@ Make sure seatd/logind is running and you're on an active VT."
                 text_renderer.begin();
 
                 // Background color for LCD compositing (matches ui_renderer bar)
-                let search_bar_bg = [0.15, 0.15, 0.2];
+                let search_bar_bg = rgb(UI_HEADER_BG);
 
                 // Prompt "/"
                 let prompt = "/";
@@ -5746,7 +5710,7 @@ Make sure seatd/logind is running and you're on an active VT."
                 panel_w,
                 panel_h,
                 0.0,
-                [0.1, 0.1, 0.14, 0.95],
+                UI_PANEL_BG,
             );
             // Header
             ui_renderer.push_rounded_rect(
@@ -5755,7 +5719,7 @@ Make sure seatd/logind is running and you're on an active VT."
                 panel_w,
                 header_h,
                 0.0,
-                [0.15, 0.15, 0.2, 0.98],
+                UI_HEADER_BG,
             );
             // Footer
             ui_renderer.push_rounded_rect(
@@ -5764,14 +5728,14 @@ Make sure seatd/logind is running and you're on an active VT."
                 panel_w,
                 footer_h,
                 0.0,
-                [0.15, 0.15, 0.2, 0.98],
+                UI_HEADER_BG,
             );
             ui_renderer.flush(gl, screen_w, screen_h);
 
             // Text
             text_renderer.begin();
-            let panel_bg = [0.1, 0.1, 0.14];
-            let header_bg = [0.15, 0.15, 0.2];
+            let panel_bg = rgb(UI_PANEL_BG);
+            let header_bg = rgb(UI_HEADER_BG);
 
             // Header: "Notifications"
             let header_text = "Notifications";
@@ -5945,7 +5909,7 @@ Make sure seatd/logind is running and you're on an active VT."
         // Only draw divider lines between panes (not around outer edges)
         if !pane_dividers.is_empty() && any_content_dirty {
             text_renderer.begin();
-            let divider_color = [0.3, 0.3, 0.35, 1.0];
+            let divider_color = UI_DIVIDER_COLOR;
             for div in &pane_dividers {
                 text_renderer.push_rect(div.x, div.y, div.width, div.height, divider_color, &glyph_atlas);
             }
@@ -5961,9 +5925,9 @@ Make sure seatd/logind is running and you're on an active VT."
         if !tab_bar_info.is_empty() {
             let tab_bar_h = cell_h + 6.0; // slightly taller than one cell
             let tab_bar_y = screen_h as f32 - tab_bar_h;
-            let tab_bar_bg = [0.12, 0.12, 0.15, 1.0];
+            let tab_bar_bg = UI_TAB_BAR_BG;
             let indicator_h = 2.0_f32;
-            let tab_radius = 6.0_f32;
+            let tab_radius = UI_CORNER_RADIUS;
             let tab_pad_v = 4.0_f32; // vertical padding for rounded tab background
 
             // Pass 1: Full-width opaque background strip
@@ -5979,7 +5943,7 @@ Make sure seatd/logind is running and you're on an active VT."
                     ui_renderer.push_rounded_rect(
                         *x_start + 2.0, tab_bar_y + tab_pad_v,
                         tab_w - 4.0, tab_bar_h - tab_pad_v,
-                        tab_radius, [0.2, 0.3, 0.5, 1.0],
+                        tab_radius, UI_TAB_ACTIVE_BG,
                     );
                 }
             }
@@ -5993,7 +5957,7 @@ Make sure seatd/logind is running and you're on an active VT."
                     text_renderer.push_rect(
                         *x_start + 2.0, tab_bar_y + tab_bar_h - indicator_h,
                         tab_w - 4.0, indicator_h,
-                        [0.4, 0.6, 1.0, 1.0], &glyph_atlas,
+                        UI_TAB_INDICATOR, &glyph_atlas,
                     );
                 }
             }
@@ -6008,9 +5972,9 @@ Make sure seatd/logind is running and you're on an active VT."
                     [0.6, 0.6, 0.6, 1.0]
                 };
                 let char_bg = if *is_active {
-                    [0.2, 0.3, 0.5]
+                    rgb(UI_TAB_ACTIVE_BG)
                 } else {
-                    [tab_bar_bg[0], tab_bar_bg[1], tab_bar_bg[2]]
+                    rgb(tab_bar_bg)
                 };
                 let pad = cell_w;
                 let max_chars = ((tab_w - pad * 2.0) / cell_w).floor().max(0.0) as usize;
@@ -6053,35 +6017,35 @@ Make sure seatd/logind is running and you're on an active VT."
                     toast_y,
                     toast_w,
                     progress_bar_h,
-                    6.0,
-                    [0.12, 0.14, 0.20, 0.92],
-                    3.0,
-                    [0.0, 0.0, 0.0, 0.4],
+                    UI_CORNER_RADIUS,
+                    UI_PROGRESS_BG,
+                    UI_SHADOW_OFFSET,
+                    UI_SHADOW_COLOR,
                 );
             }
 
             for toast in toast_notifications.iter().rev().take(3) {
                 toast_y -= toast_h + 6.0;
                 let bg = match toast.urgency {
-                    2 => [0.5, 0.1, 0.1, 0.92],
-                    _ => [0.15, 0.18, 0.25, 0.92],
+                    2 => UI_TOAST_ERROR_BG,
+                    _ => UI_TOAST_BG,
                 };
                 ui_renderer.push_shadow_rounded_rect(
                     toast_x,
                     toast_y,
                     toast_w,
                     toast_h,
-                    6.0,
+                    UI_CORNER_RADIUS,
                     bg,
-                    3.0,
-                    [0.0, 0.0, 0.0, 0.4],
+                    UI_SHADOW_OFFSET,
+                    UI_SHADOW_COLOR,
                 );
             }
             ui_renderer.flush(gl, screen_w, screen_h);
 
             // Pass 2: Text
             text_renderer.begin();
-            let toast_bg = [0.15, 0.18, 0.25];
+            let toast_bg = rgb(UI_TOAST_BG);
 
             // Reset toast_y for text pass
             toast_y = screen_h as f32 - 12.0;
@@ -6095,13 +6059,13 @@ Make sure seatd/logind is running and you're on an active VT."
             // Standalone progress bar rendering
             if let Some(ref progress) = term.active_progress {
                 toast_y -= progress_bar_h + 6.0;
-                let progress_bg = [0.12, 0.14, 0.20];
+                let progress_bg = rgb(UI_PROGRESS_BG);
                 let bar_color = match progress.state {
-                    1 => [0.2, 0.7, 0.3, 1.0],
-                    2 => [0.8, 0.2, 0.2, 1.0],
-                    3 => [0.4, 0.4, 0.8, 1.0],
-                    4 => [0.8, 0.6, 0.1, 1.0],
-                    _ => [0.4, 0.4, 0.8, 1.0],
+                    1 => PROGRESS_SUCCESS,
+                    2 => PROGRESS_ERROR,
+                    3 => PROGRESS_DEFAULT,
+                    4 => PROGRESS_WARNING,
+                    _ => PROGRESS_DEFAULT,
                 };
                 let pct_text = format!("{}%", progress.percent);
                 for ch in pct_text.chars() {
@@ -6139,7 +6103,7 @@ Make sure seatd/logind is running and you're on an active VT."
             for toast in toast_notifications.iter().rev().take(3) {
                 toast_y -= toast_h + 6.0;
                 let item_bg = match toast.urgency {
-                    2 => [0.5, 0.1, 0.1],
+                    2 => rgb(UI_TOAST_ERROR_BG),
                     _ => toast_bg,
                 };
                 let title_color = [1.0, 1.0, 1.0, 1.0];
@@ -6486,16 +6450,14 @@ Make sure seatd/logind is running and you're on an active VT."
             text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
         }
 
-        // Draw mouse cursor directly to screen (outside FBO cache)
-        {
+        // Draw software mouse cursor (only when hardware cursor is unavailable)
+        if !use_hw_cursor {
             let cursor_size = 8.0_f32;
             let mx = mouse_x as f32;
             let my = mouse_y as f32;
             text_renderer.begin();
-            // Crosshair style with outline for visibility on any background
             let outline_color = [0.0, 0.0, 0.0, 0.9];
             let fill_color = [1.0, 1.0, 1.0, 0.9];
-            // Black outline (1px larger on each side)
             text_renderer.push_rect(
                 mx - cursor_size / 2.0 - 1.0,
                 my - 2.0,
@@ -6512,7 +6474,6 @@ Make sure seatd/logind is running and you're on an active VT."
                 outline_color,
                 &glyph_atlas,
             );
-            // White fill
             text_renderer.push_rect(
                 mx - cursor_size / 2.0,
                 my - 1.0,
@@ -6592,8 +6553,7 @@ Make sure seatd/logind is running and you're on an active VT."
             prev_bo = Some(new_bo);
             prev_fb = Some(new_fb);
 
-            // Clear dirty flags after successful render
-            term.clear_dirty();
+            // Dirty flags already cleared after rendering loop (all panes)
         }
     }
 

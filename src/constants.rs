@@ -138,3 +138,95 @@ pub const fn is_braille(cp: u32) -> bool {
 pub const fn is_transition_char(cp: u32) -> bool {
     is_powerline(cp) || is_block_element(cp)
 }
+
+// ============================================================================
+// LCD Subpixel Rendering Defaults
+// ============================================================================
+
+/// Default LCD gamma (thinner/tighter appearance, iTerm2-like)
+pub const LCD_DEFAULT_GAMMA: f32 = 1.15;
+
+/// Default LCD contrast enhancement
+pub const LCD_DEFAULT_CONTRAST: f32 = 1.15;
+
+// ============================================================================
+// UI Layout Constants
+// ============================================================================
+
+/// Shadow offset for drop shadows (IME window, progress, toast)
+pub const UI_SHADOW_OFFSET: f32 = 3.0;
+
+/// Corner radius for UI panels (IME window, tabs, toast, progress)
+pub const UI_CORNER_RADIUS: f32 = 6.0;
+
+/// Corner radius for selection highlights
+pub const UI_HIGHLIGHT_RADIUS: f32 = 4.0;
+
+// ============================================================================
+// UI Color Palette (RGBA)
+// ============================================================================
+
+/// Drop shadow color
+pub const UI_SHADOW_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.4];
+
+/// Panel body background (notification panel)
+pub const UI_PANEL_BG: [f32; 4] = [0.1, 0.1, 0.14, 0.95];
+
+/// Header/footer background (search bar, notification header/footer)
+pub const UI_HEADER_BG: [f32; 4] = [0.15, 0.15, 0.2, 0.98];
+
+/// Pane divider line color
+pub const UI_DIVIDER_COLOR: [f32; 4] = [0.3, 0.3, 0.35, 1.0];
+
+/// Tab bar background
+pub const UI_TAB_BAR_BG: [f32; 4] = [0.12, 0.12, 0.15, 1.0];
+
+/// Active tab background
+pub const UI_TAB_ACTIVE_BG: [f32; 4] = [0.2, 0.3, 0.5, 1.0];
+
+/// Active tab indicator line
+pub const UI_TAB_INDICATOR: [f32; 4] = [0.4, 0.6, 1.0, 1.0];
+
+/// Toast notification background
+pub const UI_TOAST_BG: [f32; 4] = [0.15, 0.18, 0.25, 0.92];
+
+/// Error/critical toast background
+pub const UI_TOAST_ERROR_BG: [f32; 4] = [0.5, 0.1, 0.1, 0.92];
+
+/// Progress bar background
+pub const UI_PROGRESS_BG: [f32; 4] = [0.12, 0.14, 0.20, 0.92];
+
+/// Copy mode status bar background
+pub const UI_COPY_MODE_BG: [f32; 4] = [0.2, 0.15, 0.1, 0.95];
+
+/// IME candidate window background
+pub const UI_CANDIDATE_BG: [f32; 4] = [0.15, 0.15, 0.18, 0.95];
+
+/// IME candidate selection highlight
+pub const UI_CANDIDATE_SEL: [f32; 4] = [0.3, 0.45, 0.7, 0.9];
+
+// ============================================================================
+// Progress State Colors
+// ============================================================================
+
+/// Progress bar: success (green)
+pub const PROGRESS_SUCCESS: [f32; 4] = [0.2, 0.7, 0.3, 1.0];
+
+/// Progress bar: error (red)
+pub const PROGRESS_ERROR: [f32; 4] = [0.8, 0.2, 0.2, 1.0];
+
+/// Progress bar: default/info (blue)
+pub const PROGRESS_DEFAULT: [f32; 4] = [0.4, 0.4, 0.8, 1.0];
+
+/// Progress bar: warning (yellow)
+pub const PROGRESS_WARNING: [f32; 4] = [0.8, 0.6, 0.1, 1.0];
+
+// ============================================================================
+// Color Helper Functions
+// ============================================================================
+
+/// Extract RGB from RGBA color (for LCD subpixel compositing)
+#[inline]
+pub const fn rgb(rgba: [f32; 4]) -> [f32; 3] {
+    [rgba[0], rgba[1], rgba[2]]
+}

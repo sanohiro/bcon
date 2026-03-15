@@ -26,6 +26,19 @@ pub use lcd_renderer_instanced::LcdTextRendererInstanced;
 pub use renderer::CurlyRenderer;
 pub use ui_renderer::UiRenderer;
 
+// ============================================================================
+// Common GPU Constants
+// ============================================================================
+
+/// Vertices per quad (two triangles sharing two vertices)
+pub const VERTICES_PER_QUAD: usize = 4;
+
+/// Indices per quad (two triangles = 6 indices)
+pub const INDICES_PER_QUAD: usize = 6;
+
+/// Maximum quads for text renderers (supports 4K: ~240x135 cells)
+pub const MAX_TEXT_QUADS: usize = 32768;
+
 /// Cast a slice of any type to a byte slice (for OpenGL buffer uploads).
 pub fn bytemuck_cast_slice<T>(slice: &[T]) -> &[u8] {
     unsafe {

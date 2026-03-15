@@ -1,5 +1,6 @@
 //! DRM/KMS display management
 
+pub mod cursor;
 pub mod device;
 pub mod display;
 pub mod hdr;
@@ -12,6 +13,7 @@ pub use device::{
     get_active_vt, get_target_vt, is_vt_active, setup_panic_hook, setup_signal_handlers,
     shutdown_requested, wait_for_vt, Device, VtEvent, VtSwitcher,
 };
+pub use cursor::HardwareCursor;
 pub use display::{set_crtc, DisplayConfig, DrmFramebuffer, SavedCrtc};
 // HDR types exported for public API (future use)
 #[allow(unused_imports)]

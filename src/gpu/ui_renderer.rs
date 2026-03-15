@@ -9,12 +9,10 @@ use log::info;
 
 use crate::gpu::shader::{self, UiShader};
 
+use super::{INDICES_PER_QUAD, VERTICES_PER_QUAD};
+
 /// Per-vertex data: pos(2) + center(2) + half_size(2) + radius(1) + color(4) = 11 floats
 const VERTEX_FLOATS: usize = 11;
-/// 1 rectangle = 4 vertices
-const VERTICES_PER_RECT: usize = 4;
-/// 1 rectangle = 6 indices (2 triangles)
-const INDICES_PER_RECT: usize = 6;
 /// Maximum rectangles per batch
 const MAX_RECTS: usize = 256;
 
@@ -47,7 +45,7 @@ impl UiRenderer {
                 .create_buffer()
                 .map_err(|e| anyhow!("Failed to create UI VBO: {}", e))?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            let vbo_size = MAX_RECTS * VERTICES_PER_RECT * VERTEX_FLOATS * 4;
+            let vbo_size = MAX_RECTS * VERTICES_PER_QUAD * VERTEX_FLOATS * 4;
             gl.buffer_data_size(glow::ARRAY_BUFFER, vbo_size as i32, glow::DYNAMIC_DRAW);
 
             // EBO (index buffer)
@@ -57,7 +55,7 @@ impl UiRenderer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
 
             // Pre-generate index data
-            let mut indices: Vec<u16> = Vec::with_capacity(MAX_RECTS * INDICES_PER_RECT);
+            let mut indices: Vec<u16> = Vec::with_capacity(MAX_RECTS * INDICES_PER_QUAD);
             for i in 0..MAX_RECTS as u16 {
                 let base = i * 4;
                 indices.push(base);
@@ -102,7 +100,7 @@ impl UiRenderer {
                 vao,
                 vbo,
                 ebo,
-                vertices: Vec::with_capacity(MAX_RECTS * VERTICES_PER_RECT * VERTEX_FLOATS),
+                vertices: Vec::with_capacity(MAX_RECTS * VERTICES_PER_QUAD * VERTEX_FLOATS),
                 rect_count: 0,
             })
         }
@@ -202,7 +200,7 @@ impl UiRenderer {
             // Draw
             gl.draw_elements(
                 glow::TRIANGLES,
-                (self.rect_count * INDICES_PER_RECT) as i32,
+                (self.rect_count * INDICES_PER_QUAD) as i32,
                 glow::UNSIGNED_SHORT,
                 0,
             );

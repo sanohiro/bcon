@@ -64,14 +64,12 @@ void main() {
 }
 "#;
 
+use super::{INDICES_PER_QUAD, VERTICES_PER_QUAD};
+
 /// Vertex data: position(2) + UV(2) = 4 floats
 const VERTEX_FLOATS: usize = 4;
-/// 1 character = 4 vertices
-const VERTICES_PER_GLYPH: usize = 4;
-/// 1 character = 6 indices (2 triangles)
-const INDICES_PER_GLYPH: usize = 6;
-/// Maximum characters per batch
-const MAX_GLYPHS: usize = 1024;
+/// Maximum emoji per batch
+const MAX_EMOJI: usize = 1024;
 
 /// Emoji shader
 struct EmojiShader {
@@ -154,7 +152,7 @@ impl EmojiRenderer {
                 .create_buffer()
                 .map_err(|e| anyhow!("Failed to create VBO (emoji): {}", e))?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            let vbo_size = MAX_GLYPHS * VERTICES_PER_GLYPH * VERTEX_FLOATS * 4;
+            let vbo_size = MAX_EMOJI * VERTICES_PER_QUAD * VERTEX_FLOATS * 4;
             gl.buffer_data_size(glow::ARRAY_BUFFER, vbo_size as i32, glow::DYNAMIC_DRAW);
 
             // EBO
@@ -164,8 +162,8 @@ impl EmojiRenderer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
 
             // Pre-generate index data
-            let mut indices: Vec<u16> = Vec::with_capacity(MAX_GLYPHS * INDICES_PER_GLYPH);
-            for i in 0..MAX_GLYPHS as u16 {
+            let mut indices: Vec<u16> = Vec::with_capacity(MAX_EMOJI * INDICES_PER_QUAD);
+            for i in 0..MAX_EMOJI as u16 {
                 let base = i * 4;
                 indices.push(base);
                 indices.push(base + 1);
@@ -197,7 +195,7 @@ impl EmojiRenderer {
                 vao,
                 vbo,
                 ebo,
-                vertices: Vec::with_capacity(MAX_GLYPHS * VERTICES_PER_GLYPH * VERTEX_FLOATS),
+                vertices: Vec::with_capacity(MAX_EMOJI * VERTICES_PER_QUAD * VERTEX_FLOATS),
                 glyph_count: 0,
             })
         }
@@ -221,7 +219,7 @@ impl EmojiRenderer {
         uv_w: f32,
         uv_h: f32,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_EMOJI {
             return;
         }
 
@@ -291,7 +289,7 @@ impl EmojiRenderer {
             gl.buffer_sub_data_u8_slice(glow::ARRAY_BUFFER, 0, vertex_bytes);
 
             // Draw
-            let index_count = (self.glyph_count * INDICES_PER_GLYPH) as i32;
+            let index_count = (self.glyph_count * INDICES_PER_QUAD) as i32;
             gl.draw_elements(glow::TRIANGLES, index_count, glow::UNSIGNED_SHORT, 0);
 
             gl.bind_vertex_array(None);

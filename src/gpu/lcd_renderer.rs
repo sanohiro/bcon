@@ -11,6 +11,7 @@ use anyhow::{anyhow, Result};
 use glow::HasContext;
 use log::info;
 
+use crate::constants::{LCD_DEFAULT_CONTRAST, LCD_DEFAULT_GAMMA};
 use crate::font::lcd_atlas::{GlyphInfo, LcdGlyphAtlas};
 use crate::gpu::shader;
 
@@ -245,15 +246,10 @@ impl LcdShader {
     }
 }
 
+use super::{INDICES_PER_QUAD, MAX_TEXT_QUADS, VERTICES_PER_QUAD};
+
 /// Per-vertex data: position(2) + UV(2) + FG color(4) + BG color(3) = 11 floats
 const VERTEX_FLOATS: usize = 11;
-/// 1 character = 4 vertices
-const VERTICES_PER_GLYPH: usize = 4;
-/// 1 character = 6 indices (2 triangles)
-const INDICES_PER_GLYPH: usize = 6;
-/// Maximum characters per batch
-/// Maximum glyphs per batch (32K supports 4K displays: ~240x135 cells)
-const MAX_GLYPHS: usize = 32768;
 
 /// LCD text renderer
 pub struct LcdTextRenderer {
@@ -291,7 +287,7 @@ impl LcdTextRenderer {
                 .create_buffer()
                 .map_err(|e| anyhow!("Failed to create VBO: {}", e))?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            let vbo_size = MAX_GLYPHS * VERTICES_PER_GLYPH * VERTEX_FLOATS * 4;
+            let vbo_size = MAX_TEXT_QUADS * VERTICES_PER_QUAD * VERTEX_FLOATS * 4;
             gl.buffer_data_size(glow::ARRAY_BUFFER, vbo_size as i32, glow::DYNAMIC_DRAW);
 
             let ebo = gl
@@ -299,8 +295,8 @@ impl LcdTextRenderer {
                 .map_err(|e| anyhow!("Failed to create EBO: {}", e))?;
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
 
-            let mut indices: Vec<u16> = Vec::with_capacity(MAX_GLYPHS * INDICES_PER_GLYPH);
-            for i in 0..MAX_GLYPHS as u16 {
+            let mut indices: Vec<u16> = Vec::with_capacity(MAX_TEXT_QUADS * INDICES_PER_QUAD);
+            for i in 0..MAX_TEXT_QUADS as u16 {
                 let base = i * 4;
                 indices.push(base);
                 indices.push(base + 1);
@@ -341,13 +337,13 @@ impl LcdTextRenderer {
                 vao,
                 vbo,
                 ebo,
-                vertices: Vec::with_capacity(MAX_GLYPHS * VERTICES_PER_GLYPH * VERTEX_FLOATS),
+                vertices: Vec::with_capacity(MAX_TEXT_QUADS * VERTICES_PER_QUAD * VERTEX_FLOATS),
                 glyph_count: 0,
                 default_bg: [0.0, 0.0, 0.0],
                 subpixel_bgr: false,
-                gamma: 1.15,           // Default: thinner/tighter appearance
-                stem_darkening: 0.0,   // Default: disabled (prioritize sharpness)
-                contrast: 1.15,        // Default: contrast boost
+                gamma: LCD_DEFAULT_GAMMA,
+                stem_darkening: 0.0,
+                contrast: LCD_DEFAULT_CONTRAST,
                 fringe_reduction: 0.1, // Default: light fringe reduction
             })
         }
@@ -403,7 +399,7 @@ impl LcdTextRenderer {
         bg: [f32; 3],
         atlas: &LcdGlyphAtlas,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
 
@@ -510,7 +506,7 @@ impl LcdTextRenderer {
         bg: [f32; 3],
         atlas: &LcdGlyphAtlas,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
 
@@ -573,7 +569,7 @@ impl LcdTextRenderer {
 
             gl.draw_elements(
                 glow::TRIANGLES,
-                (self.glyph_count * INDICES_PER_GLYPH) as i32,
+                (self.glyph_count * INDICES_PER_QUAD) as i32,
                 glow::UNSIGNED_SHORT,
                 0,
             );

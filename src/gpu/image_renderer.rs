@@ -44,12 +44,10 @@ void main() {
 }
 "#;
 
+use super::{INDICES_PER_QUAD, VERTICES_PER_QUAD};
+
 /// Per-vertex data: position(2) + UV(2) = 4 floats
 const VERTEX_FLOATS: usize = 4;
-/// 1 image = 4 vertices
-const VERTICES_PER_IMAGE: usize = 4;
-/// 1 image = 6 indices (2 triangles)
-const INDICES_PER_IMAGE: usize = 6;
 /// Maximum images per batch
 const MAX_IMAGES: usize = 64;
 /// Maximum cached textures (LRU eviction when exceeded)
@@ -161,7 +159,7 @@ impl ImageRenderer {
                 .create_buffer()
                 .map_err(|e| anyhow!("Failed to create VBO (image): {}", e))?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            let vbo_size = MAX_IMAGES * VERTICES_PER_IMAGE * VERTEX_FLOATS * 4;
+            let vbo_size = MAX_IMAGES * VERTICES_PER_QUAD * VERTEX_FLOATS * 4;
             gl.buffer_data_size(glow::ARRAY_BUFFER, vbo_size as i32, glow::DYNAMIC_DRAW);
 
             // EBO
@@ -171,7 +169,7 @@ impl ImageRenderer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
 
             // Pre-generate index data
-            let mut indices: Vec<u16> = Vec::with_capacity(MAX_IMAGES * INDICES_PER_IMAGE);
+            let mut indices: Vec<u16> = Vec::with_capacity(MAX_IMAGES * INDICES_PER_QUAD);
             for i in 0..MAX_IMAGES as u16 {
                 let base = i * 4;
                 indices.push(base);

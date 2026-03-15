@@ -12,14 +12,10 @@ use log::info;
 use crate::font::atlas::{GlyphAtlas, GlyphKey};
 use crate::gpu::shader::{self, TextShader};
 
+use super::{INDICES_PER_QUAD, MAX_TEXT_QUADS, VERTICES_PER_QUAD};
+
 /// Per-vertex data: position(2) + UV(2) + color(4) = 8 floats
 const VERTEX_FLOATS: usize = 8;
-/// 1 character = 4 vertices
-const VERTICES_PER_GLYPH: usize = 4;
-/// 1 character = 6 indices (2 triangles)
-const INDICES_PER_GLYPH: usize = 6;
-/// Maximum characters per batch (32K supports 4K displays)
-const MAX_GLYPHS: usize = 32768;
 
 /// Text renderer
 pub struct TextRenderer {
@@ -50,7 +46,7 @@ impl TextRenderer {
                 .create_buffer()
                 .map_err(|e| anyhow!("Failed to create VBO: {}", e))?;
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            let vbo_size = MAX_GLYPHS * VERTICES_PER_GLYPH * VERTEX_FLOATS * 4;
+            let vbo_size = MAX_TEXT_QUADS * VERTICES_PER_QUAD * VERTEX_FLOATS * 4;
             gl.buffer_data_size(glow::ARRAY_BUFFER, vbo_size as i32, glow::DYNAMIC_DRAW);
 
             // EBO (index buffer)
@@ -60,8 +56,8 @@ impl TextRenderer {
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
 
             // Pre-generate index data
-            let mut indices: Vec<u16> = Vec::with_capacity(MAX_GLYPHS * INDICES_PER_GLYPH);
-            for i in 0..MAX_GLYPHS as u16 {
+            let mut indices: Vec<u16> = Vec::with_capacity(MAX_TEXT_QUADS * INDICES_PER_QUAD);
+            for i in 0..MAX_TEXT_QUADS as u16 {
                 let base = i * 4;
                 // top-left -> top-right -> bottom-right, top-left -> bottom-right -> bottom-left
                 indices.push(base);
@@ -98,7 +94,7 @@ impl TextRenderer {
                 vao,
                 vbo,
                 ebo,
-                vertices: Vec::with_capacity(MAX_GLYPHS * VERTICES_PER_GLYPH * VERTEX_FLOATS),
+                vertices: Vec::with_capacity(MAX_TEXT_QUADS * VERTICES_PER_QUAD * VERTEX_FLOATS),
                 glyph_count: 0,
             })
         }
@@ -122,7 +118,7 @@ impl TextRenderer {
         let mut cursor_x = x;
 
         for ch in text.chars() {
-            if self.glyph_count >= MAX_GLYPHS {
+            if self.glyph_count >= MAX_TEXT_QUADS {
                 break;
             }
 
@@ -180,7 +176,7 @@ impl TextRenderer {
     /// * `color` - Text color [r, g, b, a] (0.0-1.0)
     /// * `atlas` - Glyph atlas
     pub fn push_char(&mut self, ch: char, x: f32, y: f32, color: [f32; 4], atlas: &GlyphAtlas) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
 
@@ -242,7 +238,7 @@ impl TextRenderer {
         cell_width: f32,
         atlas: &GlyphAtlas,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
 
@@ -297,7 +293,7 @@ impl TextRenderer {
         color: [f32; 4],
         atlas: &GlyphAtlas,
     ) {
-        if self.glyph_count >= MAX_GLYPHS {
+        if self.glyph_count >= MAX_TEXT_QUADS {
             return;
         }
 
@@ -351,7 +347,7 @@ impl TextRenderer {
             // Draw
             gl.draw_elements(
                 glow::TRIANGLES,
-                (self.glyph_count * INDICES_PER_GLYPH) as i32,
+                (self.glyph_count * INDICES_PER_QUAD) as i32,
                 glow::UNSIGNED_SHORT,
                 0,
             );
