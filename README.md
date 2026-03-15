@@ -12,6 +12,12 @@ GPU-accelerated terminal emulator for Linux console (TTY) — no X11/Wayland req
 
 Think of it as "Ghostty for the Linux console" — focusing on what matters: crisp text, smooth scrolling, true color, and responsive input.
 
+| | Real TTY | GPU accel | Kitty graphics | IME | Split panes |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **bcon** | Yes | Yes | Yes | Yes | Built-in |
+| kitty / alacritty / ghostty | No (needs X11/Wayland) | Yes | Varies | Desktop IME | Varies |
+| tmux / screen | Yes | No | Passthrough issues | N/A | Yes |
+
 ## Why bcon?
 
 AI coding tools (Claude Code, Codex, Gemini CLI) have transformed development workflows. We spend less time in VSCode and more time in the terminal.
