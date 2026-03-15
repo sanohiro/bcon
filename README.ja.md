@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/8576c907-1f7b-4582-8eb8-de04a853b604
 
 ### 実用例 (yazi, btop, Claude Code など)
 
-https://github.com/user-attachments/assets/083f80f6-17ec-4026-ab2f-52ba151631e5
+https://github.com/user-attachments/assets/ebff498c-25b7-4662-8750-8d6e35661963
 
 ## 機能
 
