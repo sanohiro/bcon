@@ -5,11 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-03-15
+
+### Added
+- Documentation site: `docs/` with installation, configuration, keybinds guides (EN/JA)
+- CI workflow: `cargo build` on push/PR with Rust cache
+- LICENSE file, social preview image
+- Release badge and CI badge on README
+
+### Changed
+- README slimmed down (~150 lines), detailed docs moved to `docs/`
+- OpenGL ES requirement corrected to 3.0+ (matches actual shader version)
+
 ## [0.6.1] - 2026-03-09
 
 ### Fixed
 - Nerd Font auto-detection now scans `/usr/local/share/fonts/` (system-wide install path)
 - README: Nerd Font install instructions now use `/usr/local/share/fonts/` for systemd compatibility
+
+## [0.6.0] - 2026-03-08
+
+### Added
+- Font ligature support (FiraCode, JetBrains Mono, etc.)
+- Split panes with binary tree layout (horizontal/vertical)
+- Multiple tabs with tab bar
+- Pane navigation, resize, zoom
+- Mouse click to switch pane focus
+- Dead pane auto-close
+
+### Improved
+- Input responsiveness
+
+## [0.5.1] - 2026-03-01
+
+### Fixed
+- Allow Kitty graphics remote transfer (`t=f`/`t=t`/`t=s`) by default
+
+## [0.5.0] - 2026-02-28
+
+### Added
+- Security hardening
+- Performance improvements
+- Code quality improvements
+
+## [0.4.0] - 2026-02-24
+
+### Added
+- Notification system: OSC 9 (iTerm2) and OSC 99 (Kitty) protocols
+- Toast overlay with progress bar
+- Notification panel (Ctrl+Shift+N) and mute toggle (Ctrl+Shift+M)
+- Control sequence improvements
+
+## [0.3.0] - 2026-02-18
+
+### Added
+- Font name resolution via fontconfig
+- Mouse protocol improvements (SGR-Pixels)
+- Rendering quality improvements
+- IME preedit display fix
+- Headless IME auto-setup (fcitx5 via D-Bus)
 
 ## [0.2.17] - 2026-02-14
 

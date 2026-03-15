@@ -48,7 +48,7 @@ Think "Ghostty for the console" - bringing modern terminal features (True Color,
 │  VT Parser      │ ANSI/DEC escape sequences, Sixel     │
 │  Text Shaping   │ rustybuzz (HarfBuzz compatible)      │
 │  Font Rendering │ fontdue (Pure Rust FreeType)         │
-│  GPU Backend    │ OpenGL ES via EGL + GBM              │
+│  GPU Backend    │ OpenGL ES 3.0 via EGL + GBM           │
 │  Display        │ DRM/KMS direct                        │
 │  Input          │ evdev + xkbcommon                     │
 │  IME            │ fcitx5 via D-Bus (zbus)              │
