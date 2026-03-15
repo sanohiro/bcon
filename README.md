@@ -27,12 +27,6 @@ Look around — the only thing running on your X11/Wayland session might be a te
 
 bcon includes **built-in split panes and tabs** — no need for tmux or screen for basic multiplexing. This is important because terminal multiplexers often break Kitty graphics protocol passthrough, defeating bcon's image rendering capabilities.
 
-Of course, you can still use external tools alongside bcon:
-
-- **Sessions**: tmux, screen (for persistent sessions / SSH)
-- **Files**: yazi, ranger
-- **Editors**: Emacs, Neovim, Helix
-
 **Enjoy your CLI life.**
 
 | | Real TTY | GPU accel | Kitty graphics | IME | Split panes |
