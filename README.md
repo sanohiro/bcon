@@ -32,6 +32,8 @@ Of course, you can still use external tools alongside bcon:
 
 **Enjoy your CLI life.**
 
+![bcon — Claude Code, yazi with image preview, and vim running in split panes on Linux TTY](https://github.com/user-attachments/assets/e78fc6fd-932a-432d-9288-707ce008b889)
+
 ## Demo
 
 ### Script & Basic Features

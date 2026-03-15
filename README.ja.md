@@ -28,6 +28,8 @@ bcon は**画面分割とタブを内蔵**しています — 基本的なマル
 
 **楽しい CLI ライフを。**
 
+![bcon — Linux TTY 上で Claude Code、yazi（画像プレビュー付き）、vim を分割ペインで表示](https://github.com/user-attachments/assets/e78fc6fd-932a-432d-9288-707ce008b889)
+
 ## デモ
 
 ### スクリプト & 基本機能
