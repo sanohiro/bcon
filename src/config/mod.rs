@@ -687,7 +687,7 @@ impl KeybindConfig {
     pub fn emacs_preset() -> Self {
         let mut pane = Self::default_pane_keybinds();
         // Default close_pane (ctrl+shift+w) conflicts with Emacs copy
-        pane.close_pane = vec!["ctrl+shift+x".to_string()];
+        pane.close_pane = vec!["alt+shift+w".to_string()];
         Self {
             copy: vec!["ctrl+shift+w".to_string()],
             paste: vec!["ctrl+shift+y".to_string()],

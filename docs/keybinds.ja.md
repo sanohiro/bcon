@@ -20,7 +20,7 @@
 | 通知ミュート | `Ctrl+Shift+M` | 同左 | `Alt+Shift+M` | トースト通知のミュート切替 |
 | 右に分割 | `Ctrl+Shift+Enter` | 同左 | 同左 | ペインを水平分割 |
 | 下に分割 | `Ctrl+Shift+D` | `Ctrl+Shift+\` | `Ctrl+Shift+D` | ペインを垂直分割 |
-| ペイン閉じる | `Ctrl+Shift+W` | 同左 | `Ctrl+Shift+X` | アクティブペインを閉じる |
+| ペイン閉じる | `Ctrl+Shift+W` | 同左 | `Alt+Shift+W` | アクティブペインを閉じる |
 | ペイン移動 | `Ctrl+Shift+Arrow` | `Ctrl+Shift+H/J/K/L` | `Ctrl+Shift+Arrow` | ペイン間のフォーカス移動 |
 | ペインリサイズ | `Ctrl+Shift+Alt+Arrow` | `Ctrl+Shift+Alt+H/J/K/L` | `Ctrl+Shift+Alt+Arrow` | アクティブペインのリサイズ |
 | ペインズーム | `Ctrl+Shift+Z` | 同左 | 同左 | ペインズーム切替 |
