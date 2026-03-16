@@ -20,7 +20,7 @@ English | **[Japanese](keybinds.ja.md)**
 | Mute | `Ctrl+Shift+M` | same | `Alt+Shift+M` | Toggle notification mute |
 | Split Right | `Ctrl+Shift+Enter` | same | same | Split pane horizontally |
 | Split Down | `Ctrl+Shift+D` | `Ctrl+Shift+\` | `Ctrl+Shift+D` | Split pane vertically |
-| Close Pane | `Ctrl+Shift+W` | same | same | Close active pane |
+| Close Pane | `Ctrl+Shift+W` | same | `Ctrl+Shift+X` | Close active pane |
 | Pane Navigate | `Ctrl+Shift+Arrow` | `Ctrl+Shift+H/J/K/L` | `Ctrl+Shift+Arrow` | Move focus between panes |
 | Pane Resize | `Ctrl+Shift+Alt+Arrow` | `Ctrl+Shift+Alt+H/J/K/L` | `Ctrl+Shift+Alt+Arrow` | Resize active pane |
 | Zoom Pane | `Ctrl+Shift+Z` | same | same | Toggle pane zoom |
