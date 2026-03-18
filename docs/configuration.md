@@ -55,11 +55,32 @@ xkb_options = "ctrl:nocaps"  # XKB options (Caps Lock as Ctrl)
 prefer_external = true       # Prefer external monitors (HDMI/DP) over internal
 auto_switch = true           # Auto-switch on hotplug connect/disconnect
 
+[drm]
+device = "auto"              # "auto" or explicit path: "/dev/dri/card1"
+
 [notifications]
 enabled = true               # Enable OSC 9/99 notifications (default: true)
 
 [paths]
 screenshot_dir = "~/Pictures"
+```
+
+### Optimus Laptops (Intel + NVIDIA)
+
+On Optimus laptops, NVIDIA's DRM/KMS may not work with EGL/GBM. Set the DRM device to the Intel iGPU:
+
+```bash
+# Find available DRM devices
+ls -l /dev/dri/card*
+
+# Check which GPU each device uses
+udevadm info -a /dev/dri/card0 | grep -i vendor
+udevadm info -a /dev/dri/card1 | grep -i vendor
+```
+
+```toml
+[drm]
+device = "/dev/dri/card1"    # Use Intel iGPU instead of NVIDIA
 ```
 
 ## Nerd Fonts (Icons)

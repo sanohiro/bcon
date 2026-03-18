@@ -37,6 +37,8 @@ pub struct Config {
     pub terminal: TerminalConfig,
     /// Keyboard settings
     pub keyboard: KeyboardInputConfig,
+    /// DRM settings
+    pub drm: DrmConfig,
     /// Display settings
     pub display: DisplayOutputConfig,
     /// Notification settings
@@ -209,6 +211,23 @@ impl Default for KeyboardInputConfig {
             xkb_layout: String::new(),
             xkb_variant: String::new(),
             xkb_options: String::new(),
+        }
+    }
+}
+
+/// DRM device settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DrmConfig {
+    /// DRM device path: "auto" (default) or explicit path like "/dev/dri/card1"
+    /// On Optimus laptops, set this to the Intel iGPU device
+    pub device: String,
+}
+
+impl Default for DrmConfig {
+    fn default() -> Self {
+        Self {
+            device: "auto".to_string(),
         }
     }
 }
@@ -386,6 +405,7 @@ impl Default for Config {
             colors: ColorsConfig::default(),
             terminal: TerminalConfig::default(),
             keyboard: KeyboardInputConfig::default(),
+            drm: DrmConfig::default(),
             display: DisplayOutputConfig::default(),
             notifications: NotificationConfig::default(),
             security: SecurityConfig::default(),
@@ -1098,6 +1118,12 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # =============================================================================
 # Display Settings (Optional)
 # =============================================================================
+# [drm]
+# device = "auto"           # "auto" (default) or explicit path: "/dev/dri/card1"
+#                            # Optimus laptops: set to Intel iGPU device
+#                            #   ls -l /dev/dri/card* to find available devices
+#                            #   udevadm info -a /dev/dri/card1 | grep -i vendor
+
 # [display]
 # prefer_external = true    # Prefer external monitors (HDMI/DP) over internal (eDP)
 # auto_switch = true        # Auto-switch to external monitor on hotplug connect

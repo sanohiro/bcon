@@ -1372,7 +1372,15 @@ Make sure seatd/logind is running and you're on an active VT."
 
     // Phase 1: DRM/KMS initialization
     info!("Phase 1: DRM/KMS initialization...");
-    let drm_path = find_drm_device()?;
+    let drm_path = if cfg.drm.device == "auto" || cfg.drm.device.is_empty() {
+        find_drm_device()?
+    } else {
+        let path = cfg.drm.device.clone();
+        if !std::path::Path::new(&path).exists() {
+            anyhow::bail!("Configured DRM device not found: {}", path);
+        }
+        path
+    };
     info!("DRM device: {}", drm_path);
 
     let drm_device = {

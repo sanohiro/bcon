@@ -55,11 +55,32 @@ xkb_options = "ctrl:nocaps"  # XKB オプション (Caps Lock を Ctrl に)
 prefer_external = true       # 外部モニター優先 (HDMI/DP > 内蔵)
 auto_switch = true           # ホットプラグ時に自動切り替え
 
+[drm]
+device = "auto"              # "auto" または明示的パス: "/dev/dri/card1"
+
 [notifications]
 enabled = true               # OSC 9/99 通知を有効化 (デフォルト: true)
 
 [paths]
 screenshot_dir = "~/Pictures"
+```
+
+### Optimus ラップトップ (Intel + NVIDIA)
+
+Optimus 環境では NVIDIA の DRM/KMS が EGL/GBM で動作しない場合があります。Intel iGPU のデバイスを指定してください:
+
+```bash
+# 利用可能な DRM デバイスを確認
+ls -l /dev/dri/card*
+
+# 各デバイスの GPU を確認
+udevadm info -a /dev/dri/card0 | grep -i vendor
+udevadm info -a /dev/dri/card1 | grep -i vendor
+```
+
+```toml
+[drm]
+device = "/dev/dri/card1"    # NVIDIA ではなく Intel iGPU を使用
 ```
 
 ## Nerd Fonts (アイコン表示)
