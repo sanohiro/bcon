@@ -565,6 +565,7 @@ impl EvdevKeyboard {
                     match ptr_event {
                         PointerEvent::Motion(m) => {
                             // Accumulate relative movement with speed multiplier
+                            debug!("Mouse Motion: dx={:.1} dy={:.1} -> pos=({:.0},{:.0})", m.dx(), m.dy(), self.mouse_x, self.mouse_y);
                             self.mouse_x += m.dx() * self.mouse_speed;
                             self.mouse_y += m.dy() * self.mouse_speed;
                             // Clamp to screen bounds
@@ -581,6 +582,7 @@ impl EvdevKeyboard {
                                 m.absolute_x_transformed(self.screen_width as u32) as f64;
                             self.mouse_y =
                                 m.absolute_y_transformed(self.screen_height as u32) as f64;
+                            debug!("Mouse MotionAbsolute: pos=({:.0},{:.0}) screen={}x{}", self.mouse_x, self.mouse_y, self.screen_width, self.screen_height);
                             mouse_events.push(MouseEvent::Move {
                                 x: self.mouse_x,
                                 y: self.mouse_y,
