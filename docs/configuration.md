@@ -32,7 +32,7 @@ main = "JetBrains Mono"             # Ligature font recommended (see Recommended
 cjk = "Noto Sans CJK JP"           # or full path: "/usr/share/fonts/.../X.ttf"
 emoji = "Noto Color Emoji"
 symbols = "Hack Nerd Font Mono"
-size = 16.0
+size = 16.0                          # Font size in px (default: 16.0)
 render_mode = "lcd"
 lcd_filter = "light"
 
@@ -156,3 +156,20 @@ The default monospace font (DejaVu Sans Mono) does **not** support ligatures. To
 [font]
 main = "JetBrains Mono"    # or "Fira Code"
 ```
+
+## Font Size
+
+The default font size is `16.0` (px). For high-resolution displays, increase the size for readability:
+
+| Resolution | Recommended size |
+|------------|-----------------|
+| 1080p (FHD) | 16.0 (default) |
+| 1440p (QHD) | 18.0 – 20.0 |
+| 2160p (4K) | 22.0 – 28.0 |
+
+```toml
+[font]
+size = 24.0
+```
+
+You can also adjust at runtime with `Ctrl+Plus` / `Ctrl+Minus` (`Ctrl+0` to reset).
