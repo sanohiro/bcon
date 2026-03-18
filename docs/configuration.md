@@ -52,7 +52,8 @@ xkb_layout = "us"            # XKB keyboard layout
 xkb_options = "ctrl:nocaps"  # XKB options (Caps Lock as Ctrl)
 
 [mouse]
-speed = 1.0                  # Cursor speed multiplier (default: 1.0, recommended: 1.5-2.0 for 4K)
+speed = 1.0                  # Cursor speed multiplier (default: 1.0)
+                             # Auto-scaled by resolution (e.g. 2.0x on 4K)
 
 [display]
 prefer_external = true       # Prefer external monitors (HDMI/DP) over internal

@@ -1915,6 +1915,18 @@ Make sure seatd/logind is running and you're on an active VT."
         Some(input::Keyboard::new().context("Failed to initialize keyboard")?)
     };
 
+    // Auto-scale mouse speed for high-resolution displays
+    // libinput's relative deltas are calibrated for ~1080p; scale up for higher resolutions
+    let mouse_speed = {
+        let configured = cfg.mouse.speed;
+        let scale = (screen_h as f64 / 1080.0).max(1.0);
+        let effective = configured * scale;
+        if scale > 1.0 {
+            info!("Mouse speed: {:.1} (configured {:.1} × {:.1}x resolution scale)", effective, configured, scale);
+        }
+        effective
+    };
+
     // evdev input (keyboard + mouse, continue with SSH stdin if unavailable)
     #[cfg(all(target_os = "linux", feature = "seatd"))]
     let mut evdev_keyboard = if let Some(ref seat_session) = seat_session {
@@ -1923,7 +1935,7 @@ Make sure seatd/logind is running and you're on an active VT."
             display_config.height,
             seat_session.clone(),
             &cfg.keyboard,
-            cfg.mouse.speed,
+            mouse_speed,
         ) {
             Ok(kb) => {
                 info!("evdev input initialized via libseat (keyboard + mouse)");
@@ -1935,7 +1947,7 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
     } else {
-        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, cfg.mouse.speed)
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, mouse_speed)
         {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");
@@ -1950,7 +1962,7 @@ Make sure seatd/logind is running and you're on an active VT."
 
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let mut evdev_keyboard =
-        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, cfg.mouse.speed)
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, mouse_speed)
         {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");

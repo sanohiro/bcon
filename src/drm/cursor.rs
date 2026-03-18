@@ -105,6 +105,8 @@ pub struct HardwareCursor {
     size: u32,
     device_fd: i32,
     crtc_id: u32,
+    /// Hotspot offset (center of crosshair cursor)
+    hotspot: i32,
 }
 
 impl HardwareCursor {
@@ -221,6 +223,7 @@ impl HardwareCursor {
             size,
             device_fd: fd,
             crtc_id,
+            hotspot,
         })
     }
 
@@ -230,11 +233,13 @@ impl HardwareCursor {
     /// The display controller updates the cursor position at scanout.
     #[inline]
     pub fn move_to(&self, x: f64, y: f64) {
+        // Subtract hotspot so the crosshair center aligns with (x, y).
+        // DRM cursor ioctl positions the image's top-left corner, not the hotspot.
         let mut cursor = DrmModeCursor {
             flags: DRM_MODE_CURSOR_MOVE,
             crtc_id: self.crtc_id,
-            x: x.round() as i32,
-            y: y.round() as i32,
+            x: x.round() as i32 - self.hotspot,
+            y: y.round() as i32 - self.hotspot,
             width: 0,
             height: 0,
             handle: 0,
