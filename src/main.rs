@@ -1919,20 +1919,20 @@ Make sure seatd/logind is running and you're on an active VT."
     // libinput's relative deltas are calibrated for ~1080p; scale up for higher resolutions
     // Mouse speed: if explicitly set in config, use that value directly.
     // If default (1.0), auto-scale for high-resolution displays.
-    let mouse_speed = {
-        let configured = cfg.mouse.speed;
-        if (configured - 1.0).abs() > f64::EPSILON {
+    let mouse_config = {
+        let mut mc = cfg.mouse.clone();
+        if (mc.speed - 1.0).abs() > f64::EPSILON {
             // Explicitly configured — use as-is
-            info!("Mouse speed: {:.1} (configured)", configured);
-            configured
+            info!("Mouse speed: {:.1} (configured)", mc.speed);
         } else {
             // Default — auto-scale by resolution
             let scale = (screen_h as f64 / 1080.0).max(1.0);
+            mc.speed = scale;
             if scale > 1.0 {
                 info!("Mouse speed: {:.1} (auto-scaled for {}p)", scale, screen_h);
             }
-            scale
         }
+        mc
     };
 
     // evdev input (keyboard + mouse, continue with SSH stdin if unavailable)
@@ -1943,7 +1943,7 @@ Make sure seatd/logind is running and you're on an active VT."
             display_config.height,
             seat_session.clone(),
             &cfg.keyboard,
-            mouse_speed,
+            &mouse_config,
         ) {
             Ok(kb) => {
                 info!("evdev input initialized via libseat (keyboard + mouse)");
@@ -1955,7 +1955,7 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
     } else {
-        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, mouse_speed)
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, &mouse_config)
         {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");
@@ -1970,7 +1970,7 @@ Make sure seatd/logind is running and you're on an active VT."
 
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let mut evdev_keyboard =
-        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, mouse_speed)
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, &mouse_config)
         {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");
@@ -3510,6 +3510,54 @@ Make sure seatd/logind is running and you're on an active VT."
                                 term.scroll_back(1);
                                 scroll_accum += 1.0;
                                 needs_redraw = true;
+                            }
+                        }
+                    }
+                    input::MouseEvent::Gesture(action) => {
+                        match action {
+                            input::GestureAction::SwipeNextTab => {
+                                let _ = term;
+                                tab_mgr.next_tab();
+                                for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                                    pane.terminal.mark_all_dirty();
+                                }
+                                needs_redraw = true;
+                                continue 'main_loop;
+                            }
+                            input::GestureAction::SwipePrevTab => {
+                                let _ = term;
+                                tab_mgr.prev_tab();
+                                for pane in tab_mgr.active_tab_mut().panes.values_mut() {
+                                    pane.terminal.mark_all_dirty();
+                                }
+                                needs_redraw = true;
+                                continue 'main_loop;
+                            }
+                            input::GestureAction::PinchZoom(scale) => {
+                                let new_delta = if *scale > 1.0 {
+                                    font_size_delta + 2
+                                } else {
+                                    font_size_delta - 2
+                                };
+                                font_size_delta = new_delta;
+                                let new_size = (base_font_size as f32 + font_size_delta as f32)
+                                    .clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+                                let (new_cell_w, new_cell_h) = glyph_atlas.resize(new_size);
+                                cell_w = new_cell_w.max(1.0);
+                                cell_h = new_cell_h.max(1.0);
+                                grid_cols = ((screen_w as f32 - margin_x * 2.0) / cell_w).max(1.0) as usize;
+                                grid_rows = ((screen_h as f32 - margin_y * 2.0) / cell_h).max(1.0) as usize;
+                                let _ = term;
+                                tab_mgr.relayout_all(available_rect);
+                                tab_mgr.resize_all_terminals_to_rects(cell_w, cell_h);
+                                for tab in &mut tab_mgr.tabs {
+                                    for pane in tab.panes.values_mut() {
+                                        pane.terminal.set_cell_size(cell_w as u32, cell_h as u32);
+                                    }
+                                }
+                                emoji_atlas.resize(cell_h as u32);
+                                needs_redraw = true;
+                                continue 'main_loop;
                             }
                         }
                     }

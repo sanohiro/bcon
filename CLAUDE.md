@@ -69,6 +69,8 @@ Think "Ghostty for the console" - bringing modern terminal features (True Color,
 - Kitty graphics protocol support
 - Configurable scrollback buffer (default: 10,000 lines)
 - Mouse support: selection, wheel scroll, button events (X10/SGR/URXVT)
+- Touchpad support: tap-to-click, natural scroll, disable-while-typing (via libinput)
+- Touchpad gestures: pinch-to-zoom font size, 3-finger swipe for tab switching
 - OSC 52 clipboard integration
 - Bracketed paste mode
 

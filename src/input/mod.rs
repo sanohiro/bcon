@@ -11,7 +11,7 @@ pub mod keyboard;
 pub mod keycodes;
 
 pub use evdev::{
-    keysym_to_bytes_with_mods, EvdevKeyboard, KeyAction, KeyboardConfig, MouseEvent, BTN_LEFT,
-    BTN_MIDDLE, BTN_RIGHT,
+    keysym_to_bytes_with_mods, EvdevKeyboard, GestureAction, KeyAction, KeyboardConfig,
+    MouseEvent, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT,
 };
 pub use keyboard::Keyboard;

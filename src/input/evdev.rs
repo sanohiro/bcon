@@ -8,8 +8,12 @@
 use anyhow::{anyhow, Result};
 use input::event::keyboard::{KeyState, KeyboardEventTrait};
 use input::event::pointer::{Axis, ButtonState, PointerScrollEvent};
-use input::event::{Event, PointerEvent};
-use input::{Libinput, LibinputInterface};
+use input::event::gesture::{
+    GestureEventCoordinates, GestureEventTrait, GesturePinchEventTrait, GestureSwipeEvent,
+    GesturePinchEvent,
+};
+use input::event::{Event, GestureEvent, PointerEvent};
+use input::{Device as LibinputDevice, Libinput, LibinputInterface};
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
@@ -27,7 +31,7 @@ use std::cell::RefCell;
 #[cfg(all(target_os = "linux", feature = "seatd"))]
 use std::rc::Rc;
 
-use crate::config::KeyboardInputConfig;
+use crate::config::{KeyboardInputConfig, MouseConfig};
 
 /// LibinputInterface implementation for libinput
 struct InputInterface;
@@ -117,6 +121,19 @@ pub enum MouseEvent {
     ButtonRelease { button: u32, x: f64, y: f64 },
     /// Scroll (negative=up, positive=down)
     Scroll { delta: f64, x: f64, y: f64 },
+    /// Gesture action (resolved from swipe/pinch)
+    Gesture(GestureAction),
+}
+
+/// High-level gesture actions
+#[derive(Debug, Clone, PartialEq)]
+pub enum GestureAction {
+    /// Pinch zoom: scale > 1.0 = zoom in, < 1.0 = zoom out
+    PinchZoom(f64),
+    /// 3-finger swipe left → next tab
+    SwipeNextTab,
+    /// 3-finger swipe right → previous tab
+    SwipePrevTab,
 }
 
 /// libinput mouse button numbers
@@ -131,6 +148,44 @@ const KEY_LEFTSHIFT: u32 = 42;
 const KEY_RIGHTSHIFT: u32 = 54;
 const KEY_LEFTALT: u32 = 56;
 const KEY_RIGHTALT: u32 = 100;
+
+/// Apply touchpad-related libinput settings to a device
+fn configure_touchpad(device: &mut LibinputDevice, mouse_config: &MouseConfig) {
+    // Tap-to-click
+    if device.config_tap_finger_count() > 0 {
+        let name = device.name().to_string();
+        if let Err(e) = device.config_tap_set_enabled(mouse_config.tap_to_click) {
+            warn!("Failed to set tap-to-click on '{}': {:?}", name, e);
+        } else {
+            info!(
+                "Touchpad '{}': tap_to_click={}",
+                name, mouse_config.tap_to_click
+            );
+        }
+    }
+
+    // Natural scrolling
+    if device.config_scroll_has_natural_scroll() {
+        let name = device.name().to_string();
+        if let Err(e) =
+            device.config_scroll_set_natural_scroll_enabled(mouse_config.natural_scroll)
+        {
+            warn!("Failed to set natural scroll on '{}': {:?}", name, e);
+        } else if mouse_config.natural_scroll {
+            info!("Touchpad '{}': natural_scroll=true", name);
+        }
+    }
+
+    // Disable-while-typing
+    if device.config_dwt_is_available() {
+        let name = device.name().to_string();
+        if let Err(e) = device.config_dwt_set_enabled(mouse_config.disable_while_typing) {
+            warn!("Failed to set dwt on '{}': {:?}", name, e);
+        } else if mouse_config.disable_while_typing {
+            info!("Touchpad '{}': disable_while_typing=true", name);
+        }
+    }
+}
 
 /// evdev input management (keyboard + mouse)
 pub struct EvdevKeyboard {
@@ -165,6 +220,12 @@ pub struct EvdevKeyboard {
     repeat_delay_ms: u64,
     /// Key repeat rate (ms)
     repeat_rate_ms: u64,
+    /// Gesture state: accumulated swipe dx/dy during a gesture
+    gesture_swipe_dx: f64,
+    gesture_swipe_dy: f64,
+    gesture_swipe_fingers: i32,
+    /// Gesture state: accumulated pinch scale
+    gesture_pinch_scale: f64,
 }
 
 impl EvdevKeyboard {
@@ -177,7 +238,7 @@ impl EvdevKeyboard {
         screen_width: u32,
         screen_height: u32,
         kb_config: &KeyboardInputConfig,
-        mouse_speed: f64,
+        mouse_config: &MouseConfig,
     ) -> Result<Self> {
         // Create libinput context
         let mut input = Libinput::new_from_path(InputInterface);
@@ -192,8 +253,9 @@ impl EvdevKeyboard {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with("event") {
                 let path_str = path.to_str().unwrap_or("");
-                if let Some(_device) = input.path_add_device(path_str) {
+                if let Some(mut device) = input.path_add_device(path_str) {
                     debug!("Input device added: {}", path_str);
+                    configure_touchpad(&mut device, mouse_config);
                     device_count += 1;
                 }
             }
@@ -284,11 +346,15 @@ impl EvdevKeyboard {
             mouse_y: screen_height as f64 / 2.0,
             screen_width: screen_width as f64,
             screen_height: screen_height as f64,
-            mouse_speed: mouse_speed.max(0.1),
+            mouse_speed: mouse_config.speed.max(0.1),
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
             repeat_delay_ms: kb_config.repeat_delay,
             repeat_rate_ms: kb_config.repeat_rate,
+            gesture_swipe_dx: 0.0,
+            gesture_swipe_dy: 0.0,
+            gesture_swipe_fingers: 0,
+            gesture_pinch_scale: 1.0,
         })
     }
 
@@ -301,7 +367,7 @@ impl EvdevKeyboard {
         screen_height: u32,
         session: Rc<RefCell<SeatSession>>,
         kb_config: &KeyboardInputConfig,
-        mouse_speed: f64,
+        mouse_config: &MouseConfig,
     ) -> Result<Self> {
         // Create libinput context with seat-based interface
         let interface = SeatInputInterface {
@@ -319,8 +385,9 @@ impl EvdevKeyboard {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with("event") {
                 let path_str = path.to_str().unwrap_or("");
-                if let Some(_device) = input.path_add_device(path_str) {
+                if let Some(mut device) = input.path_add_device(path_str) {
                     debug!("Input device added via libseat: {}", path_str);
+                    configure_touchpad(&mut device, mouse_config);
                     device_count += 1;
                 }
             }
@@ -408,11 +475,15 @@ impl EvdevKeyboard {
             mouse_y: screen_height as f64 / 2.0,
             screen_width: screen_width as f64,
             screen_height: screen_height as f64,
-            mouse_speed: mouse_speed.max(0.1),
+            mouse_speed: mouse_config.speed.max(0.1),
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
             repeat_delay_ms: kb_config.repeat_delay,
             repeat_rate_ms: kb_config.repeat_rate,
+            gesture_swipe_dx: 0.0,
+            gesture_swipe_dy: 0.0,
+            gesture_swipe_fingers: 0,
+            gesture_pinch_scale: 1.0,
         })
     }
 
@@ -629,6 +700,70 @@ impl EvdevKeyboard {
                         other => {
                             debug!("Unhandled pointer event: {:?}", other);
                         }
+                    }
+                }
+                Event::Gesture(gesture_event) => {
+                    match gesture_event {
+                        GestureEvent::Swipe(swipe) => match swipe {
+                            GestureSwipeEvent::Begin(b) => {
+                                self.gesture_swipe_dx = 0.0;
+                                self.gesture_swipe_dy = 0.0;
+                                self.gesture_swipe_fingers = b.finger_count();
+                                debug!(
+                                    "Gesture swipe begin: fingers={}",
+                                    self.gesture_swipe_fingers
+                                );
+                            }
+                            GestureSwipeEvent::Update(u) => {
+                                self.gesture_swipe_dx += u.dx();
+                                self.gesture_swipe_dy += u.dy();
+                            }
+                            GestureSwipeEvent::End(_e) => {
+                                if self.gesture_swipe_fingers == 3 {
+                                    let dx = self.gesture_swipe_dx;
+                                    let dy = self.gesture_swipe_dy;
+                                    let threshold = 50.0;
+                                    // Determine dominant axis
+                                    if dx.abs() > dy.abs() && dx.abs() > threshold {
+                                        if dx > 0.0 {
+                                            debug!("Gesture: 3-finger swipe right → prev tab");
+                                            mouse_events.push(MouseEvent::Gesture(
+                                                GestureAction::SwipePrevTab,
+                                            ));
+                                        } else {
+                                            debug!("Gesture: 3-finger swipe left → next tab");
+                                            mouse_events.push(MouseEvent::Gesture(
+                                                GestureAction::SwipeNextTab,
+                                            ));
+                                        }
+                                    }
+                                }
+                                self.gesture_swipe_dx = 0.0;
+                                self.gesture_swipe_dy = 0.0;
+                                self.gesture_swipe_fingers = 0;
+                            }
+                            _ => {}
+                        },
+                        GestureEvent::Pinch(pinch) => match pinch {
+                            GesturePinchEvent::Begin(_) => {
+                                self.gesture_pinch_scale = 1.0;
+                            }
+                            GesturePinchEvent::Update(u) => {
+                                self.gesture_pinch_scale = u.scale();
+                            }
+                            GesturePinchEvent::End(_) => {
+                                let scale = self.gesture_pinch_scale;
+                                if (scale - 1.0).abs() > 0.2 {
+                                    debug!("Gesture: pinch scale={:.2}", scale);
+                                    mouse_events.push(MouseEvent::Gesture(
+                                        GestureAction::PinchZoom(scale),
+                                    ));
+                                }
+                                self.gesture_pinch_scale = 1.0;
+                            }
+                            _ => {}
+                        },
+                        _ => {}
                     }
                 }
                 _ => {}

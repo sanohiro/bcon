@@ -64,6 +64,8 @@ https://github.com/user-attachments/assets/ebff498c-25b7-4662-8750-8d6e35661963
 ### Terminal
 - **Scrollback**: Configurable scrollback buffer (default: 10,000 lines)
 - **Mouse Support**: Selection, wheel scroll, button events (X10/SGR/URXVT/SGR-Pixels protocols)
+- **Touchpad Support**: Tap-to-click, natural scroll, disable-while-typing (via libinput)
+- **Touchpad Gestures**: Pinch-to-zoom font size, 3-finger swipe for tab switching
 - **OSC 52 Clipboard**: Apps can read/write clipboard via escape sequences
 - **Bracketed Paste**: Secure paste mode support
 - **Colored Underlines**: SGR 58/59 colored underline with 5 styles (single, double, curly, dotted, dashed)

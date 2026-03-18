@@ -225,11 +225,22 @@ pub struct MouseConfig {
     /// Values > 1.0 make the cursor faster, < 1.0 slower.
     /// Recommended: 1.5–2.0 for 4K displays.
     pub speed: f64,
+    /// Enable tap-to-click on touchpads (default: true)
+    pub tap_to_click: bool,
+    /// Enable natural (reverse) scrolling on touchpads (default: false)
+    pub natural_scroll: bool,
+    /// Disable touchpad while typing (default: true)
+    pub disable_while_typing: bool,
 }
 
 impl Default for MouseConfig {
     fn default() -> Self {
-        Self { speed: 1.0 }
+        Self {
+            speed: 1.0,
+            tap_to_click: true,
+            natural_scroll: false,
+            disable_while_typing: true,
+        }
     }
 }
 
@@ -1140,6 +1151,9 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # [mouse]
 # speed = 1.0                # Cursor speed multiplier (default: 1.0)
 #                            # Recommended: 1.5-2.0 for 4K displays
+# tap_to_click = true        # Enable tap-to-click on touchpads
+# natural_scroll = false     # Enable natural (reverse) scrolling
+# disable_while_typing = true # Disable touchpad while typing
 
 # =============================================================================
 # Display Settings (Optional)
