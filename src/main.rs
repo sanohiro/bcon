@@ -3340,8 +3340,6 @@ Make sure seatd/logind is running and you're on an active VT."
                         // Account for terminal margin when converting to cell coordinates
                         let col = ((*x - mouse_offset_x).max(0.0) / cell_w as f64) as usize;
                         let row = ((*y - mouse_offset_y).max(0.0) / cell_h as f64) as usize;
-                        info!("Click: pixel=({:.0},{:.0}) offset=({:.0},{:.0}) cell=({:.1},{:.1}) grid={}x{} screen={}x{} -> row={} col={}",
-                            x, y, mouse_offset_x, mouse_offset_y, cell_w, cell_h, grid_cols, grid_rows, screen_w, screen_h, row, col);
 
                         // Ctrl+Left click: Copy URL to clipboard
                         if ctrl_pressed && *button == input::BTN_LEFT {

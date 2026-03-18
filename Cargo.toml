@@ -1,6 +1,6 @@
 [package]
 name = "bcon"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 authors = ["Hironobu Sano"]
 description = "GPU-accelerated terminal emulator for Linux console"

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-03-18
+
+### Fixed
+- Hardware cursor hotspot offset — click position now matches crosshair center (was offset by cursor image size on some GPUs)
+- Mouse speed auto-scaling: explicitly configured `speed` is used as-is; auto-scale only applies at default (1.0)
+
+### Added
+- `[mouse] speed` config option — cursor speed multiplier, auto-scaled by resolution when not set
+- Font size documentation with resolution-based recommendations
+
 ## [1.0.2] - 2026-03-18
 
 ### Fixed

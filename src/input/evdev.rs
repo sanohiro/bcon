@@ -157,8 +157,6 @@ pub struct EvdevKeyboard {
     screen_height: f64,
     /// Mouse speed multiplier
     mouse_speed: f64,
-    /// Last motion event type for debugging
-    last_motion_type: &'static str,
     /// Scroll accumulator (accumulate until reaching line units)
     scroll_accum: f64,
     /// Held keys: keycode -> (press time, next repeat time, RawKeyEvent)
@@ -287,7 +285,6 @@ impl EvdevKeyboard {
             screen_width: screen_width as f64,
             screen_height: screen_height as f64,
             mouse_speed: mouse_speed.max(0.1),
-            last_motion_type: "none",
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
             repeat_delay_ms: kb_config.repeat_delay,
@@ -412,7 +409,6 @@ impl EvdevKeyboard {
             screen_width: screen_width as f64,
             screen_height: screen_height as f64,
             mouse_speed: mouse_speed.max(0.1),
-            last_motion_type: "none",
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
             repeat_delay_ms: kb_config.repeat_delay,
@@ -569,7 +565,6 @@ impl EvdevKeyboard {
                     match ptr_event {
                         PointerEvent::Motion(m) => {
                             // Accumulate relative movement with speed multiplier
-                            self.last_motion_type = "relative";
                             self.mouse_x += m.dx() * self.mouse_speed;
                             self.mouse_y += m.dy() * self.mouse_speed;
                             // Clamp to screen bounds
@@ -582,7 +577,6 @@ impl EvdevKeyboard {
                         }
                         PointerEvent::MotionAbsolute(m) => {
                             // Absolute coordinates (touchpad, tablet, etc.)
-                            self.last_motion_type = "absolute";
                             self.mouse_x =
                                 m.absolute_x_transformed(self.screen_width as u32) as f64;
                             self.mouse_y =
@@ -594,7 +588,6 @@ impl EvdevKeyboard {
                         }
                         PointerEvent::Button(b) => {
                             let button = b.button();
-                            info!("Mouse click: button={} pos=({:.0},{:.0}) motion_type={}", button, self.mouse_x, self.mouse_y, self.last_motion_type);
                             match b.button_state() {
                                 ButtonState::Pressed => {
                                     mouse_events.push(MouseEvent::ButtonPress {
