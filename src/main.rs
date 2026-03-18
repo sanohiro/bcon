@@ -1917,14 +1917,22 @@ Make sure seatd/logind is running and you're on an active VT."
 
     // Auto-scale mouse speed for high-resolution displays
     // libinput's relative deltas are calibrated for ~1080p; scale up for higher resolutions
+    // Mouse speed: if explicitly set in config, use that value directly.
+    // If default (1.0), auto-scale for high-resolution displays.
     let mouse_speed = {
         let configured = cfg.mouse.speed;
-        let scale = (screen_h as f64 / 1080.0).max(1.0);
-        let effective = configured * scale;
-        if scale > 1.0 {
-            info!("Mouse speed: {:.1} (configured {:.1} × {:.1}x resolution scale)", effective, configured, scale);
+        if (configured - 1.0).abs() > f64::EPSILON {
+            // Explicitly configured — use as-is
+            info!("Mouse speed: {:.1} (configured)", configured);
+            configured
+        } else {
+            // Default — auto-scale by resolution
+            let scale = (screen_h as f64 / 1080.0).max(1.0);
+            if scale > 1.0 {
+                info!("Mouse speed: {:.1} (auto-scaled for {}p)", scale, screen_h);
+            }
+            scale
         }
-        effective
     };
 
     // evdev input (keyboard + mouse, continue with SSH stdin if unavailable)
