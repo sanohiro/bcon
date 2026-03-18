@@ -748,15 +748,59 @@ fn draw_rounded_corner(
     true
 }
 
-/// Auto-detect DRM device
+/// Auto-detect DRM device with connected display
+///
+/// Probes each /dev/dri/card* device and returns the first one
+/// that has a connected connector. This handles Optimus laptops
+/// where card0 (NVIDIA) may have no connected displays.
 fn find_drm_device() -> Result<String> {
+    let mut available = Vec::new();
     for i in 0..8 {
         let path = format!("/dev/dri/card{}", i);
         if std::path::Path::new(&path).exists() {
-            return Ok(path);
+            available.push(path);
         }
     }
-    Err(anyhow!("/dev/dri/card* not found"))
+
+    if available.is_empty() {
+        return Err(anyhow!("/dev/dri/card* not found"));
+    }
+
+    // If only one device exists, use it directly
+    if available.len() == 1 {
+        return Ok(available.into_iter().next().unwrap());
+    }
+
+    // Probe each device for connected connectors
+    for path in &available {
+        match drm::Device::open(path) {
+            Ok(device) => {
+                let connected = device.get_connected_connectors();
+                if !connected.is_empty() {
+                    info!(
+                        "DRM auto-detect: {} has {} connected connector(s), selected",
+                        path,
+                        connected.len()
+                    );
+                    return Ok(path.clone());
+                }
+                info!(
+                    "DRM auto-detect: {} has no connected connectors, skipping",
+                    path
+                );
+            }
+            Err(e) => {
+                info!("DRM auto-detect: {} failed to open ({}), skipping", path, e);
+            }
+        }
+    }
+
+    // Fallback: return first available device (will fail later with a clear error)
+    warn!(
+        "DRM auto-detect: no device with connected connectors found, using {}",
+        available[0]
+    );
+    Ok(available[0].clone())
 }
 
 /// Load font for testing: BCON_FONT env var -> ligature font -> system font
@@ -1373,15 +1417,17 @@ Make sure seatd/logind is running and you're on an active VT."
     // Phase 1: DRM/KMS initialization
     info!("Phase 1: DRM/KMS initialization...");
     let drm_path = if cfg.drm.device == "auto" || cfg.drm.device.is_empty() {
-        find_drm_device()?
+        let path = find_drm_device()?;
+        info!("DRM device: {} (auto-detected)", path);
+        path
     } else {
         let path = cfg.drm.device.clone();
         if !std::path::Path::new(&path).exists() {
             anyhow::bail!("Configured DRM device not found: {}", path);
         }
+        info!("DRM device: {} (configured)", path);
         path
     };
-    info!("DRM device: {}", drm_path);
 
     let drm_device = {
         #[cfg(all(target_os = "linux", feature = "seatd"))]

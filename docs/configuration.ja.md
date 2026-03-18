@@ -56,7 +56,8 @@ prefer_external = true       # 外部モニター優先 (HDMI/DP > 内蔵)
 auto_switch = true           # ホットプラグ時に自動切り替え
 
 [drm]
-device = "auto"              # "auto" または明示的パス: "/dev/dri/card1"
+device = "auto"              # "auto" は各 GPU を probe して接続中のディスプレイを自動選択
+                             # または明示的パス: "/dev/dri/card1"
 
 [notifications]
 enabled = true               # OSC 9/99 通知を有効化 (デフォルト: true)
@@ -65,9 +66,32 @@ enabled = true               # OSC 9/99 通知を有効化 (デフォルト: tru
 screenshot_dir = "~/Pictures"
 ```
 
+### DRM デバイス選択
+
+`device = "auto"` (デフォルト) は各 `/dev/dri/card*` を probe し、ディスプレイが接続されている GPU を自動選択します。明示的にデバイスを指定することも可能です:
+
+```toml
+[drm]
+device = "/dev/dri/card1"    # 特定の GPU を使用
+```
+
+bcon がどのデバイスを使用しているか確認するには、起動ログを参照してください:
+
+```bash
+journalctl -u bcon@tty2 -e | grep "DRM"
+```
+
+```
+DRM auto-detect: /dev/dri/card0 has no connected connectors, skipping
+DRM auto-detect: /dev/dri/card1 has 1 connected connector(s), selected
+DRM device: /dev/dri/card1 (auto-detected)
+```
+
 ### Optimus ラップトップ (Intel + NVIDIA)
 
-Optimus 環境では NVIDIA の DRM/KMS が EGL/GBM で動作しない場合があります。Intel iGPU のデバイスを指定してください:
+Optimus 環境では、NVIDIA GPU が存在してもディスプレイは通常 Intel iGPU 経由で出力されます。`device = "auto"` はこれを自動的に処理します — 接続中のディスプレイがない GPU はスキップされます。
+
+`No connected connector found` エラーで bcon が起動しない場合、どの GPU にディスプレイが接続されているか確認してください:
 
 ```bash
 # 利用可能な DRM デバイスを確認
@@ -77,6 +101,16 @@ ls -l /dev/dri/card*
 udevadm info -a /dev/dri/card0 | grep -i vendor
 udevadm info -a /dev/dri/card1 | grep -i vendor
 ```
+
+**NVIDIA GPU を直接使用したい場合**、カーネルモードセッティングを有効にしてください:
+
+```bash
+echo 'options nvidia-drm modeset=1' | sudo tee /etc/modprobe.d/nvidia-drm.conf
+sudo update-initramfs -u
+sudo reboot
+```
+
+それでも動作しない場合 (Optimus では一般的)、Intel iGPU を明示的に指定してください:
 
 ```toml
 [drm]

@@ -56,7 +56,8 @@ prefer_external = true       # Prefer external monitors (HDMI/DP) over internal
 auto_switch = true           # Auto-switch on hotplug connect/disconnect
 
 [drm]
-device = "auto"              # "auto" or explicit path: "/dev/dri/card1"
+device = "auto"              # "auto" probes each GPU and selects one with a connected display
+                             # or explicit path: "/dev/dri/card1"
 
 [notifications]
 enabled = true               # Enable OSC 9/99 notifications (default: true)
@@ -65,9 +66,32 @@ enabled = true               # Enable OSC 9/99 notifications (default: true)
 screenshot_dir = "~/Pictures"
 ```
 
+### DRM Device Selection
+
+`device = "auto"` (default) probes each `/dev/dri/card*` and selects the first GPU with a connected display. You can also specify a device path explicitly:
+
+```toml
+[drm]
+device = "/dev/dri/card1"    # Use a specific GPU
+```
+
+To check which device bcon is using, look at the startup log:
+
+```bash
+journalctl -u bcon@tty2 -e | grep "DRM"
+```
+
+```
+DRM auto-detect: /dev/dri/card0 has no connected connectors, skipping
+DRM auto-detect: /dev/dri/card1 has 1 connected connector(s), selected
+DRM device: /dev/dri/card1 (auto-detected)
+```
+
 ### Optimus Laptops (Intel + NVIDIA)
 
-On Optimus laptops, NVIDIA's DRM/KMS may not work with EGL/GBM. Set the DRM device to the Intel iGPU:
+On Optimus laptops, displays are typically routed through the Intel iGPU even when an NVIDIA GPU is present. `device = "auto"` handles this automatically — it skips GPUs with no connected displays.
+
+If bcon fails to start with an error like `No connected connector found`, check which GPU has connected displays:
 
 ```bash
 # Find available DRM devices
@@ -77,6 +101,16 @@ ls -l /dev/dri/card*
 udevadm info -a /dev/dri/card0 | grep -i vendor
 udevadm info -a /dev/dri/card1 | grep -i vendor
 ```
+
+**If you want to use the NVIDIA GPU directly**, enable kernel modesetting:
+
+```bash
+echo 'options nvidia-drm modeset=1' | sudo tee /etc/modprobe.d/nvidia-drm.conf
+sudo update-initramfs -u
+sudo reboot
+```
+
+If this still doesn't work (common on Optimus), set the Intel iGPU explicitly:
 
 ```toml
 [drm]
