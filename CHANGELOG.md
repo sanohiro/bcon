@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-18
+
+### Added
+- Touchpad gesture support: 3-finger swipe for tab switching, pinch to zoom font size
+- Touchpad settings: `tap_to_click`, `natural_scroll`, `disable_while_typing` in `[mouse]`
+- `[mouse] speed` config option with resolution auto-scaling for HiDPI displays
+- `[drm] device` config option (`"auto"` or explicit path like `"/dev/dri/card1"`)
+
+### Fixed
+- Hardware cursor hotspot offset — click position now matches crosshair center
+- DRM auto-detect probes each GPU for connected displays (fixes Optimus laptops)
+- Login screen idle timeout no longer triggers systemd restart loop
+- Mouse speed: explicitly configured values used as-is, auto-scale only at default
+- Emacs preset: close_pane keybind conflict resolved
+
 ## [1.0.4] - 2026-03-18
 
 ### Fixed
