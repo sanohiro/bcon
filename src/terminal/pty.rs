@@ -199,6 +199,9 @@ impl Pty {
                 // Otherwise, spawn user's shell directly
                 if unsafe { libc::getuid() } == 0 {
                     // Running as root (e.g., systemd service) - require login
+                    // Disable login timeout — bcon acts as a getty replacement,
+                    // so the login prompt should persist indefinitely.
+                    std::env::set_var("LOGIN_TIMEOUT", "0");
                     let login = match std::ffi::CString::new("/bin/login") {
                         Ok(s) => s,
                         Err(_) => std::process::exit(1),
