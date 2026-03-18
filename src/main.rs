@@ -1923,6 +1923,7 @@ Make sure seatd/logind is running and you're on an active VT."
             display_config.height,
             seat_session.clone(),
             &cfg.keyboard,
+            cfg.mouse.speed,
         ) {
             Ok(kb) => {
                 info!("evdev input initialized via libseat (keyboard + mouse)");
@@ -1934,7 +1935,7 @@ Make sure seatd/logind is running and you're on an active VT."
             }
         }
     } else {
-        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard)
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, cfg.mouse.speed)
         {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");
@@ -1949,7 +1950,7 @@ Make sure seatd/logind is running and you're on an active VT."
 
     #[cfg(not(all(target_os = "linux", feature = "seatd")))]
     let mut evdev_keyboard =
-        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard)
+        match input::EvdevKeyboard::new(display_config.width, display_config.height, &cfg.keyboard, cfg.mouse.speed)
         {
             Ok(kb) => {
                 info!("evdev input initialized (keyboard + mouse)");

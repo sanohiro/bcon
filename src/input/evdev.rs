@@ -155,6 +155,8 @@ pub struct EvdevKeyboard {
     screen_width: f64,
     /// Screen height (for mouse coordinate clamping)
     screen_height: f64,
+    /// Mouse speed multiplier
+    mouse_speed: f64,
     /// Scroll accumulator (accumulate until reaching line units)
     scroll_accum: f64,
     /// Held keys: keycode -> (press time, next repeat time, RawKeyEvent)
@@ -175,6 +177,7 @@ impl EvdevKeyboard {
         screen_width: u32,
         screen_height: u32,
         kb_config: &KeyboardInputConfig,
+        mouse_speed: f64,
     ) -> Result<Self> {
         // Create libinput context
         let mut input = Libinput::new_from_path(InputInterface);
@@ -281,6 +284,7 @@ impl EvdevKeyboard {
             mouse_y: screen_height as f64 / 2.0,
             screen_width: screen_width as f64,
             screen_height: screen_height as f64,
+            mouse_speed: mouse_speed.max(0.1),
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
             repeat_delay_ms: kb_config.repeat_delay,
@@ -297,6 +301,7 @@ impl EvdevKeyboard {
         screen_height: u32,
         session: Rc<RefCell<SeatSession>>,
         kb_config: &KeyboardInputConfig,
+        mouse_speed: f64,
     ) -> Result<Self> {
         // Create libinput context with seat-based interface
         let interface = SeatInputInterface {
@@ -403,6 +408,7 @@ impl EvdevKeyboard {
             mouse_y: screen_height as f64 / 2.0,
             screen_width: screen_width as f64,
             screen_height: screen_height as f64,
+            mouse_speed: mouse_speed.max(0.1),
             scroll_accum: 0.0,
             held_keys: HashMap::new(),
             repeat_delay_ms: kb_config.repeat_delay,
@@ -558,9 +564,9 @@ impl EvdevKeyboard {
                 Event::Pointer(ptr_event) => {
                     match ptr_event {
                         PointerEvent::Motion(m) => {
-                            // Accumulate relative movement
-                            self.mouse_x += m.dx();
-                            self.mouse_y += m.dy();
+                            // Accumulate relative movement with speed multiplier
+                            self.mouse_x += m.dx() * self.mouse_speed;
+                            self.mouse_y += m.dy() * self.mouse_speed;
                             // Clamp to screen bounds
                             self.mouse_x = self.mouse_x.clamp(0.0, self.screen_width - 1.0);
                             self.mouse_y = self.mouse_y.clamp(0.0, self.screen_height - 1.0);

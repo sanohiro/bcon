@@ -51,6 +51,9 @@ repeat_rate = 30             # キーリピートレート (ms)
 xkb_layout = "jp"            # XKB キーボードレイアウト
 xkb_options = "ctrl:nocaps"  # XKB オプション (Caps Lock を Ctrl に)
 
+[mouse]
+speed = 1.0                  # カーソル速度倍率 (デフォルト: 1.0、4K では 1.5〜2.0 推奨)
+
 [display]
 prefer_external = true       # 外部モニター優先 (HDMI/DP > 内蔵)
 auto_switch = true           # ホットプラグ時に自動切り替え

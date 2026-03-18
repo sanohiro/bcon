@@ -37,6 +37,8 @@ pub struct Config {
     pub terminal: TerminalConfig,
     /// Keyboard settings
     pub keyboard: KeyboardInputConfig,
+    /// Mouse settings
+    pub mouse: MouseConfig,
     /// DRM settings
     pub drm: DrmConfig,
     /// Display settings
@@ -212,6 +214,22 @@ impl Default for KeyboardInputConfig {
             xkb_variant: String::new(),
             xkb_options: String::new(),
         }
+    }
+}
+
+/// Mouse settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MouseConfig {
+    /// Mouse cursor speed multiplier (default: 1.0)
+    /// Values > 1.0 make the cursor faster, < 1.0 slower.
+    /// Recommended: 1.5–2.0 for 4K displays.
+    pub speed: f64,
+}
+
+impl Default for MouseConfig {
+    fn default() -> Self {
+        Self { speed: 1.0 }
     }
 }
 
@@ -405,6 +423,7 @@ impl Default for Config {
             colors: ColorsConfig::default(),
             terminal: TerminalConfig::default(),
             keyboard: KeyboardInputConfig::default(),
+            mouse: MouseConfig::default(),
             drm: DrmConfig::default(),
             display: DisplayOutputConfig::default(),
             notifications: NotificationConfig::default(),
@@ -1114,6 +1133,13 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # xkb_layout = "us"         # XKB keyboard layout (e.g., "us", "jp", "de")
 # xkb_variant = ""          # XKB layout variant (e.g., "dvorak", "nodeadkeys")
 # xkb_options = ""          # XKB options (e.g., "ctrl:nocaps", "compose:ralt")
+
+# =============================================================================
+# Mouse Settings (Optional)
+# =============================================================================
+# [mouse]
+# speed = 1.0                # Cursor speed multiplier (default: 1.0)
+#                            # Recommended: 1.5-2.0 for 4K displays
 
 # =============================================================================
 # Display Settings (Optional)
