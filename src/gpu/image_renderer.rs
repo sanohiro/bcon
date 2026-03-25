@@ -128,10 +128,10 @@ pub struct ImageRenderer {
     vao: glow::VertexArray,
     vbo: glow::Buffer,
     ebo: glow::Buffer,
-    /// Texture cache (key -> texture)
-    textures: HashMap<u64, glow::Texture>,
-    /// LRU order (most recently used at end)
-    lru_order: Vec<u64>,
+    /// Texture cache (key -> (texture, last_access_generation))
+    textures: HashMap<u64, (glow::Texture, u64)>,
+    /// Monotonic generation counter for LRU tracking
+    generation: u64,
     /// Draw queue
     draw_queue: Vec<DrawCall>,
 }
@@ -203,7 +203,7 @@ impl ImageRenderer {
                 vbo,
                 ebo,
                 textures: HashMap::new(),
-                lru_order: Vec::with_capacity(MAX_CACHED_TEXTURES),
+                generation: 0,
                 draw_queue: Vec::new(),
             })
         }
@@ -212,16 +212,21 @@ impl ImageRenderer {
     /// Upload image texture with explicit key.
     /// Use `image_key(pane_id, image_id)` to generate the key.
     pub fn upload_image(&mut self, gl: &glow::Context, key: u64, image: &TerminalImage) {
-        if self.textures.contains_key(&key) {
-            // Already cached - update LRU order
-            self.touch_lru(key);
+        self.generation += 1;
+        if let Some(entry) = self.textures.get_mut(&key) {
+            // Already cached - update LRU generation
+            entry.1 = self.generation;
             return;
         }
 
         // Evict oldest textures if cache is full
-        while self.textures.len() >= MAX_CACHED_TEXTURES && !self.lru_order.is_empty() {
-            let oldest_key = self.lru_order.remove(0);
-            if let Some(texture) = self.textures.remove(&oldest_key) {
+        while self.textures.len() >= MAX_CACHED_TEXTURES {
+            // Find the entry with the smallest generation (least recently used)
+            let oldest_key = match self.textures.iter().min_by_key(|(_, (_, gen))| *gen) {
+                Some((&k, _)) => k,
+                None => break,
+            };
+            if let Some((texture, _)) = self.textures.remove(&oldest_key) {
                 unsafe {
                     gl.delete_texture(texture);
                 }
@@ -277,8 +282,7 @@ impl ImageRenderer {
 
             gl.bind_texture(glow::TEXTURE_2D, None);
 
-            self.textures.insert(key, texture);
-            self.lru_order.push(key);
+            self.textures.insert(key, (texture, self.generation));
             info!(
                 "Image texture uploaded: key=0x{:x} {}x{} (cache: {}/{})",
                 key,
@@ -287,14 +291,6 @@ impl ImageRenderer {
                 self.textures.len(),
                 MAX_CACHED_TEXTURES
             );
-        }
-    }
-
-    /// Update LRU order (move key to end = most recently used)
-    fn touch_lru(&mut self, key: u64) {
-        if let Some(pos) = self.lru_order.iter().position(|&x| x == key) {
-            self.lru_order.remove(pos);
-            self.lru_order.push(key);
         }
     }
 
@@ -342,7 +338,7 @@ impl ImageRenderer {
             // Draw per image (cannot batch due to different textures)
             for call in &self.draw_queue {
                 let texture = match self.textures.get(&call.key) {
-                    Some(t) => *t,
+                    Some(&(t, _)) => t,
                     None => continue,
                 };
 
@@ -379,13 +375,9 @@ impl ImageRenderer {
 
     /// Delete texture
     pub fn remove_texture(&mut self, gl: &glow::Context, key: u64) {
-        if let Some(texture) = self.textures.remove(&key) {
+        if let Some((texture, _)) = self.textures.remove(&key) {
             unsafe {
                 gl.delete_texture(texture);
-            }
-            // Remove from LRU order
-            if let Some(pos) = self.lru_order.iter().position(|&x| x == key) {
-                self.lru_order.remove(pos);
             }
         }
     }
@@ -394,20 +386,19 @@ impl ImageRenderer {
     /// Images will be re-uploaded from terminal's image cache on next render
     pub fn invalidate_all(&mut self, gl: &glow::Context) {
         unsafe {
-            for texture in self.textures.values() {
-                gl.delete_texture(*texture);
+            for &(texture, _) in self.textures.values() {
+                gl.delete_texture(texture);
             }
         }
         self.textures.clear();
-        self.lru_order.clear();
         log::info!("ImageRenderer: all textures invalidated");
     }
 
     /// Release resources
     pub fn destroy(&self, gl: &glow::Context) {
         unsafe {
-            for texture in self.textures.values() {
-                gl.delete_texture(*texture);
+            for &(texture, _) in self.textures.values() {
+                gl.delete_texture(texture);
             }
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.vbo);
