@@ -1,0 +1,37 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: bcon
+Label: bcon
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: bcon apt repository
+Date: Sat, 28 Mar 2026 16:08:56 +0000
+MD5Sum:
+ aa3b080e55973f47a8b484e8c1bd668d 765 main/binary-amd64/Packages
+ 2e23cdab2e39617e08cb2af61028c7c6 534 main/binary-amd64/Packages.gz
+ 26b3a882768e7d69e57d2183e400888a 765 main/binary-arm64/Packages
+ 068856517ff91eec99625648f642bde2 536 main/binary-arm64/Packages.gz
+SHA256:
+ d9117558b0f5d1cfc247be2fa4c0d69071444462bfac3c7ba9c85865ad4d74fd 765 main/binary-amd64/Packages
+ f124dd58fb64a2d827d2c13d06891fd3c6d7d65c96e84c9cbe52ecb4c57bbf17 534 main/binary-amd64/Packages.gz
+ 6e864752fd312593268eb2fb78f618d01a2df580bae8b83afa2834a94648b1cf 765 main/binary-arm64/Packages
+ f59759c3254a2ed7d7ef0b222301f31dd1d155e2f68b5d59f600c7333d063606 536 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEEF38P8zCqxTq54YJmwUQK89zeK0kFAmnH/RgACgkQwUQK89ze
+K0kyPQ//ZreuFOnB5pytwnKCfIQj67hQ2JZAS2GgmJ62jAPa8rDHtv1DCV/CMLNZ
+eRv1p/gDRLgJ/LhV/JgAbsO8fIex1oIxvLj0jdUrI8x10xJJCD6PGdkAby8SOtGJ
+oYAgtqBZXnNYOl7op6/taqDR6OuMDLoVwKpQVveDOVPDLk8SiZC3VyEMbMlxGAFu
+XPqnAotX59hm6Z5slDEoPLDrlVq3pX+niQMtKxcVy8ZWz8q0EZpntgi3YyEok5P5
+MKJ1aMfWZ6cCXUWT0BJoZWzdjP0+RV7c4dOhExaHo8PiKqVqNLg6j346pcm4DYDQ
+KqT0eJqVUCA6DEWe/k6UW8r98aurY3XVU4f5gmDYuk8LmqinioTsf1cwDbxqmEOF
+EwSb8fbDoD6OnhMs/LYcrqWTdbz6AVydiLMd5XomAiqj+h7uaydojBG/jCNfdkQE
+0EKqGFyk3FbjGNeHV6eCY34xbikaWO50hECjFP8zbGnwukHvdbofpN5lyTbt5N26
+/Uw1cX480m/H5ICtzX8iBdHDtADl+GnnIvUwkH3+zW5bXqtZyijaxQZbf1cR3ahY
+k/Q/ACj/Sv6ZouXuQjrbmERTh0qGGxH+osMCd1cu2IWG5siOmd+6YbpcvhU17P08
+VRno0tbz0LocHqdh3+q4GUbdryUF0JvV4Tt6NIIbRU0jvdHnOUc=
+=0ML7
+-----END PGP SIGNATURE-----

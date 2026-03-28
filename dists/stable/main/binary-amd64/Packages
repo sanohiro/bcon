@@ -1,0 +1,18 @@
+Package: bcon
+Version: 1.1.1
+Architecture: amd64
+Maintainer: sanohiro <sanohiro@users.noreply.github.com>
+Depends: libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1, libfontconfig1, fonts-dejavu-core
+Filename: pool/main/b/bcon/bcon_amd64.deb
+Size: 2051060
+MD5sum: 4f6760e5736ffb187df53a87d9840e4a
+SHA1: d55de7066a6e62eae3d77a7f76b29fffd9b42314
+SHA256: c39eeaf837d6705814e01e3120a178cf380ee3359b4265f594ff6e51f242bdbd
+Section: utils
+Priority: optional
+Homepage: https://github.com/sanohiro/bcon
+Description: GPU-accelerated terminal emulator for Linux console
+ bcon brings modern terminal features directly to the Linux console.
+ GPU acceleration, True Color, Sixel/Kitty graphics, Japanese input
+ without X11/Wayland.
+
