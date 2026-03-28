@@ -13,7 +13,7 @@ Last updated: 2026-03-28
 | Temporary file | `t=t` | Yes | Yes | Yes | Yes |
 | Shared memory | `t=s` | Yes | Yes | Yes | Yes |
 
-Note: `t=f`, `t=t`, `t=s` require `[security] allow_kitty_remote = true` in bcon config.
+All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_remote = false` for hardening.
 
 ## Actions
 
