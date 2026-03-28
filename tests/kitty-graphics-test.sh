@@ -399,6 +399,52 @@ pause
 cleanup
 
 ########################################################################
+section "16. Scroll Tracking — Images Scroll With Text"
+########################################################################
+
+echo "  Placing landscape image, then printing many lines to scroll it off..."
+echo ""
+move 5 3
+send_img 160 "$IMG_LANDSCAPE"
+sleep 0.3
+
+# Print enough lines to scroll the image off screen
+move 20 1
+for i in $(seq 1 40); do
+    echo "  Scroll line $i — pushing image upward..."
+done
+sleep 0.3
+
+echo ""
+echo -e "  ${C_GREEN}Expected: Image has scrolled up with the text.${C_RESET}"
+echo -e "  ${C_GREEN}  Scroll back (Shift+PageUp) to verify the image is still visible.${C_RESET}"
+echo -e "  ${C_GREEN}  It should appear at the position where it was originally placed.${C_RESET}"
+pause
+cleanup
+
+########################################################################
+section "17. Overlay Image (C=1) Stays Fixed During Scroll"
+########################################################################
+
+echo "  Placing overlay image (C=1) at top, then scrolling..."
+move 3 50
+# Send with C=1 (do_not_move_cursor / overlay)
+printf '\033_Ga=T,i=170,f=100,C=1,q=2;%s\033\\' "$IMG_ICON"
+sleep 0.3
+
+# Scroll by printing lines
+for i in $(seq 1 30); do
+    echo "  Scroll line $i — overlay should stay fixed..."
+done
+sleep 0.3
+
+echo ""
+echo -e "  ${C_GREEN}Expected: Icon stays at fixed screen position (doesn't scroll).${C_RESET}"
+echo -e "  ${C_GREEN}  Text scrolls underneath it.${C_RESET}"
+pause
+cleanup
+
+########################################################################
 printf '\033[2J\033[H'
 section "All Tests Complete"
 ########################################################################
@@ -420,6 +466,8 @@ echo "    12. Chunked transfer (m=1/m=0)"
 echo "    13. Query (a=q)"
 echo "    14. Overwrite at same position"
 echo "    15. Rapid updates (same ID)"
+echo "    16. Scroll tracking (images scroll with text)"
+echo "    17. Overlay (C=1) stays fixed"
 echo ""
 echo "  Run 'reset' if display is corrupted."
 echo ""
