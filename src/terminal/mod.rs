@@ -992,6 +992,8 @@ impl Terminal {
                         }
                         _ => {}
                     }
+                    // Trigger redraw after image deletion
+                    self.grid.mark_all_dirty();
                 }
                 KittyAction::Display => {
                     if let Some(image) = self.images.get(id) {
