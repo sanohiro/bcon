@@ -83,8 +83,8 @@ const MAX_SCROLLBACK: usize = 10000;
 pub struct ImagePlacement {
     /// Image ID (corresponds to ImageRegistry ID)
     pub id: u32,
-    /// Placement row (grid coordinates)
-    pub row: usize,
+    /// Placement row (absolute: cursor_row + scrollback_total at placement time, or screen-relative for overlay)
+    pub row: u64,
     /// Placement column (grid coordinates)
     pub col: usize,
     /// Occupied cell width
@@ -536,6 +536,8 @@ pub struct Grid {
     pub current_hyperlink: Option<Arc<Hyperlink>>,
     /// Image placement list
     pub image_placements: Vec<ImagePlacement>,
+    /// Cumulative number of lines scrolled off the top (for absolute image positioning)
+    scrollback_total: u64,
 
     // ===== Character set state (SCS) =====
     /// G0 character set
@@ -656,6 +658,7 @@ impl Grid {
             bell_triggered: false,
             current_hyperlink: None,
             image_placements: Vec::new(),
+            scrollback_total: 0,
             charset_g0: Charset::Ascii,
             charset_g1: Charset::Ascii,
             active_charset: 0,
@@ -715,6 +718,11 @@ impl Grid {
 
     pub fn rows(&self) -> usize {
         self.rows
+    }
+
+    /// Cumulative scroll count for absolute image positioning
+    pub fn scrollback_total(&self) -> u64 {
+        self.scrollback_total
     }
 
     // ========== Dirty row tracking ==========
@@ -1476,38 +1484,34 @@ impl Grid {
         }
     }
 
-    /// Delete images overlapping specified row
+    /// Delete images overlapping specified row (screen-relative)
     /// Overlay images (C=1) are not removed by text/row operations
     fn remove_images_at_row(&mut self, row: usize) {
+        let abs_row = row as u64 + self.scrollback_total;
         self.image_placements.retain(|p| {
             if p.overlay {
                 return true;
             }
-            // Image range: p.row to p.row + p.height_cells - 1
-            let img_end = p.row + p.height_cells.saturating_sub(1);
-            // Keep if row is outside this range
-            row < p.row || row > img_end
+            let img_end = p.row + p.height_cells.saturating_sub(1) as u64;
+            abs_row < p.row || abs_row > img_end
         });
     }
 
-    /// Delete images overlapping specified cell range
+    /// Delete images overlapping specified cell range (screen-relative row)
     /// Overlay images (C=1) are not removed by text writes
     fn remove_images_at_cell(&mut self, row: usize, col: usize, width: usize) {
         if self.image_placements.is_empty() {
             return;
         }
+        let abs_row = row as u64 + self.scrollback_total;
         let col_end = col.saturating_add(width);
         self.image_placements.retain(|p| {
-            // Overlay images are not removed by text writes
             if p.overlay {
                 return true;
             }
-            // Image row range
-            let img_row_end = p.row + p.height_cells;
-            // Image col range
+            let img_row_end = p.row + p.height_cells as u64;
             let img_col_end = p.col + p.width_cells;
-            // Keep if no overlap
-            row >= img_row_end || row < p.row || col >= img_col_end || col_end <= p.col
+            abs_row >= img_row_end || abs_row < p.row || col >= img_col_end || col_end <= p.col
         });
     }
 
@@ -1575,24 +1579,36 @@ impl Grid {
             self.wrapped_lines[row] = false;
         }
 
-        // Adjust image placement rows (delete scrolled out ones)
-        // Overlay images (C=1) are not affected by scroll - they stay at fixed screen position
-        self.image_placements.retain_mut(|p| {
-            if p.overlay {
-                return true;
-            }
-            if p.row >= top && p.row <= bottom {
-                // Image at row r scrolls to row r - n
-                if p.row < top + n {
-                    // Image top is in the scrolled-out area - delete entirely
-                    // (simple approach: no cropping, avoids ghost images)
-                    return false;
+        // Adjust image placements for scroll
+        if top == 0 && bottom == self.rows - 1 {
+            // Full-screen scroll: increment absolute counter
+            // Non-overlay images use absolute coords, so no adjustment needed
+            self.scrollback_total += n as u64;
+            // Prune images beyond max_scrollback
+            let min_visible_abs = self.scrollback_total.saturating_sub(self.max_scrollback as u64);
+            self.image_placements.retain(|p| {
+                if p.overlay {
+                    return true;
                 }
-                // Image is below scrolled-out area, move up
-                p.row -= n;
-            }
-            true
-        });
+                p.row + p.height_cells as u64 > min_visible_abs
+            });
+        } else {
+            // Partial scroll region: adjust images within region using absolute coords
+            let abs_top = top as u64 + self.scrollback_total;
+            let abs_bottom = bottom as u64 + self.scrollback_total;
+            self.image_placements.retain_mut(|p| {
+                if p.overlay {
+                    return true;
+                }
+                if p.row >= abs_top && p.row <= abs_bottom {
+                    if p.row < abs_top + n as u64 {
+                        return false; // scrolled out of region
+                    }
+                    p.row -= n as u64;
+                }
+                true
+            });
+        }
 
         // Mark scroll region as dirty
         for row in top..=bottom {
@@ -1954,18 +1970,16 @@ impl Grid {
             self.wrapped_lines[row] = false;
         }
 
-        // Adjust image placement rows (delete scrolled out ones)
-        // Overlay images (C=1) are not affected by scroll
+        // Adjust image placements for scroll down (uses absolute coords)
+        let abs_top = top as u64 + self.scrollback_total;
+        let abs_bottom = bottom as u64 + self.scrollback_total;
         self.image_placements.retain_mut(|p| {
             if p.overlay {
                 return true;
             }
-            if p.row >= top && p.row <= bottom {
-                // Image at row r scrolls to row r + n
-                let new_row = p.row + n;
-                if new_row + p.height_cells > bottom + 1 {
-                    // Image would extend past scroll region bottom - delete entirely
-                    // (simple approach: no cropping, avoids ghost images)
+            if p.row >= abs_top && p.row <= abs_bottom {
+                let new_row = p.row + n as u64;
+                if new_row + p.height_cells as u64 > abs_bottom + 1 {
                     return false;
                 }
                 p.row = new_row;
@@ -2374,9 +2388,10 @@ impl Grid {
         if do_not_move_cursor {
             // C=1: place image at cursor position, do not move cursor
             // Overlay mode: text writes don't remove this image
+            // Overlay uses screen-relative row (doesn't scroll with text)
             let placement = ImagePlacement {
                 id,
-                row: self.cursor_row,
+                row: self.cursor_row as u64,
                 col: self.cursor_col,
                 width_cells,
                 height_cells,
@@ -2400,7 +2415,7 @@ impl Grid {
                 let start_row = self.rows.saturating_sub(height_cells);
                 let placement = ImagePlacement {
                     id,
-                    row: start_row,
+                    row: start_row as u64 + self.scrollback_total,
                     col: self.cursor_col,
                     width_cells,
                     height_cells,
@@ -2413,7 +2428,7 @@ impl Grid {
             } else {
                 let placement = ImagePlacement {
                     id,
-                    row: self.cursor_row,
+                    row: self.cursor_row as u64 + self.scrollback_total,
                     col: self.cursor_col,
                     width_cells,
                     height_cells,
@@ -2435,9 +2450,12 @@ impl Grid {
     #[allow(dead_code)]
     pub fn cleanup_image_placements(&mut self) {
         // Delete placements that are completely outside the visible area
+        let screen_bottom_abs = self.scrollback_total + self.rows as u64;
         self.image_placements.retain(|p| {
-            // Image is visible if its bottom edge is within screen bounds
-            p.row < self.rows
+            if p.overlay {
+                return true;
+            }
+            p.row < screen_bottom_abs
         });
     }
 

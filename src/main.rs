@@ -5414,10 +5414,16 @@ Make sure seatd/logind is running and you're on an active VT."
                     image_renderer.upload_image(gl, key, image);
                 }
                 // Drawing coordinates (accounting for scroll offset)
-                // When scrolling, grid rows shift down by scrollback_rows_shown
+                // Non-overlay images use absolute row coords; convert to screen-relative
+                // Overlay images use screen-relative row directly
                 let pane_rows = grid.rows();
-                let scrollback_rows_shown = term.scroll_offset.min(pane_rows) as isize;
-                let display_row = placement.row as isize + scrollback_rows_shown;
+                let display_row = if placement.overlay {
+                    placement.row as isize
+                } else {
+                    let scrollback_total = grid.scrollback_total();
+                    let scroll_offset = term.scroll_offset as u64;
+                    (placement.row as i64 - scrollback_total as i64 + scroll_offset as i64) as isize
+                };
                 if display_row + (placement.height_cells as isize) <= 0 {
                     continue; // Off-screen (above)
                 }

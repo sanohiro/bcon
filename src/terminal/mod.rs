@@ -959,35 +959,35 @@ impl Terminal {
                             }
                         }
                         'c' | 'C' => {
-                            // Delete at cursor position
-                            let row = self.grid.cursor_row;
+                            // Delete at cursor position (convert to absolute)
+                            let abs_row = self.grid.cursor_row as u64 + self.grid.scrollback_total();
                             let col = self.grid.cursor_col;
                             self.grid.image_placements.retain(|p| {
-                                !(row >= p.row && row < p.row + p.height_cells
+                                !(abs_row >= p.row && abs_row < p.row + p.height_cells as u64
                                   && col >= p.col && col < p.col + p.width_cells)
                             });
                         }
                         'p' | 'P' => {
-                            // Delete at specific cell (x=col, y=row, 1-based)
+                            // Delete at specific cell (x=col, y=row, 1-based, convert to absolute)
                             let col = params.x.saturating_sub(1) as usize;
-                            let row = params.y.saturating_sub(1) as usize;
+                            let abs_row = params.y.saturating_sub(1) as u64 + self.grid.scrollback_total();
                             self.grid.image_placements.retain(|p| {
-                                !(row >= p.row && row < p.row + p.height_cells
+                                !(abs_row >= p.row && abs_row < p.row + p.height_cells as u64
                                   && col >= p.col && col < p.col + p.width_cells)
                             });
                         }
                         'x' | 'X' => {
-                            // Delete at column
+                            // Delete at column (no row conversion needed)
                             let col = params.x.saturating_sub(1) as usize;
                             self.grid.image_placements.retain(|p| {
                                 !(col >= p.col && col < p.col + p.width_cells)
                             });
                         }
                         'y' | 'Y' => {
-                            // Delete at row
-                            let row = params.y.saturating_sub(1) as usize;
+                            // Delete at row (1-based, convert to absolute)
+                            let abs_row = params.y.saturating_sub(1) as u64 + self.grid.scrollback_total();
                             self.grid.image_placements.retain(|p| {
-                                !(row >= p.row && row < p.row + p.height_cells)
+                                !(abs_row >= p.row && abs_row < p.row + p.height_cells as u64)
                             });
                         }
                         _ => {}
