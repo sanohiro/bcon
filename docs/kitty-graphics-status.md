@@ -23,7 +23,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Transmit & display | `a=T` | Yes | Yes | Yes | Yes |
 | Display (put) | `a=p` | Yes | Yes | Yes | Yes |
 | Query | `a=q` | Yes | Yes | Yes | Yes |
-| **Delete** | `a=d` | **No** | Yes | Yes | Partial |
+| **Delete** | `a=d` | Yes (most targets) | Yes | Yes | Partial |
 | Frame data | `a=f` | Parsed, not processed | Yes | No | Yes |
 | Animation control | `a=a` | Parsed, not processed | Yes | No | Partial |
 | Compose frames | `a=c` | Parsed, not processed | Yes | No | Yes |
@@ -32,16 +32,16 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 
 | Target | Key | bcon | kitty | Ghostty | WezTerm |
 |--------|-----|------|-------|---------|---------|
-| All visible | `d=a/A` | **No** | Yes | Yes | Yes |
-| By image ID | `d=i/I` | **No** | Yes | Yes | Yes |
-| By image number | `d=n/N` | **No** | Yes | Yes | No |
-| At cursor position | `d=c/C` | **No** | Yes | Yes | No |
-| At cell coordinate | `d=p/P` | **No** | Yes | Yes | No |
-| By column | `d=x/X` | **No** | Yes | Yes | No |
-| By row | `d=y/Y` | **No** | Yes | Yes | No |
-| By z-index | `d=z/Z` | **No** | Yes | Yes | No |
+| All visible | `d=a/A` | Yes | Yes | Yes | Yes |
+| By image ID | `d=i/I` | Yes | Yes | Yes | Yes |
+| By image number | `d=n/N` | Yes | Yes | Yes | No |
+| At cursor position | `d=c/C` | Yes | Yes | Yes | No |
+| At cell coordinate | `d=p/P` | Yes | Yes | Yes | No |
+| By column | `d=x/X` | Yes | Yes | Yes | No |
+| By row | `d=y/Y` | Yes | Yes | Yes | No |
+| By z-index | `d=z/Z` | No (no z-order yet) | Yes | Yes | No |
 | By ID range | `d=r/R` | **No** | Yes | Yes | No |
-| Animation frames | `d=f/F` | **No** | Yes | Yes (no-op) | No |
+| Animation frames | `d=f/F` | No (no animation yet) | Yes | Yes (no-op) | No |
 
 ## Image Management
 
@@ -52,7 +52,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Z-order | **No** | Yes (3-pass) | Yes (3-layer) | Yes (z-index sort) |
 | Unicode placeholder | **No** | Yes (U+10EEEE) | Yes | No |
 | Storage limit | 128 textures | 320MB | 320MB | 320MB |
-| Screen clear (`ESC[2J`) clears images | **No** | Yes | Yes | Yes |
+| Screen clear (`ESC[2J`) clears images | Yes | Yes | Yes | Yes |
 
 ## Image Formats
 

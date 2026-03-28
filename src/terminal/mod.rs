@@ -935,18 +935,62 @@ impl Terminal {
 
             match action {
                 KittyAction::Delete => {
-                    if let Some(target) = params.delete_target {
-                        match target {
-                            'a' | 'A' => {
+                    // Default delete target is 'a' (all) per Kitty Graphics spec
+                    let target = params.delete_target.unwrap_or('a');
+                    let free_data = target.is_uppercase();
+                    match target {
+                        'a' | 'A' => {
+                            self.grid.image_placements.clear();
+                            if free_data {
                                 self.images.clear();
-                                self.grid.image_placements.clear();
                             }
-                            'i' | 'I' => {
-                                self.images.remove(id);
-                                self.grid.image_placements.retain(|p| p.id != id);
-                            }
-                            _ => {}
                         }
+                        'i' | 'I' => {
+                            self.grid.image_placements.retain(|p| p.id != id);
+                            if free_data {
+                                self.images.remove(id);
+                            }
+                        }
+                        'n' | 'N' => {
+                            // Delete by image number — bcon uses id as number
+                            self.grid.image_placements.retain(|p| p.id != id);
+                            if free_data {
+                                self.images.remove(id);
+                            }
+                        }
+                        'c' | 'C' => {
+                            // Delete at cursor position
+                            let row = self.grid.cursor_row;
+                            let col = self.grid.cursor_col;
+                            self.grid.image_placements.retain(|p| {
+                                !(row >= p.row && row < p.row + p.height_cells
+                                  && col >= p.col && col < p.col + p.width_cells)
+                            });
+                        }
+                        'p' | 'P' => {
+                            // Delete at specific cell (x=col, y=row, 1-based)
+                            let col = params.x.saturating_sub(1) as usize;
+                            let row = params.y.saturating_sub(1) as usize;
+                            self.grid.image_placements.retain(|p| {
+                                !(row >= p.row && row < p.row + p.height_cells
+                                  && col >= p.col && col < p.col + p.width_cells)
+                            });
+                        }
+                        'x' | 'X' => {
+                            // Delete at column
+                            let col = params.x.saturating_sub(1) as usize;
+                            self.grid.image_placements.retain(|p| {
+                                !(col >= p.col && col < p.col + p.width_cells)
+                            });
+                        }
+                        'y' | 'Y' => {
+                            // Delete at row
+                            let row = params.y.saturating_sub(1) as usize;
+                            self.grid.image_placements.retain(|p| {
+                                !(row >= p.row && row < p.row + p.height_cells)
+                            });
+                        }
+                        _ => {}
                     }
                 }
                 KittyAction::Display => {
