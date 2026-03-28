@@ -2,7 +2,7 @@
 
 Tracking bcon's implementation of the [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) compared to other terminals.
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
 
 ## Transfer Modes
 
