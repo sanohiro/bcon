@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-03-29
+
+### Fixed
+- Kitty Graphics image deletion (`a=d`) now works — default target `d=a` was broken, screen wasn't redrawn after deletion
+- Kitty Graphics texture cache LRU eviction replaced O(n) Vec with O(1) generation counter — fixes freeze with rapid image updates (e.g., Xkitty)
+
+### Added
+- Kitty Graphics delete targets: `d=a/A`, `d=i/I`, `d=n/N`, `d=c/C`, `d=p/P`, `d=x/X`, `d=y/Y` (uppercase frees image data, lowercase removes placements only)
+- Kitty Graphics Protocol implementation status doc (`docs/kitty-graphics-status.md`)
+- Kitty Graphics test suite (`tests/kitty-graphics-test.sh`)
+
 ## [1.1.0] - 2026-03-18
 
 ### Added
