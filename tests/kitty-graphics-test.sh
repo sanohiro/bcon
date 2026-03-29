@@ -545,6 +545,95 @@ pause
 cleanup
 
 ########################################################################
+section "22. Source Rectangle (x, y, w, h)"
+########################################################################
+
+echo "  Displaying top-left quarter of landscape image..."
+echo ""
+
+# Send landscape, then display with source rect (top-left quarter: 160x120 from 320x240)
+tx_img 220 "$IMG_LANDSCAPE"
+sleep 0.1
+move 5 3
+# a=p with source rect: x=0, y=0, w=160, h=120 (top-left quarter)
+printf '\033_Ga=p,i=220,x=0,y=0,w=160,h=120,q=2\033\\'
+
+move 14 3
+echo -e "  ${C_GREEN}Expected: Only the top-left quarter of landscape (sky + sun)${C_RESET}"
+pause
+cleanup
+
+########################################################################
+section "23. Cell Offset (X, Y)"
+########################################################################
+
+echo "  Placing image with pixel offset within cell..."
+echo ""
+
+move 5 5
+# Place with X=8, Y=4 pixel offset within the cell
+printf '\033_Ga=T,i=230,f=100,X=8,Y=4,q=2;%s\033\\' "$IMG_ICON"
+sleep 0.2
+move 5 20
+# Same image without offset for comparison
+send_img 231 "$IMG_ICON"
+
+move 12 3
+echo -e "  ${C_GREEN}Expected: Left icon shifted right+down by a few pixels${C_RESET}"
+echo -e "  ${C_GREEN}  compared to right icon at normal grid position${C_RESET}"
+pause
+cleanup
+
+########################################################################
+section "24. Relative Placement (P, Q, H, V)"
+########################################################################
+
+echo "  Placing parent image, then child relative to it..."
+echo ""
+
+# Parent image with placement_id=1
+move 5 10
+printf '\033_Ga=T,i=240,p=1,f=100,q=2;%s\033\\' "$IMG_GRADIENT"
+sleep 0.2
+
+# Child image relative to parent: H=20 cols right, V=2 rows down
+printf '\033_Ga=p,i=241,P=240,H=20,V=2,q=2\033\\'
+# We need image 241 to exist first
+tx_img 241 "$IMG_ICON"
+sleep 0.1
+printf '\033_Ga=p,i=241,P=240,H=20,V=2,q=2\033\\'
+
+move 16 3
+echo -e "  ${C_GREEN}Expected: Gradient at (5,10), icon 20 cols right and 2 rows down${C_RESET}"
+pause
+cleanup
+
+########################################################################
+section "25. Delete by ID Range (d=r)"
+########################################################################
+
+move 4 5
+send_img 250 "$IMG_RED"
+move 4 20
+send_img 251 "$IMG_BLUE"
+move 4 35
+send_img 252 "$IMG_GREEN"
+move 4 50
+send_img 253 "$IMG_ICON"
+sleep 0.2
+
+move 10 3
+echo "  Red(250), Blue(251), Green(252), Icon(253). Deleting range 251-252..."
+pause
+
+printf '\033_Ga=d,d=r,x=251,y=252,q=2\033\\'
+sleep 0.1
+move 11 3
+echo -e "  ${C_GREEN}Expected: Blue and Green gone, Red and Icon remain${C_RESET}"
+pause
+cleanup
+
+########################################################################
 printf '\033[2J\033[H'
 section "All Tests Complete"
 ########################################################################
@@ -572,6 +661,10 @@ echo "    18. Z-order: image below text (z<0)"
 echo "    19. Z-order: image above text (z>=0)"
 echo "    20. Z-order: mixed layers"
 echo "    21. Delete by z-index (d=z)"
+echo "    22. Source rectangle (x,y,w,h)"
+echo "    23. Cell offset (X,Y)"
+echo "    24. Relative placement (P,Q,H,V)"
+echo "    25. Delete by ID range (d=r)"
 echo ""
 echo "  Run 'reset' if display is corrupted."
 echo ""
