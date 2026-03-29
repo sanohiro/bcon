@@ -97,6 +97,8 @@ pub struct ImagePlacement {
     pub pixel_height: u32,
     /// Overlay mode (C=1): image is not removed by text writes
     pub overlay: bool,
+    /// Z-index for layering (negative = below text, positive/zero = above text)
+    pub z: i32,
 }
 
 /// Text color
@@ -2357,6 +2359,7 @@ impl Grid {
         do_not_move_cursor: bool,
         display_cols: u32,
         display_rows: u32,
+        z_index: i32,
     ) {
         if cell_width == 0 || cell_height == 0 {
             log::warn!("place_image: cell size not set, skipping placement");
@@ -2398,6 +2401,7 @@ impl Grid {
                 pixel_width,
                 pixel_height,
                 overlay: true,
+                z: z_index,
             };
             self.image_placements.push(placement);
         } else {
@@ -2422,6 +2426,7 @@ impl Grid {
                     pixel_width,
                     pixel_height,
                     overlay: false,
+                    z: z_index,
                 };
                 self.image_placements.push(placement);
                 self.cursor_row = self.rows - 1;
@@ -2435,6 +2440,7 @@ impl Grid {
                     pixel_width,
                     pixel_height,
                     overlay: false,
+                    z: z_index,
                 };
                 self.image_placements.push(placement);
                 self.cursor_row += height_cells;

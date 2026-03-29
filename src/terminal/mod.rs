@@ -990,6 +990,22 @@ impl Terminal {
                                 !(abs_row >= p.row && abs_row < p.row + p.height_cells as u64)
                             });
                         }
+                        'z' | 'Z' => {
+                            // Delete by z-index
+                            let z = params.z_index;
+                            self.grid.image_placements.retain(|p| p.z != z);
+                        }
+                        'q' | 'Q' => {
+                            // Delete at specific cell + z-index
+                            let col = params.x.saturating_sub(1) as usize;
+                            let abs_row = params.y.saturating_sub(1) as u64 + self.grid.scrollback_total();
+                            let z = params.z_index;
+                            self.grid.image_placements.retain(|p| {
+                                !(abs_row >= p.row && abs_row < p.row + p.height_cells as u64
+                                  && col >= p.col && col < p.col + p.width_cells
+                                  && p.z == z)
+                            });
+                        }
                         _ => {}
                     }
                     // Trigger redraw after image deletion
@@ -1006,6 +1022,7 @@ impl Terminal {
                             no_cursor_move,
                             display_cols,
                             display_rows,
+                            params.z_index,
                         );
                     }
                 }
@@ -1097,6 +1114,7 @@ impl Terminal {
                         no_cursor_move,
                         display_cols,
                         display_rows,
+                        params.z_index,
                     );
                 }
 

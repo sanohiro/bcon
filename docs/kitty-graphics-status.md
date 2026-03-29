@@ -39,7 +39,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | At cell coordinate | `d=p/P` | Yes | Yes | Yes | No |
 | By column | `d=x/X` | Yes | Yes | Yes | No |
 | By row | `d=y/Y` | Yes | Yes | Yes | No |
-| By z-index | `d=z/Z` | No (no z-order yet) | Yes | Yes | No |
+| By z-index | `d=z/Z` | Yes | Yes | Yes | No |
 | By ID range | `d=r/R` | **No** | Yes | Yes | No |
 | Animation frames | `d=f/F` | No (no animation yet) | Yes | Yes (no-op) | No |
 
@@ -49,7 +49,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 |---------|------|-------|---------|---------|
 | Storage model | Texture cache (HashMap) | Out-of-band (verstable hashmap) | Out-of-band (Pin tracking) | Cell-attached |
 | Scroll tracking | Yes (absolute row) | Yes (row offset) | Yes (Pin) | Yes (implicit via cells) |
-| Z-order | **No** | Yes (3-pass) | Yes (3-layer) | Yes (z-index sort) |
+| Z-order | Yes (2-pass) | Yes (3-pass) | Yes (3-layer) | Yes (z-index sort) |
 | Unicode placeholder | **No** | Yes (U+10EEEE) | Yes | No |
 | Storage limit | 128 textures | 320MB | 320MB | 320MB |
 | Screen clear (`ESC[2J`) clears images | Yes | Yes | Yes | Yes |

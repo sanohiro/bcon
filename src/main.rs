@@ -5380,17 +5380,7 @@ Make sure seatd/logind is running and you're on an active VT."
         // Text cursor and mouse cursor are drawn after FBO blit (outside FBO cache)
         // to avoid cursor trails in cached content
 
-        // === Flush text rendering (grid + preedit) ===
-        glyph_atlas.upload_if_dirty(gl);
-        text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
-
-        // === Pass 1.5: Emoji rendering (after text, so emoji shows on top of selection) ===
-        // text_renderer disables blending for LCD compositing, so emoji must be drawn after
-        emoji_atlas.upload_if_dirty(gl);
-        emoji_renderer.flush(gl, &emoji_atlas, screen_w, screen_h);
-
-        // === Pass 3: Sixel/Kitty image rendering (after text+emoji, so images overlay text) ===
-        // Re-upload textures for images whose data was updated (same ID, new content)
+        // === Image texture management ===
         let pane_num = render_pane_id.0;
         for dirty_id in &term.dirty_image_ids {
             let key = gpu::image_key(pane_num, *dirty_id);
@@ -5398,44 +5388,86 @@ Make sure seatd/logind is running and you're on an active VT."
                 image_renderer.remove_texture(gl, key);
             }
         }
-        image_renderer.begin();
         if !grid.image_placements.is_empty() {
             trace!(
                 "Image render: {} placements for pane {:?}",
                 grid.image_placements.len(),
                 render_pane_id
             );
-        }
-        for placement in &grid.image_placements {
-            if let Some(image) = term.images.get(placement.id) {
-                let key = gpu::image_key(pane_num, placement.id);
-                // Upload texture if not already uploaded
-                if !image_renderer.has_texture(key) {
-                    image_renderer.upload_image(gl, key, image);
+            // Upload all image textures
+            for placement in &grid.image_placements {
+                if let Some(image) = term.images.get(placement.id) {
+                    let key = gpu::image_key(pane_num, placement.id);
+                    if !image_renderer.has_texture(key) {
+                        image_renderer.upload_image(gl, key, image);
+                    }
                 }
-                // Drawing coordinates (accounting for scroll offset)
-                // Non-overlay images use absolute row coords; convert to screen-relative
-                // Overlay images use screen-relative row directly
-                let pane_rows = grid.rows();
-                let display_row = if placement.overlay {
-                    placement.row as isize
-                } else {
-                    let scrollback_total = grid.scrollback_total();
-                    let scroll_offset = term.scroll_offset as u64;
-                    (placement.row as i64 - scrollback_total as i64 + scroll_offset as i64) as isize
-                };
-                if display_row + (placement.height_cells as isize) <= 0 {
-                    continue; // Off-screen (above)
-                }
-                if display_row >= pane_rows as isize {
-                    continue; // Off-screen (below)
-                }
-                let x = margin_x + placement.col as f32 * cell_w;
-                let y = margin_y + display_row as f32 * cell_h;
-                let draw_w = placement.width_cells as f32 * cell_w;
-                let draw_h = placement.height_cells as f32 * cell_h;
-                image_renderer.draw(key, x, y, draw_w, draw_h);
             }
+        }
+
+        // === Z-order pass 1: Images with z < 0 (below text) ===
+        image_renderer.begin();
+        for placement in &grid.image_placements {
+            if placement.z >= 0 {
+                continue;
+            }
+            if term.images.get(placement.id).is_none() {
+                continue;
+            }
+            let pane_rows = grid.rows();
+            let display_row = if placement.overlay {
+                placement.row as isize
+            } else {
+                let scrollback_total = grid.scrollback_total();
+                let scroll_offset = term.scroll_offset as u64;
+                (placement.row as i64 - scrollback_total as i64 + scroll_offset as i64) as isize
+            };
+            if display_row + (placement.height_cells as isize) <= 0 || display_row >= pane_rows as isize {
+                continue;
+            }
+            let key = gpu::image_key(pane_num, placement.id);
+            let x = margin_x + placement.col as f32 * cell_w;
+            let y = margin_y + display_row as f32 * cell_h;
+            let draw_w = placement.width_cells as f32 * cell_w;
+            let draw_h = placement.height_cells as f32 * cell_h;
+            image_renderer.draw(key, x, y, draw_w, draw_h);
+        }
+        image_renderer.flush(gl, screen_w, screen_h);
+
+        // === Flush text rendering (grid + preedit) ===
+        glyph_atlas.upload_if_dirty(gl);
+        text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
+
+        // === Emoji rendering (after text) ===
+        emoji_atlas.upload_if_dirty(gl);
+        emoji_renderer.flush(gl, &emoji_atlas, screen_w, screen_h);
+
+        // === Z-order pass 2: Images with z >= 0 (above text) ===
+        image_renderer.begin();
+        for placement in &grid.image_placements {
+            if placement.z < 0 {
+                continue;
+            }
+            if term.images.get(placement.id).is_none() {
+                continue;
+            }
+            let pane_rows = grid.rows();
+            let display_row = if placement.overlay {
+                placement.row as isize
+            } else {
+                let scrollback_total = grid.scrollback_total();
+                let scroll_offset = term.scroll_offset as u64;
+                (placement.row as i64 - scrollback_total as i64 + scroll_offset as i64) as isize
+            };
+            if display_row + (placement.height_cells as isize) <= 0 || display_row >= pane_rows as isize {
+                continue;
+            }
+            let key = gpu::image_key(pane_num, placement.id);
+            let x = margin_x + placement.col as f32 * cell_w;
+            let y = margin_y + display_row as f32 * cell_h;
+            let draw_w = placement.width_cells as f32 * cell_w;
+            let draw_h = placement.height_cells as f32 * cell_h;
+            image_renderer.draw(key, x, y, draw_w, draw_h);
         }
         image_renderer.flush(gl, screen_w, screen_h);
 
