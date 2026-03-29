@@ -1114,7 +1114,7 @@ impl Terminal {
                         no_cursor_move,
                         display_cols,
                         display_rows,
-                        params.z_index,
+                        kitty_img.z_index,
                     );
                 }
 

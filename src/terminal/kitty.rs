@@ -80,6 +80,8 @@ pub struct KittyImage {
     pub display_cols: u32,
     /// Display rows (r= parameter, 0 = auto-calculate from pixel size)
     pub display_rows: u32,
+    /// Z-index for layering
+    pub z_index: i32,
 }
 
 /// Frame data result from a=f action
@@ -585,6 +587,7 @@ impl KittyDecoder {
             do_not_move_cursor: params.do_not_move_cursor,
             display_cols: params.cols,
             display_rows: params.rows,
+            z_index: params.z_index,
         }))
     }
 

@@ -735,6 +735,7 @@ impl<'a> Perform for Performer<'a> {
                                 false, // Sixel always moves cursor
                                 0,     // No explicit display cols
                                 0,     // No explicit display rows
+                                0,     // Sixel has no z-index
                             );
                         }
                     }

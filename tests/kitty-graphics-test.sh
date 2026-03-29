@@ -445,6 +445,106 @@ pause
 cleanup
 
 ########################################################################
+section "18. Z-order — Image Below Text (z < 0)"
+########################################################################
+
+echo "  Placing image with z=-1 (below text), then writing text over it..."
+echo ""
+
+# Place image with z=-1 (below text)
+move 5 5
+printf '\033_Ga=T,i=180,f=100,z=-1,q=2;%s\033\\' "$IMG_GRADIENT"
+sleep 0.3
+
+# Write text over the image area
+move 6 8
+echo -e "${C_BOLD}This text should be ON TOP of the image${C_RESET}"
+move 7 8
+echo -e "${C_BOLD}The gradient should be visible behind it${C_RESET}"
+
+move 15 3
+echo -e "  ${C_GREEN}Expected: Gradient image visible BEHIND the text${C_RESET}"
+echo -e "  ${C_GREEN}  Text is readable on top of the image${C_RESET}"
+pause
+cleanup
+
+########################################################################
+section "19. Z-order — Image Above Text (z >= 0, default)"
+########################################################################
+
+echo "  Writing text first, then placing image with z=0 (above text)..."
+echo ""
+
+# Write text first
+move 5 5
+echo "  This text should be HIDDEN by the image"
+move 6 5
+echo "  The image covers the text completely"
+
+# Place image on top with default z=0
+move 5 5
+send_img 190 "$IMG_CHECKER"
+sleep 0.3
+
+move 12 3
+echo -e "  ${C_GREEN}Expected: Checkerboard covers the text (image is on top)${C_RESET}"
+pause
+cleanup
+
+########################################################################
+section "20. Z-order — Mixed Layers"
+########################################################################
+
+echo "  Placing background image (z=-1), text, then foreground image (z=1)..."
+echo ""
+
+# Background image (z=-1, below text)
+move 4 3
+printf '\033_Ga=T,i=200,f=100,z=-1,q=2;%s\033\\' "$IMG_LANDSCAPE"
+sleep 0.2
+
+# Text in the middle layer
+move 6 5
+echo -e "${C_BOLD}Text layer — above background, below foreground${C_RESET}"
+
+# Foreground image (z=1, above text)
+move 8 40
+printf '\033_Ga=T,i=201,f=100,z=1,q=2;%s\033\\' "$IMG_ICON"
+sleep 0.2
+
+move 16 3
+echo -e "  ${C_GREEN}Expected: 3 layers visible:${C_RESET}"
+echo -e "  ${C_GREEN}  1. Landscape behind text (z=-1)${C_RESET}"
+echo -e "  ${C_GREEN}  2. Text in the middle${C_RESET}"
+echo -e "  ${C_GREEN}  3. Icon on top of everything (z=1)${C_RESET}"
+pause
+cleanup
+
+########################################################################
+section "21. Delete by Z-index (d=z)"
+########################################################################
+
+# Place images at different z-indices
+move 4 5
+printf '\033_Ga=T,i=210,f=100,z=-1,q=2;%s\033\\' "$IMG_RED"
+move 4 20
+printf '\033_Ga=T,i=211,f=100,z=0,q=2;%s\033\\' "$IMG_BLUE"
+move 4 35
+printf '\033_Ga=T,i=212,f=100,z=1,q=2;%s\033\\' "$IMG_GREEN"
+sleep 0.2
+
+move 10 3
+echo "  Red(z=-1), Blue(z=0), Green(z=1). Deleting z=0 with d=z..."
+pause
+
+printf '\033_Ga=d,d=z,z=0,q=2\033\\'
+sleep 0.1
+move 11 3
+echo -e "  ${C_GREEN}Expected: Blue(z=0) gone, Red(z=-1) and Green(z=1) remain${C_RESET}"
+pause
+cleanup
+
+########################################################################
 printf '\033[2J\033[H'
 section "All Tests Complete"
 ########################################################################
@@ -468,6 +568,10 @@ echo "    14. Overwrite at same position"
 echo "    15. Rapid updates (same ID)"
 echo "    16. Scroll tracking (images scroll with text)"
 echo "    17. Overlay (C=1) stays fixed"
+echo "    18. Z-order: image below text (z<0)"
+echo "    19. Z-order: image above text (z>=0)"
+echo "    20. Z-order: mixed layers"
+echo "    21. Delete by z-index (d=z)"
 echo ""
 echo "  Run 'reset' if display is corrupted."
 echo ""
