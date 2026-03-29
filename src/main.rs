@@ -4480,6 +4480,58 @@ Make sure seatd/logind is running and you're on an active VT."
                         continue;
                     }
                 }
+                // Unicode placeholder (U+10EEEE) — render image tile instead of glyph
+                if first_ch == terminal::grid::IMAGE_PLACEHOLDER_CHAR {
+                    // Decode image ID from foreground color (24-bit RGB)
+                    let image_id = match cell.fg {
+                        terminal::grid::Color::Rgb(r, g, b) => {
+                            ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+                        }
+                        terminal::grid::Color::Indexed(idx) => idx as u32,
+                        _ => 0,
+                    };
+                    // Decode placement ID from underline color
+                    let _placement_id = match cell.underline_color {
+                        Some(terminal::grid::Color::Rgb(r, g, b)) => {
+                            ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+                        }
+                        _ => 0,
+                    };
+                    // Decode row/col from diacritical marks
+                    let mut chars = grapheme.chars();
+                    chars.next(); // skip U+10EEEE
+                    let img_row = chars.next()
+                        .and_then(terminal::grid::diacritical_to_index)
+                        .unwrap_or(0);
+                    let img_col = chars.next()
+                        .and_then(terminal::grid::diacritical_to_index)
+                        .unwrap_or(0);
+
+                    // Find the image and draw the appropriate tile
+                    if image_id > 0 {
+                        if let Some(image) = term.images.get(image_id) {
+                            let key = gpu::image_key(pane_num, image_id);
+                            if !image_renderer.has_texture(key) {
+                                image_renderer.upload_image(gl, key, image);
+                            }
+                            // Find virtual placement for size info
+                            let vp = grid.image_placements.iter().find(|p| {
+                                p.id == image_id && p.is_virtual
+                            });
+                            let (total_cols, total_rows) = vp
+                                .map(|p| (p.width_cells.max(1), p.height_cells.max(1)))
+                                .unwrap_or((1, 1));
+                            // Calculate source rectangle (UV coords)
+                            let u0 = img_col as f32 / total_cols as f32;
+                            let v0 = img_row as f32 / total_rows as f32;
+                            let u1 = (img_col + 1) as f32 / total_cols as f32;
+                            let v1 = (img_row + 1) as f32 / total_rows as f32;
+                            image_renderer.draw_uv(key, x, y, cell_w, cell_h, u0, v0, u1, v1);
+                        }
+                    }
+                    continue;
+                }
+
                 if !grapheme.is_empty() && grapheme != " " && !in_ligature_continuation {
                     // Handle INVERSE attribute (SGR 7): swap fg and bg (is_inverse defined above)
                     let mut fg = if is_inverse {

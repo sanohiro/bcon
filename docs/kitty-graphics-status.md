@@ -50,7 +50,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Storage model | Texture cache (HashMap) | Out-of-band (verstable hashmap) | Out-of-band (Pin tracking) | Cell-attached |
 | Scroll tracking | Yes (absolute row) | Yes (row offset) | Yes (Pin) | Yes (implicit via cells) |
 | Z-order | Yes (2-pass) | Yes (3-pass) | Yes (3-layer) | Yes (z-index sort) |
-| Unicode placeholder | **No** | Yes (U+10EEEE) | Yes | No |
+| Unicode placeholder | Yes (U+10EEEE) | Yes | Yes | No |
 | Storage limit | 128 textures | 320MB | 320MB | 320MB |
 | Screen clear (`ESC[2J`) clears images | Yes | Yes | Yes | Yes |
 

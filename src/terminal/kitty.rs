@@ -82,6 +82,10 @@ pub struct KittyImage {
     pub display_rows: u32,
     /// Z-index for layering
     pub z_index: i32,
+    /// Unicode virtual placement (U=1)
+    pub unicode_placement: bool,
+    /// Placement ID (p)
+    pub placement_id: u32,
 }
 
 /// Frame data result from a=f action
@@ -288,6 +292,10 @@ pub struct KittyParams {
     pub bgcolor: u32,
     /// Do not move cursor (C=1 for display actions)
     pub do_not_move_cursor: bool,
+    /// Unicode virtual placement (U=1)
+    pub unicode_placement: bool,
+    /// Placement ID (p)
+    pub placement_id: u32,
 }
 
 /// Kitty decoder
@@ -470,6 +478,13 @@ impl KittyDecoder {
                         // C=1 also means "do not move cursor" for display actions
                         self.params.do_not_move_cursor = v == 1;
                     }
+                    "U" => {
+                        let v: u8 = value.parse().unwrap_or(0);
+                        self.params.unicode_placement = v == 1;
+                    }
+                    "p" => {
+                        self.params.placement_id = value.parse().unwrap_or(0);
+                    }
                     _ => {
                         // For animation, 'c' also means other_frame_number
                         if key == "c" {
@@ -588,6 +603,8 @@ impl KittyDecoder {
             display_cols: params.cols,
             display_rows: params.rows,
             z_index: params.z_index,
+            unicode_placement: params.unicode_placement,
+            placement_id: params.placement_id,
         }))
     }
 

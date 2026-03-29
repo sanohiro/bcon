@@ -1094,7 +1094,26 @@ impl Terminal {
                     self.grid.mark_all_dirty();
                 }
                 KittyAction::Display => {
-                    if let Some(image) = self.images.get(id) {
+                    if params.unicode_placement {
+                        // U=1: Create virtual placement (not rendered directly,
+                        // rendered via U+10EEEE characters in the text grid)
+                        if let Some(image) = self.images.get(id) {
+                            let placement = terminal::grid::ImagePlacement {
+                                id,
+                                row: 0,
+                                col: 0,
+                                width_cells: display_cols.max(1) as usize,
+                                height_cells: display_rows.max(1) as usize,
+                                pixel_width: image.width,
+                                pixel_height: image.height,
+                                overlay: false,
+                                z: params.z_index,
+                                is_virtual: true,
+                                placement_id: params.placement_id,
+                            };
+                            self.grid.image_placements.push(placement);
+                        }
+                    } else if let Some(image) = self.images.get(id) {
                         self.grid.place_image(
                             id,
                             image.width,

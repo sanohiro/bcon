@@ -99,6 +99,41 @@ pub struct ImagePlacement {
     pub overlay: bool,
     /// Z-index for layering (negative = below text, positive/zero = above text)
     pub z: i32,
+    /// Virtual placement for Unicode placeholder (U+10EEEE)
+    pub is_virtual: bool,
+    /// Placement ID (for Unicode placeholder matching)
+    pub placement_id: u32,
+}
+
+/// Kitty Graphics Unicode placeholder character
+pub const IMAGE_PLACEHOLDER_CHAR: char = '\u{10EEEE}';
+
+/// Diacritical marks used for Unicode placeholder row/col encoding.
+/// These are combining characters with class 230 (above) from Unicode 6.0.0.
+/// Index in this table = the row/column number.
+const PLACEHOLDER_DIACRITICS: &[char] = &[
+    '\u{0305}', '\u{030D}', '\u{030E}', '\u{0310}', '\u{0312}', '\u{033D}', '\u{033E}',
+    '\u{033F}', '\u{0346}', '\u{034A}', '\u{034B}', '\u{034C}', '\u{0350}', '\u{0351}',
+    '\u{0352}', '\u{0357}', '\u{035B}', '\u{0363}', '\u{0364}', '\u{0365}', '\u{0366}',
+    '\u{0367}', '\u{0368}', '\u{0369}', '\u{036A}', '\u{036B}', '\u{036C}', '\u{036D}',
+    '\u{036E}', '\u{036F}', '\u{0483}', '\u{0484}', '\u{0485}', '\u{0486}', '\u{0592}',
+    '\u{0593}', '\u{0594}', '\u{0595}', '\u{0597}', '\u{0598}', '\u{0599}', '\u{059C}',
+    '\u{059D}', '\u{059E}', '\u{059F}', '\u{05A0}', '\u{05A1}', '\u{05A8}', '\u{05A9}',
+    '\u{05AB}', '\u{05AC}', '\u{05AF}', '\u{05C4}', '\u{0610}', '\u{0611}', '\u{0612}',
+    '\u{0613}', '\u{0614}', '\u{0615}', '\u{0616}', '\u{0617}', '\u{0657}', '\u{0658}',
+    '\u{0659}', '\u{065A}', '\u{065B}', '\u{065D}', '\u{065E}', '\u{06D6}', '\u{06D7}',
+    '\u{06D8}', '\u{06D9}', '\u{06DA}', '\u{06DB}', '\u{06DC}', '\u{06DF}', '\u{06E0}',
+    '\u{06E1}', '\u{06E2}', '\u{06E4}', '\u{06E7}', '\u{06E8}', '\u{06EB}', '\u{06EC}',
+    '\u{0730}', '\u{0731}', '\u{0732}', '\u{0733}', '\u{0734}', '\u{0735}', '\u{0736}',
+    '\u{0737}', '\u{0738}', '\u{0739}', '\u{073A}', '\u{073B}', '\u{073C}', '\u{073D}',
+    '\u{073E}', '\u{073F}', '\u{0740}', '\u{0741}', '\u{0743}', '\u{0744}', '\u{0745}',
+    '\u{0746}', '\u{0747}', '\u{0748}', '\u{0749}', '\u{074A}',
+];
+
+/// Decode a diacritical mark to its index in the placeholder table.
+/// Returns None if the character is not a recognized placeholder diacritical.
+pub fn diacritical_to_index(ch: char) -> Option<usize> {
+    PLACEHOLDER_DIACRITICS.iter().position(|&c| c == ch)
 }
 
 /// Text color
@@ -2402,6 +2437,8 @@ impl Grid {
                 pixel_height,
                 overlay: true,
                 z: z_index,
+                is_virtual: false,
+                placement_id: 0,
             };
             self.image_placements.push(placement);
         } else {

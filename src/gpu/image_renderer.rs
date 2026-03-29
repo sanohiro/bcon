@@ -117,6 +117,11 @@ struct DrawCall {
     w: f32,
     /// Draw height (pixels)
     h: f32,
+    /// UV coordinates (source rectangle within texture, 0.0-1.0)
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
 }
 
 /// Image renderer
@@ -304,12 +309,17 @@ impl ImageRenderer {
         self.draw_queue.clear();
     }
 
-    /// Add image to draw queue
+    /// Add image to draw queue (full texture)
     pub fn draw(&mut self, key: u64, x: f32, y: f32, w: f32, h: f32) {
+        self.draw_uv(key, x, y, w, h, 0.0, 0.0, 1.0, 1.0);
+    }
+
+    /// Add image to draw queue with UV coordinates (texture sub-region)
+    pub fn draw_uv(&mut self, key: u64, x: f32, y: f32, w: f32, h: f32, u0: f32, v0: f32, u1: f32, v1: f32) {
         if self.draw_queue.len() >= MAX_IMAGES {
             return;
         }
-        self.draw_queue.push(DrawCall { key, x, y, w, h });
+        self.draw_queue.push(DrawCall { key, x, y, w, h, u0, v0, u1, v1 });
     }
 
     /// Flush draw queue
@@ -349,12 +359,13 @@ impl ImageRenderer {
                 let h = call.h;
 
                 // 4 vertices: top-left, top-right, bottom-right, bottom-left
+                let (u0, v0, u1, v1) = (call.u0, call.v0, call.u1, call.v1);
                 #[rustfmt::skip]
                 let vertices: [f32; 16] = [
-                    x,     y,     0.0, 0.0,  // top-left
-                    x + w, y,     1.0, 0.0,  // top-right
-                    x + w, y + h, 1.0, 1.0,  // bottom-right
-                    x,     y + h, 0.0, 1.0,  // bottom-left
+                    x,     y,     u0, v0,  // top-left
+                    x + w, y,     u1, v0,  // top-right
+                    x + w, y + h, u1, v1,  // bottom-right
+                    x,     y + h, u0, v1,  // bottom-left
                 ];
 
                 let vertex_bytes = bytemuck_cast_slice(&vertices);
