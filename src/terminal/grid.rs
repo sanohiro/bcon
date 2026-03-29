@@ -1500,7 +1500,7 @@ impl Grid {
     }
 
     /// Delete images overlapping specified cell range (screen-relative row)
-    /// Overlay images (C=1) are not removed by text writes
+    /// Overlay images (C=1) and images below text (z<0) are not removed by text writes
     fn remove_images_at_cell(&mut self, row: usize, col: usize, width: usize) {
         if self.image_placements.is_empty() {
             return;
@@ -1508,7 +1508,7 @@ impl Grid {
         let abs_row = row as u64 + self.scrollback_total;
         let col_end = col.saturating_add(width);
         self.image_placements.retain(|p| {
-            if p.overlay {
+            if p.overlay || p.z < 0 {
                 return true;
             }
             let img_row_end = p.row + p.height_cells as u64;
