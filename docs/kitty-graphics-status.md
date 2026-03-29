@@ -48,7 +48,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Feature | bcon | kitty | Ghostty | WezTerm |
 |---------|------|-------|---------|---------|
 | Storage model | Texture cache (HashMap) | Out-of-band (verstable hashmap) | Out-of-band (Pin tracking) | Cell-attached |
-| Scroll tracking | **No** | Yes (row offset) | Yes (Pin) | Yes (implicit via cells) |
+| Scroll tracking | Yes (absolute row) | Yes (row offset) | Yes (Pin) | Yes (implicit via cells) |
 | Z-order | **No** | Yes (3-pass) | Yes (3-layer) | Yes (z-index sort) |
 | Unicode placeholder | **No** | Yes (U+10EEEE) | Yes | No |
 | Storage limit | 128 textures | 320MB | 320MB | 320MB |
