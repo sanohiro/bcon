@@ -309,10 +309,87 @@ pub struct TerminalImage {
     pub animation_state: AnimationState,
     /// Current frame index (0 = root frame)
     pub current_frame: u32,
-    /// Loop count (0 = infinite)
+    /// Loop count (0 = infinite, 1 = infinite loop, n>1 = n-1 loops)
     pub loop_count: u32,
     /// Current loop iteration
     pub current_loop: u32,
+    /// Root frame gap (ms), default 0
+    pub root_gap: u32,
+    /// Timestamp of last frame switch (for animation timer)
+    pub last_frame_time: std::time::Instant,
+}
+
+impl TerminalImage {
+    /// Total number of frames (1 = root only, 2+ = animated)
+    pub fn total_frames(&self) -> u32 {
+        1 + self.frames.len() as u32
+    }
+
+    /// Get the gap (ms) for the current frame
+    fn current_gap(&self) -> u32 {
+        if self.current_frame == 0 {
+            self.root_gap
+        } else {
+            let idx = self.current_frame.saturating_sub(1) as usize;
+            self.frames.get(idx).map(|f| f.gap).unwrap_or(40)
+        }
+    }
+
+    /// Get RGBA data for the current frame
+    pub fn current_frame_data(&self) -> &[u8] {
+        if self.current_frame == 0 {
+            &self.data
+        } else {
+            let idx = self.current_frame.saturating_sub(1) as usize;
+            self.frames.get(idx).map(|f| f.data.as_slice()).unwrap_or(&self.data)
+        }
+    }
+
+    /// Advance animation by one tick. Returns true if frame changed.
+    pub fn advance_animation(&mut self, now: std::time::Instant) -> bool {
+        if self.animation_state != AnimationState::Running {
+            return false;
+        }
+        if self.frames.is_empty() {
+            return false;
+        }
+
+        let gap = self.current_gap();
+        if gap == 0 {
+            // gap=0 means skip this frame immediately
+            // but don't loop infinitely — advance once per call
+        }
+
+        let elapsed = now.duration_since(self.last_frame_time);
+        let gap_duration = std::time::Duration::from_millis(gap.max(1) as u64);
+
+        if elapsed < gap_duration {
+            return false;
+        }
+
+        self.last_frame_time = now;
+        let total = self.total_frames();
+        let next = self.current_frame + 1;
+
+        if next >= total {
+            // Reached end of frames
+            if self.loop_count == 0 || self.loop_count == 1 {
+                // Infinite loop
+                self.current_frame = 0;
+            } else if self.current_loop + 1 < self.loop_count - 1 {
+                self.current_loop += 1;
+                self.current_frame = 0;
+            } else {
+                // Done looping
+                self.animation_state = AnimationState::Stopped;
+                return false;
+            }
+        } else {
+            self.current_frame = next;
+        }
+
+        true
+    }
 }
 
 /// Maximum total image memory (512MB)
@@ -439,6 +516,11 @@ impl ImageRegistry {
     /// Check if image exists by ID
     pub fn contains(&self, id: u32) -> bool {
         self.images.contains_key(&id)
+    }
+
+    /// Mutable iterator over all images
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut TerminalImage> {
+        self.images.values_mut()
     }
 }
 
@@ -1089,6 +1171,8 @@ impl Terminal {
                     current_frame: 0,
                     loop_count: 0,
                     current_loop: 0,
+                    root_gap: 0,
+                    last_frame_time: std::time::Instant::now(),
                 };
                 let img_id = term_img.id;
                 let width = term_img.width;
@@ -1269,8 +1353,7 @@ impl Terminal {
                     // Update gap for specific frame
                     if cmd.frame_number > 0 && cmd.gap >= 0 {
                         if cmd.frame_number == 1 {
-                            // Root frame gap would need separate storage
-                            // For now, skip
+                            image.root_gap = cmd.gap as u32;
                         } else {
                             let frame_idx = (cmd.frame_number - 2) as usize;
                             if frame_idx < image.frames.len() {

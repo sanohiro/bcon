@@ -255,7 +255,7 @@ impl ImageRenderer {
                 0,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                Some(&image.data),
+                Some(image.current_frame_data()),
             );
 
             // Texture parameters

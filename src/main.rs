@@ -3838,6 +3838,26 @@ Make sure seatd/logind is running and you're on an active VT."
         // Bind FBO for rendering
         fbo.bind(gl);
 
+        // === Advance image animations ===
+        {
+            let now = std::time::Instant::now();
+            let tab = tab_mgr.active_tab_mut();
+            for pane in tab.panes.values_mut() {
+                let term = &mut pane.terminal;
+                let mut any_advanced = false;
+                for image in term.images.values_mut() {
+                    if image.advance_animation(now) {
+                        term.dirty_image_ids.push(image.id);
+                        any_advanced = true;
+                    }
+                }
+                if any_advanced {
+                    term.grid.mark_all_dirty();
+                    needs_redraw = true;
+                }
+            }
+        }
+
         // Multi-pane: check if we have multiple panes
         let multi_pane = tab_mgr.active_tab().pane_count() > 1
             && tab_mgr.active_tab().zoomed_pane.is_none();

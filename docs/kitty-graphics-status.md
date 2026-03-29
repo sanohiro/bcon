@@ -24,9 +24,9 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Display (put) | `a=p` | Yes | Yes | Yes | Yes |
 | Query | `a=q` | Yes | Yes | Yes | Yes |
 | **Delete** | `a=d` | Yes (most targets) | Yes | Yes | Partial |
-| Frame data | `a=f` | Parsed, not processed | Yes | No | Yes |
-| Animation control | `a=a` | Parsed, not processed | Yes | No | Partial |
-| Compose frames | `a=c` | Parsed, not processed | Yes | No | Yes |
+| Frame data | `a=f` | Yes | Yes | No | Yes |
+| Animation control | `a=a` | Yes | Yes | No | Partial |
+| Compose frames | `a=c` | Yes | Yes | No | Yes |
 
 ## Delete Targets (`a=d`)
 
@@ -41,7 +41,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | By row | `d=y/Y` | Yes | Yes | Yes | No |
 | By z-index | `d=z/Z` | Yes | Yes | Yes | No |
 | By ID range | `d=r/R` | **No** | Yes | Yes | No |
-| Animation frames | `d=f/F` | No (no animation yet) | Yes | Yes (no-op) | No |
+| Animation frames | `d=f/F` | No | Yes | Yes (no-op) | No |
 
 ## Image Management
 

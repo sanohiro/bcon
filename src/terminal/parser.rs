@@ -722,6 +722,8 @@ impl<'a> Perform for Performer<'a> {
                             current_frame: 0,
                             loop_count: 0,
                             current_loop: 0,
+                            root_gap: 0,
+                            last_frame_time: std::time::Instant::now(),
                         };
                         let img_id = self.images.insert(term_img);
                         // Place image on grid
