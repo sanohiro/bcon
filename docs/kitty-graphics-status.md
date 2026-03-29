@@ -23,7 +23,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Transmit & display | `a=T` | Yes | Yes | Yes | Yes |
 | Display (put) | `a=p` | Yes | Yes | Yes | Yes |
 | Query | `a=q` | Yes | Yes | Yes | Yes |
-| **Delete** | `a=d` | Yes (most targets) | Yes | Yes | Partial |
+| **Delete** | `a=d` | Yes | Yes | Yes | Partial |
 | Frame data | `a=f` | Yes | Yes | No | Yes |
 | Animation control | `a=a` | Yes | Yes | No | Partial |
 | Compose frames | `a=c` | Yes | Yes | No | Yes |
@@ -69,20 +69,20 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Chunked transfer (`m=1`) | Yes | Yes | Yes | Yes |
 | zlib compression (`o=z`) | Yes | Yes | Yes | Yes |
 | Response (`q=0/1/2`) | Yes | Yes | Yes | Yes |
-| Cursor movement (`C=0/1`) | ? | Yes | Yes | Yes |
-| Cell offset (`X`, `Y`) | ? | Yes | Yes | ? |
-| Source rect (`x`, `y`, `w`, `h`) | ? | Yes | Yes | ? |
-| Display size (`c`, `r`) | ? | Yes | Yes | ? |
+| Cursor movement (`C=0/1`) | Yes | Yes | Yes | Yes |
+| Cell offset (`X`, `Y`) | **No** | Yes | Yes | ? |
+| Source rect (`x`, `y`, `w`, `h`) | **No** | Yes | Yes | ? |
+| Display size (`c`, `r`) | Yes | Yes | Yes | ? |
 | Relative placement (`P`, `Q`) | No | Yes | Yes | No |
 
-## Priority Roadmap
+## Remaining Items
 
-1. **Image deletion (`a=d`)** — Most impactful. `clear` not removing images is a visible issue. Start with `d=a` and `d=i`.
-2. **Screen clear (`ESC[2J`) removes images** — Required by spec. Likely the root cause of "clear doesn't remove images".
-3. **Scroll tracking** — Images should move with text when scrolling.
-4. **Z-order** — Required for proper layering (text over/under images).
-5. **Animation** — Parsing is done. Processing needed. Ghostty also doesn't support this.
-6. **Unicode placeholder** — Advanced feature. WezTerm also doesn't support this.
+1. **Cell offset (`X`, `Y`)** — Sub-cell pixel positioning for image placement
+2. **Source rect (`x`, `y`, `w`, `h`)** — Display a cropped region of the image
+3. **`d=r/R` (ID range deletion)** — Small implementation
+4. **`d=f/F` (animation frame deletion)** — Small implementation
+5. **Relative placement (`P`, `Q`)** — Medium complexity, rarely used
+6. **z<0 click flicker** — Known rendering bug (FBO cache timing issue)
 
 ## Reference Implementations
 
