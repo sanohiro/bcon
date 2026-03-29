@@ -1088,6 +1088,29 @@ impl Terminal {
                                   && p.z == z)
                             });
                         }
+                        'r' | 'R' => {
+                            // Delete by ID range (x <= id <= y)
+                            let min_id = params.x;
+                            let max_id = params.y;
+                            self.grid.image_placements.retain(|p| {
+                                !(p.id >= min_id && p.id <= max_id)
+                            });
+                            if free_data {
+                                let ids_to_remove: Vec<u32> = (min_id..=max_id).collect();
+                                for rid in ids_to_remove {
+                                    self.images.remove(rid);
+                                }
+                            }
+                        }
+                        'f' | 'F' => {
+                            // Delete animation frames
+                            // For now, remove all extra frames from the image
+                            if let Some(image) = self.images.get_mut(id) {
+                                image.frames.clear();
+                                image.current_frame = 0;
+                                image.animation_state = AnimationState::Stopped;
+                            }
+                        }
                         _ => {}
                     }
                     // Trigger redraw after image deletion
@@ -1124,6 +1147,12 @@ impl Terminal {
                             display_cols,
                             display_rows,
                             params.z_index,
+                            params.frame_x, // X: cell offset x
+                            params.frame_y, // Y: cell offset y
+                            params.x,       // x: source rect x
+                            params.y,       // y: source rect y
+                            params.width,   // w: source rect width (0=full)
+                            params.height,  // h: source rect height (0=full)
                         );
                     }
                 }
@@ -1218,6 +1247,8 @@ impl Terminal {
                         display_cols,
                         display_rows,
                         kitty_img.z_index,
+                        0, 0, // cell offset (not available from a=T path)
+                        0, 0, 0, 0, // source rect (not available from a=T path)
                     );
                 }
 

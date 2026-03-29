@@ -40,8 +40,8 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | By column | `d=x/X` | Yes | Yes | Yes | No |
 | By row | `d=y/Y` | Yes | Yes | Yes | No |
 | By z-index | `d=z/Z` | Yes | Yes | Yes | No |
-| By ID range | `d=r/R` | **No** | Yes | Yes | No |
-| Animation frames | `d=f/F` | No | Yes | Yes (no-op) | No |
+| By ID range | `d=r/R` | Yes | Yes | Yes | No |
+| Animation frames | `d=f/F` | Yes | Yes | Yes (no-op) | No |
 
 ## Image Management
 
@@ -70,19 +70,15 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | zlib compression (`o=z`) | Yes | Yes | Yes | Yes |
 | Response (`q=0/1/2`) | Yes | Yes | Yes | Yes |
 | Cursor movement (`C=0/1`) | Yes | Yes | Yes | Yes |
-| Cell offset (`X`, `Y`) | **No** | Yes | Yes | ? |
-| Source rect (`x`, `y`, `w`, `h`) | **No** | Yes | Yes | ? |
+| Cell offset (`X`, `Y`) | Yes | Yes | Yes | ? |
+| Source rect (`x`, `y`, `w`, `h`) | Yes | Yes | Yes | ? |
 | Display size (`c`, `r`) | Yes | Yes | Yes | ? |
 | Relative placement (`P`, `Q`) | No | Yes | Yes | No |
 
 ## Remaining Items
 
-1. **Cell offset (`X`, `Y`)** — Sub-cell pixel positioning for image placement
-2. **Source rect (`x`, `y`, `w`, `h`)** — Display a cropped region of the image
-3. **`d=r/R` (ID range deletion)** — Small implementation
-4. **`d=f/F` (animation frame deletion)** — Small implementation
-5. **Relative placement (`P`, `Q`)** — Medium complexity, rarely used
-6. **z<0 click flicker** — Known rendering bug (FBO cache timing issue)
+1. **Relative placement (`P`, `Q`)** — Medium complexity, rarely used
+2. **z<0 click flicker** — Known rendering bug (FBO cache timing issue)
 
 ## Reference Implementations
 

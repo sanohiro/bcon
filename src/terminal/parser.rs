@@ -738,6 +738,8 @@ impl<'a> Perform for Performer<'a> {
                                 0,     // No explicit display cols
                                 0,     // No explicit display rows
                                 0,     // Sixel has no z-index
+                                0, 0,  // No cell offset
+                                0, 0, 0, 0, // No source rect
                             );
                         }
                     }

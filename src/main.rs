@@ -5498,11 +5498,20 @@ Make sure seatd/logind is running and you're on an active VT."
                 continue;
             }
             let key = gpu::image_key(pane_num, placement.id);
-            let x = margin_x + placement.col as f32 * cell_w;
-            let y = margin_y + display_row as f32 * cell_h;
+            let x = margin_x + placement.col as f32 * cell_w + placement.offset_x as f32;
+            let y = margin_y + display_row as f32 * cell_h + placement.offset_y as f32;
             let draw_w = placement.width_cells as f32 * cell_w;
             let draw_h = placement.height_cells as f32 * cell_h;
-            image_renderer.draw(key, x, y, draw_w, draw_h);
+            // Source rect → UV coords
+            if placement.src_w > 0 && placement.src_h > 0 {
+                let u0 = placement.src_x as f32 / placement.pixel_width as f32;
+                let v0 = placement.src_y as f32 / placement.pixel_height as f32;
+                let u1 = (placement.src_x + placement.src_w) as f32 / placement.pixel_width as f32;
+                let v1 = (placement.src_y + placement.src_h) as f32 / placement.pixel_height as f32;
+                image_renderer.draw_uv(key, x, y, draw_w, draw_h, u0, v0, u1, v1);
+            } else {
+                image_renderer.draw(key, x, y, draw_w, draw_h);
+            }
         }
         image_renderer.flush(gl, screen_w, screen_h);
 
@@ -5535,11 +5544,19 @@ Make sure seatd/logind is running and you're on an active VT."
                 continue;
             }
             let key = gpu::image_key(pane_num, placement.id);
-            let x = margin_x + placement.col as f32 * cell_w;
-            let y = margin_y + display_row as f32 * cell_h;
+            let x = margin_x + placement.col as f32 * cell_w + placement.offset_x as f32;
+            let y = margin_y + display_row as f32 * cell_h + placement.offset_y as f32;
             let draw_w = placement.width_cells as f32 * cell_w;
             let draw_h = placement.height_cells as f32 * cell_h;
-            image_renderer.draw(key, x, y, draw_w, draw_h);
+            if placement.src_w > 0 && placement.src_h > 0 {
+                let u0 = placement.src_x as f32 / placement.pixel_width as f32;
+                let v0 = placement.src_y as f32 / placement.pixel_height as f32;
+                let u1 = (placement.src_x + placement.src_w) as f32 / placement.pixel_width as f32;
+                let v1 = (placement.src_y + placement.src_h) as f32 / placement.pixel_height as f32;
+                image_renderer.draw_uv(key, x, y, draw_w, draw_h, u0, v0, u1, v1);
+            } else {
+                image_renderer.draw(key, x, y, draw_w, draw_h);
+            }
         }
         image_renderer.flush(gl, screen_w, screen_h);
 

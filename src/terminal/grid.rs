@@ -99,6 +99,15 @@ pub struct ImagePlacement {
     pub overlay: bool,
     /// Z-index for layering (negative = below text, positive/zero = above text)
     pub z: i32,
+    /// Sub-cell pixel offset X (Kitty X parameter)
+    pub offset_x: u32,
+    /// Sub-cell pixel offset Y (Kitty Y parameter)
+    pub offset_y: u32,
+    /// Source rectangle within image (pixels, 0 = full image)
+    pub src_x: u32,
+    pub src_y: u32,
+    pub src_w: u32,
+    pub src_h: u32,
     /// Virtual placement for Unicode placeholder (U+10EEEE)
     pub is_virtual: bool,
     /// Placement ID (for Unicode placeholder matching)
@@ -2395,6 +2404,12 @@ impl Grid {
         display_cols: u32,
         display_rows: u32,
         z_index: i32,
+        offset_x: u32,
+        offset_y: u32,
+        src_x: u32,
+        src_y: u32,
+        src_w: u32,
+        src_h: u32,
     ) {
         if cell_width == 0 || cell_height == 0 {
             log::warn!("place_image: cell size not set, skipping placement");
@@ -2437,6 +2452,12 @@ impl Grid {
                 pixel_height,
                 overlay: true,
                 z: z_index,
+                offset_x,
+                offset_y,
+                src_x,
+                src_y,
+                src_w,
+                src_h,
                 is_virtual: false,
                 placement_id: 0,
             };
