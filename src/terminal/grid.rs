@@ -112,6 +112,14 @@ pub struct ImagePlacement {
     pub is_virtual: bool,
     /// Placement ID (for Unicode placeholder matching)
     pub placement_id: u32,
+    /// Parent image ID for relative placement (0 = no parent)
+    pub parent_id: u32,
+    /// Parent placement ID (0 = any)
+    pub parent_placement_id: u32,
+    /// Horizontal cell offset from parent
+    pub rel_h: i32,
+    /// Vertical cell offset from parent
+    pub rel_v: i32,
 }
 
 /// Kitty Graphics Unicode placeholder character
@@ -2460,6 +2468,10 @@ impl Grid {
                 src_h,
                 is_virtual: false,
                 placement_id: 0,
+                parent_id: 0,
+                parent_placement_id: 0,
+                rel_h: 0,
+                rel_v: 0,
             };
             self.image_placements.push(placement);
         } else {

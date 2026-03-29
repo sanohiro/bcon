@@ -1131,10 +1131,71 @@ impl Terminal {
                                 pixel_height: image.height,
                                 overlay: false,
                                 z: params.z_index,
+                                offset_x: 0,
+                                offset_y: 0,
+                                src_x: 0,
+                                src_y: 0,
+                                src_w: 0,
+                                src_h: 0,
                                 is_virtual: true,
                                 placement_id: params.placement_id,
+                                parent_id: 0,
+                                parent_placement_id: 0,
+                                rel_h: 0,
+                                rel_v: 0,
                             };
                             self.grid.image_placements.push(placement);
+                        }
+                    } else if params.parent_id > 0 {
+                        // Relative placement: position relative to parent
+                        if let Some(image) = self.images.get(id) {
+                            // Find parent placement
+                            let parent_pos = self.grid.image_placements.iter().find(|p| {
+                                p.id == params.parent_id
+                                    && !p.is_virtual
+                                    && (params.parent_placement_id == 0
+                                        || p.placement_id == params.parent_placement_id)
+                            }).map(|p| (p.row, p.col));
+
+                            if let Some((parent_row, parent_col)) = parent_pos {
+                                let width_cells = if display_cols > 0 {
+                                    display_cols as usize
+                                } else {
+                                    ((image.width + self.cell_width - 1) / self.cell_width) as usize
+                                };
+                                let height_cells = if display_rows > 0 {
+                                    display_rows as usize
+                                } else {
+                                    ((image.height + self.cell_height - 1) / self.cell_height) as usize
+                                };
+                                let abs_row = (parent_row as i64 + params.rel_v as i64).max(0) as u64;
+                                let col = (parent_col as i64 + params.rel_h as i64).max(0) as usize;
+                                let placement = terminal::grid::ImagePlacement {
+                                    id,
+                                    row: abs_row,
+                                    col,
+                                    width_cells,
+                                    height_cells,
+                                    pixel_width: image.width,
+                                    pixel_height: image.height,
+                                    overlay: no_cursor_move,
+                                    z: params.z_index,
+                                    offset_x: params.frame_x,
+                                    offset_y: params.frame_y,
+                                    src_x: params.x,
+                                    src_y: params.y,
+                                    src_w: params.width,
+                                    src_h: params.height,
+                                    is_virtual: false,
+                                    placement_id: params.placement_id,
+                                    parent_id: params.parent_id,
+                                    parent_placement_id: params.parent_placement_id,
+                                    rel_h: params.rel_h,
+                                    rel_v: params.rel_v,
+                                };
+                                self.grid.image_placements.push(placement);
+                                self.grid.mark_all_dirty();
+                            }
                         }
                     } else if let Some(image) = self.images.get(id) {
                         self.grid.place_image(
@@ -1147,12 +1208,12 @@ impl Terminal {
                             display_cols,
                             display_rows,
                             params.z_index,
-                            params.frame_x, // X: cell offset x
-                            params.frame_y, // Y: cell offset y
-                            params.x,       // x: source rect x
-                            params.y,       // y: source rect y
-                            params.width,   // w: source rect width (0=full)
-                            params.height,  // h: source rect height (0=full)
+                            params.frame_x,
+                            params.frame_y,
+                            params.x,
+                            params.y,
+                            params.width,
+                            params.height,
                         );
                     }
                 }

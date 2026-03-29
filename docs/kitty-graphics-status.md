@@ -73,12 +73,11 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Cell offset (`X`, `Y`) | Yes | Yes | Yes | ? |
 | Source rect (`x`, `y`, `w`, `h`) | Yes | Yes | Yes | ? |
 | Display size (`c`, `r`) | Yes | Yes | Yes | ? |
-| Relative placement (`P`, `Q`) | No | Yes | Yes | No |
+| Relative placement (`P`, `Q`) | Yes | Yes | Yes | No |
 
 ## Remaining Items
 
-1. **Relative placement (`P`, `Q`)** — Medium complexity, rarely used
-2. **z<0 click flicker** — Known rendering bug (FBO cache timing issue)
+1. **z<0 click flicker** — Known rendering bug (FBO cache timing issue)
 
 ## Reference Implementations
 

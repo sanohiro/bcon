@@ -296,6 +296,14 @@ pub struct KittyParams {
     pub unicode_placement: bool,
     /// Placement ID (p)
     pub placement_id: u32,
+    /// Parent image ID for relative placement (P)
+    pub parent_id: u32,
+    /// Parent placement ID for relative placement (Q)
+    pub parent_placement_id: u32,
+    /// Horizontal offset from parent (H)
+    pub rel_h: i32,
+    /// Vertical offset from parent (V)
+    pub rel_v: i32,
 }
 
 /// Kitty decoder
@@ -484,6 +492,18 @@ impl KittyDecoder {
                     }
                     "p" => {
                         self.params.placement_id = value.parse().unwrap_or(0);
+                    }
+                    "P" => {
+                        self.params.parent_id = value.parse().unwrap_or(0);
+                    }
+                    "Q" => {
+                        self.params.parent_placement_id = value.parse().unwrap_or(0);
+                    }
+                    "H" => {
+                        self.params.rel_h = value.parse().unwrap_or(0);
+                    }
+                    "V" => {
+                        self.params.rel_v = value.parse().unwrap_or(0);
                     }
                     _ => {
                         // For animation, 'c' also means other_frame_number
