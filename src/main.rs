@@ -4034,6 +4034,32 @@ Make sure seatd/logind is running and you're on an active VT."
         let selection_color = [config_selection.0, config_selection.1, config_selection.2];
         let selection_alpha = 0.35_f32;
 
+        // Pre-compute z<0 image coverage for background skip
+        // Background rects are not drawn over z<0 images (they'd cover them)
+        let has_z_neg_images = grid.image_placements.iter().any(|p| p.z < 0 && !p.is_virtual);
+        let z_neg_placements: Vec<(usize, usize, usize, usize)> = if has_z_neg_images {
+            let scrollback_total = grid.scrollback_total();
+            let scroll_offset = term.scroll_offset as u64;
+            grid.image_placements.iter().filter(|p| p.z < 0 && !p.is_virtual).filter_map(|p| {
+                let display_row = if p.overlay {
+                    p.row as isize
+                } else {
+                    (p.row as i64 - scrollback_total as i64 + scroll_offset as i64) as isize
+                };
+                if display_row < 0 || display_row >= grid.rows() as isize {
+                    return None;
+                }
+                Some((
+                    display_row as usize,
+                    p.col,
+                    display_row as usize + p.height_cells,
+                    p.col + p.width_cells,
+                ))
+            }).collect()
+        } else {
+            Vec::new()
+        };
+
         // Combine consecutive cells with same background into single rectangles
         for row in 0..grid.rows() {
             // Skip non-dirty rows when partial rendering is enabled
@@ -4101,6 +4127,17 @@ Make sure seatd/logind is running and you're on an active VT."
                         bg[1] = selection_color[1] * a + bg[1] * (1.0 - a);
                         bg[2] = selection_color[2] * a + bg[2] * (1.0 - a);
                         bg[3] = 1.0; // Ensure opaque after blending
+                    }
+                }
+
+                // Skip background for cells covered by z<0 images
+                // (background rects would cover the image otherwise)
+                if has_z_neg_images {
+                    let cell_covered = z_neg_placements.iter().any(|&(r0, c0, r1, c1)| {
+                        row >= r0 && row < r1 && col >= c0 && col < c1
+                    });
+                    if cell_covered {
+                        bg[3] = 0.0; // Make transparent so image shows through
                     }
                 }
 

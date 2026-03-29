@@ -634,6 +634,29 @@ pause
 cleanup
 
 ########################################################################
+section "26. Z<0 Image Persists on Click"
+########################################################################
+
+echo "  Placing landscape with z=-1, then writing text over it."
+echo "  Click on the image area with the mouse to test."
+echo ""
+
+move 5 3
+printf '\033_Ga=T,i=260,f=100,z=-1,q=2;%s\033\\' "$IMG_LANDSCAPE"
+sleep 0.3
+
+move 7 5
+echo -e "${C_BOLD}Click on the landscape image below${C_RESET}"
+move 8 5
+echo -e "${C_BOLD}It should NOT flicker or disappear${C_RESET}"
+
+move 16 3
+echo -e "  ${C_GREEN}Expected: Image stays visible even when clicking on it${C_RESET}"
+echo -e "  ${C_GREEN}  Text remains readable on top of the image${C_RESET}"
+pause
+cleanup
+
+########################################################################
 printf '\033[2J\033[H'
 section "All Tests Complete"
 ########################################################################
@@ -665,6 +688,7 @@ echo "    22. Source rectangle (x,y,w,h)"
 echo "    23. Cell offset (X,Y)"
 echo "    24. Relative placement (P,Q,H,V)"
 echo "    25. Delete by ID range (d=r)"
+echo "    26. Z<0 image click persistence"
 echo ""
 echo "  Run 'reset' if display is corrupted."
 echo ""
