@@ -77,7 +77,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 
 ## Remaining Items
 
-1. **z<0 click flicker** — Known rendering bug (FBO cache timing issue)
+None — all major Kitty Graphics Protocol features are implemented.
 
 ## Reference Implementations
 
