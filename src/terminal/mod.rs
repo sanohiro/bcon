@@ -1121,7 +1121,7 @@ impl Terminal {
                         // U=1: Create virtual placement (not rendered directly,
                         // rendered via U+10EEEE characters in the text grid)
                         if let Some(image) = self.images.get(id) {
-                            let placement = terminal::grid::ImagePlacement {
+                            let placement = grid::ImagePlacement {
                                 id,
                                 row: 0,
                                 col: 0,
@@ -1170,7 +1170,7 @@ impl Terminal {
                                 };
                                 let abs_row = (parent_row as i64 + params.rel_v as i64).max(0) as u64;
                                 let col = (parent_col as i64 + params.rel_h as i64).max(0) as usize;
-                                let placement = terminal::grid::ImagePlacement {
+                                let placement = grid::ImagePlacement {
                                     id,
                                     row: abs_row,
                                     col,

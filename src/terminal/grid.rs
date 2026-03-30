@@ -2497,6 +2497,18 @@ impl Grid {
                     pixel_height,
                     overlay: false,
                     z: z_index,
+                    offset_x,
+                    offset_y,
+                    src_x,
+                    src_y,
+                    src_w,
+                    src_h,
+                    is_virtual: false,
+                    placement_id: 0,
+                    parent_id: 0,
+                    parent_placement_id: 0,
+                    rel_h: 0,
+                    rel_v: 0,
                 };
                 self.image_placements.push(placement);
                 self.cursor_row = self.rows - 1;
@@ -2511,6 +2523,18 @@ impl Grid {
                     pixel_height,
                     overlay: false,
                     z: z_index,
+                    offset_x,
+                    offset_y,
+                    src_x,
+                    src_y,
+                    src_w,
+                    src_h,
+                    is_virtual: false,
+                    placement_id: 0,
+                    parent_id: 0,
+                    parent_placement_id: 0,
+                    rel_h: 0,
+                    rel_v: 0,
                 };
                 self.image_placements.push(placement);
                 self.cursor_row += height_cells;

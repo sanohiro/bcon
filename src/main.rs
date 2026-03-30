@@ -4547,7 +4547,7 @@ Make sure seatd/logind is running and you're on an active VT."
                     // Find the image and draw the appropriate tile
                     if image_id > 0 {
                         if let Some(image) = term.images.get(image_id) {
-                            let key = gpu::image_key(pane_num, image_id);
+                            let key = gpu::image_key(render_pane_id.0, image_id);
                             if !image_renderer.has_texture(key) {
                                 image_renderer.upload_image(gl, key, image);
                             }
