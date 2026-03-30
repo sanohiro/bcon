@@ -82,6 +82,11 @@ pub struct KittyImage {
     pub display_rows: u32,
     /// Z-index for layering
     pub z_index: i32,
+    /// Source rect (x, y, w, h)
+    pub src_x: u32,
+    pub src_y: u32,
+    pub src_w: u32,
+    pub src_h: u32,
     /// Unicode virtual placement (U=1)
     pub unicode_placement: bool,
     /// Placement ID (p)
@@ -633,6 +638,10 @@ impl KittyDecoder {
             display_cols: params.cols,
             display_rows: params.rows,
             z_index: params.z_index,
+            src_x: params.x,
+            src_y: params.y,
+            src_w: params.src_w,
+            src_h: params.src_h,
             unicode_placement: params.unicode_placement,
             placement_id: params.placement_id,
         }))

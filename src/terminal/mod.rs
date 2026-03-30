@@ -1308,8 +1308,9 @@ impl Terminal {
                         display_cols,
                         display_rows,
                         kitty_img.z_index,
-                        0, 0, // cell offset (not available from a=T path)
-                        0, 0, 0, 0, // source rect (a=T uses full image)
+                        0, 0, // cell offset
+                        kitty_img.src_x, kitty_img.src_y,
+                        kitty_img.src_w, kitty_img.src_h,
                     );
                 }
 
