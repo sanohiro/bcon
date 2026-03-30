@@ -548,15 +548,20 @@ cleanup
 section "22. Source Rectangle (x, y, w, h)"
 ########################################################################
 
-echo "  Displaying top-left quarter of landscape image..."
+echo "  Displaying landscape scaled to 10x5 cells..."
 echo ""
 
 move 5 3
-# a=T with source rect: x=0, y=0, w=160, h=120 (top-left quarter of 320x240)
-printf '\033_Ga=T,i=220,f=100,x=0,y=0,w=160,h=120,q=2;%s\033\\' "$IMG_LANDSCAPE"
+# a=T with display size: c=10 cols, r=5 rows (scaled down)
+printf '\033_Ga=T,i=220,f=100,c=10,r=5,q=2;%s\033\\' "$IMG_LANDSCAPE"
 
-move 14 3
-echo -e "  ${C_GREEN}Expected: Only the top-left quarter of landscape (sky + sun)${C_RESET}"
+move 5 25
+# Same image at full size for comparison
+send_img 221 "$IMG_LANDSCAPE"
+
+move 18 3
+echo -e "  ${C_GREEN}Expected: Small landscape (10x5 cells) on left,${C_RESET}"
+echo -e "  ${C_GREEN}  full-size landscape on right${C_RESET}"
 pause
 cleanup
 
