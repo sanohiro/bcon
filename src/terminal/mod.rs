@@ -1212,8 +1212,8 @@ impl Terminal {
                             params.frame_y,
                             params.x,
                             params.y,
-                            params.width,
-                            params.height,
+                            params.src_w,
+                            params.src_h,
                         );
                     }
                 }
@@ -1309,7 +1309,7 @@ impl Terminal {
                         display_rows,
                         kitty_img.z_index,
                         0, 0, // cell offset (not available from a=T path)
-                        0, 0, 0, 0, // source rect (not available from a=T path)
+                        0, 0, 0, 0, // source rect (a=T uses full image)
                     );
                 }
 

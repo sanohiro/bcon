@@ -4130,14 +4130,19 @@ Make sure seatd/logind is running and you're on an active VT."
                     }
                 }
 
-                // Skip background for cells covered by z<0 images
-                // (background rects would cover the image otherwise)
+                // For cells covered by z<0 images: skip default background
+                // so the image shows through. Non-default backgrounds (explicit
+                // color, selection) are kept but drawn semi-transparent.
                 if has_z_neg_images {
                     let cell_covered = z_neg_placements.iter().any(|&(r0, c0, r1, c1)| {
                         row >= r0 && row < r1 && col >= c0 && col < c1
                     });
                     if cell_covered {
-                        bg[3] = 0.0; // Make transparent so image shows through
+                        if matches!(cell.bg, terminal::grid::Color::Default) && !is_inverse {
+                            bg[3] = 0.0;
+                        } else {
+                            bg[3] = 0.5; // Semi-transparent so image shows through
+                        }
                     }
                 }
 

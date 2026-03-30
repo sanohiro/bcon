@@ -551,12 +551,9 @@ section "22. Source Rectangle (x, y, w, h)"
 echo "  Displaying top-left quarter of landscape image..."
 echo ""
 
-# Send landscape, then display with source rect (top-left quarter: 160x120 from 320x240)
-tx_img 220 "$IMG_LANDSCAPE"
-sleep 0.1
 move 5 3
-# a=p with source rect: x=0, y=0, w=160, h=120 (top-left quarter)
-printf '\033_Ga=p,i=220,x=0,y=0,w=160,h=120,q=2\033\\'
+# a=T with source rect: x=0, y=0, w=160, h=120 (top-left quarter of 320x240)
+printf '\033_Ga=T,i=220,f=100,x=0,y=0,w=160,h=120,q=2;%s\033\\' "$IMG_LANDSCAPE"
 
 move 14 3
 echo -e "  ${C_GREEN}Expected: Only the top-left quarter of landscape (sky + sun)${C_RESET}"

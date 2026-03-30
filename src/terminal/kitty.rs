@@ -290,6 +290,10 @@ pub struct KittyParams {
     pub frame_y: u32,
     /// Background color (Y) - for frame composition
     pub bgcolor: u32,
+    /// Source rect width (w parameter, 0=full)
+    pub src_w: u32,
+    /// Source rect height (h parameter, 0=full)
+    pub src_h: u32,
     /// Do not move cursor (C=1 for display actions)
     pub do_not_move_cursor: bool,
     /// Unicode virtual placement (U=1)
@@ -436,6 +440,12 @@ impl KittyDecoder {
                         let v = value.parse().unwrap_or(0);
                         self.params.height = v;
                         self.params.loop_count = v;
+                    }
+                    "w" => {
+                        self.params.src_w = value.parse().unwrap_or(0);
+                    }
+                    "h" => {
+                        self.params.src_h = value.parse().unwrap_or(0);
                     }
                     "m" => {
                         self.params.more = value == "1";
