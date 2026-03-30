@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-31
+
+### Added
+- Kitty Graphics animation: frame storage (a=f), playback engine with timer, animation control (a=a), frame composition (a=c)
+- Kitty Graphics Unicode placeholder (U+10EEEE): virtual placements, diacritical row/col decoding, UV sub-region rendering
+- Kitty Graphics relative placement (P, Q, H, V): position images relative to parent
+- Kitty Graphics cell offset (X, Y): sub-cell pixel positioning
+- Kitty Graphics source rect (w, h): display cropped region of image
+- Kitty Graphics delete targets: d=r/R (ID range), d=f/F (animation frames)
+- Kitty Graphics test suite expanded to 26 tests
+
+### Fixed
+- Z<0 images no longer flicker on mouse click (background skip for image areas)
+- Z<0 images preserved from text overwrite
+- Source rect parameters (w/h) now properly parsed and passed through all code paths
+
 ## [1.2.0] - 2026-03-29
 
 ### Added
