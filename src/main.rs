@@ -4138,7 +4138,7 @@ Make sure seatd/logind is running and you're on an active VT."
                         row >= r0 && row < r1 && col >= c0 && col < c1
                     });
                     if cell_covered {
-                        if matches!(cell.bg, terminal::grid::Color::Default) && !is_inverse {
+                        if matches!(cell.bg, terminal::grid::Color::Default) && !cell.attrs.contains(terminal::grid::CellAttrs::INVERSE) {
                             bg[3] = 0.0;
                         } else {
                             bg[3] = 0.5; // Semi-transparent so image shows through
