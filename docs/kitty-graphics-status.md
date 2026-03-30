@@ -2,7 +2,7 @@
 
 Tracking bcon's implementation of the [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) compared to other terminals.
 
-Last updated: 2026-03-29
+Last updated: 2026-03-31 (v1.3.0)
 
 ## Transfer Modes
 
@@ -23,7 +23,7 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Transmit & display | `a=T` | Yes | Yes | Yes | Yes |
 | Display (put) | `a=p` | Yes | Yes | Yes | Yes |
 | Query | `a=q` | Yes | Yes | Yes | Yes |
-| **Delete** | `a=d` | Yes | Yes | Yes | Partial |
+| Delete | `a=d` | Yes | Yes | Yes | Partial |
 | Frame data | `a=f` | Yes | Yes | No | Yes |
 | Animation control | `a=a` | Yes | Yes | No | Partial |
 | Compose frames | `a=c` | Yes | Yes | No | Yes |
@@ -71,23 +71,20 @@ All 4 modes are enabled by default. Can be disabled via `[security] allow_kitty_
 | Response (`q=0/1/2`) | Yes | Yes | Yes | Yes |
 | Cursor movement (`C=0/1`) | Yes | Yes | Yes | Yes |
 | Cell offset (`X`, `Y`) | Yes | Yes | Yes | ? |
-| Source rect (`x`, `y`, `w`, `h`) | Yes | Yes | Yes | ? |
 | Display size (`c`, `r`) | Yes | Yes | Yes | ? |
 | Relative placement (`P`, `Q`) | Yes | Yes | Yes | No |
 
-## Remaining Items
+## Known Limitations
 
-None — all major Kitty Graphics Protocol features are implemented.
+- Z<0 images: text background appears black over image area (LCD subpixel rendering constraint, same behavior as kitty)
 
-## Reference Implementations
+## Test Suite
 
-- **kitty** (reference): `/kitty/graphics.c` — Complete implementation, all features
-- **Ghostty** (clean architecture): `/src/terminal/kitty/` — Well-structured Zig code, good reference for delete/storage/z-order
-- **WezTerm** (all transfer modes): `/term/src/terminalstate/kitty.rs` — Rust, cell-based model (differs from spec)
-- **bcon**: `/src/terminal/kitty.rs` — Current implementation
+Run the test suite on bcon:
 
-## Notes
+```bash
+python3 tests/generate-test-images.py
+bash tests/kitty-graphics-test.sh
+```
 
-- The [Zenn article](https://zenn.dev/kay1974/articles/8ee1fd8c6ad505) reported bcon as "direct+tmpfile only" for transfer modes. This is incorrect — bcon supports all 4 modes (file and shared memory require `allow_kitty_remote = true`).
-- Animation actions (`a=f`, `a=a`, `a=c`) are parsed but not yet processed. Ghostty also has not implemented animation.
-- WezTerm's cell-based image storage is noted as "horribly non-conformant" (GitHub #3817) due to text writes creating holes in images.
+26 tests covering: display, deletion (all targets), scroll tracking, overlay, z-order, cell offset, relative placement, ID range deletion, and click persistence.
