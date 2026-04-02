@@ -3365,10 +3365,18 @@ Make sure seatd/logind is running and you're on an active VT."
                                 input::BTN_RIGHT => 2,
                                 _ => 0,
                             };
+                            let pixel_coords = if term.mouse_sgr_pixels() {
+                                let px = ((*x - mouse_offset_x).max(0.0)) as u32;
+                                let py = ((*y - mouse_offset_y).max(0.0)) as u32;
+                                Some((px, py))
+                            } else {
+                                None
+                            };
                             let _ = term.send_mouse_press(
                                 btn,
                                 col.min(grid_cols.saturating_sub(1)),
                                 row.min(grid_rows.saturating_sub(1)),
+                                pixel_coords,
                             );
                             mouse_button_held = Some(btn);
                         } else if *button == input::BTN_LEFT {
@@ -3426,10 +3434,18 @@ Make sure seatd/logind is running and you're on an active VT."
 
                         // Send move event if mouse mode is enabled
                         if term.mouse_mode_enabled() {
+                            let pixel_coords = if term.mouse_sgr_pixels() {
+                                let px = ((*x - mouse_offset_x).max(0.0)) as u32;
+                                let py = ((*y - mouse_offset_y).max(0.0)) as u32;
+                                Some((px, py))
+                            } else {
+                                None
+                            };
                             let _ = term.send_mouse_move(
                                 col.min(grid_cols.saturating_sub(1)),
                                 row.min(grid_rows.saturating_sub(1)),
                                 mouse_button_held,
+                                pixel_coords,
                             );
                         } else if mouse_selecting {
                             // Dragging: Update selection range
@@ -3461,10 +3477,18 @@ Make sure seatd/logind is running and you're on an active VT."
                                 input::BTN_RIGHT => 2,
                                 _ => 0,
                             };
+                            let pixel_coords = if term.mouse_sgr_pixels() {
+                                let px = ((*x - mouse_offset_x).max(0.0)) as u32;
+                                let py = ((*y - mouse_offset_y).max(0.0)) as u32;
+                                Some((px, py))
+                            } else {
+                                None
+                            };
                             let _ = term.send_mouse_release(
                                 btn,
                                 col.min(grid_cols.saturating_sub(1)),
                                 row.min(grid_rows.saturating_sub(1)),
+                                pixel_coords,
                             );
                         } else if *button == input::BTN_LEFT {
                             // Left button release: Confirm selection + auto copy
@@ -3492,10 +3516,18 @@ Make sure seatd/logind is running and you're on an active VT."
 
                         if use_mouse_wheel {
                             let d = if *delta < 0.0 { -1i8 } else { 1i8 };
+                            let pixel_coords = if term.mouse_sgr_pixels() {
+                                let px = ((*x - mouse_offset_x).max(0.0)) as u32;
+                                let py = ((*y - mouse_offset_y).max(0.0)) as u32;
+                                Some((px, py))
+                            } else {
+                                None
+                            };
                             let _ = term.send_mouse_wheel(
                                 d,
                                 col.min(grid_cols.saturating_sub(1)),
                                 row.min(grid_rows.saturating_sub(1)),
+                                pixel_coords,
                             );
                         } else {
                             // Scroll accumulation (negative=up/history, positive=down/live)

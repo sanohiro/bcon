@@ -924,6 +924,7 @@ impl Grid {
         // Reset mouse modes
         self.modes.mouse_mode = MouseMode::None;
         self.modes.mouse_sgr = false;
+        self.modes.mouse_sgr_pixels = false;
 
         // Reset other enhanced modes
         self.modes.bracketed_paste = false;
