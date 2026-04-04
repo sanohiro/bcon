@@ -1818,15 +1818,46 @@ impl Terminal {
         self.grid.modes.mouse_mode != grid::MouseMode::None
     }
 
+    /// Check if SGR-Pixels mouse mode (1016) is enabled
+    pub fn mouse_sgr_pixels(&self) -> bool {
+        self.grid.modes.mouse_sgr_pixels
+    }
+
     /// Encode and send mouse event to PTY
     /// cb: button code
-    /// col, row: 0-indexed coordinates
+    /// col, row: 0-indexed cell coordinates
+    /// pixel_coords: optional (px, py) pixel coordinates for SGR-Pixels mode (1016)
     /// press: true for press (M), false for release (m) in SGR mode
-    fn send_mouse_event(&self, cb: u8, col: usize, row: usize, press: bool) -> Result<()> {
-        let cx = (col + 1).min(223);
-        let cy = (row + 1).min(223);
-
-        if self.grid.modes.mouse_sgr {
+    fn send_mouse_event(
+        &self,
+        cb: u8,
+        col: usize,
+        row: usize,
+        pixel_coords: Option<(u32, u32)>,
+        press: bool,
+    ) -> Result<()> {
+        if self.grid.modes.mouse_sgr_pixels {
+            // SGR-Pixels mode (1016): use pixel coordinates with SGR format
+            let (px, py) = pixel_coords.unwrap_or_else(|| {
+                // Fallback: approximate pixel coords from cell coords
+                // This shouldn't normally happen if the caller provides pixel coords
+                let cell_w = self.grid.cols().max(1);
+                let cell_h = self.grid.rows().max(1);
+                ((col * cell_w) as u32, (row * cell_h) as u32)
+            });
+            let suffix = if press { 'M' } else { 'm' };
+            let seq = format!("\x1b[<{};{};{}{}", cb, px, py, suffix);
+            trace!(
+                "Mouse event → PTY (SGR-Pixels): cb={} px={} py={} {}",
+                cb,
+                px,
+                py,
+                suffix
+            );
+            self.pty.write(seq.as_bytes())?;
+        } else if self.grid.modes.mouse_sgr {
+            let cx = (col + 1).min(223);
+            let cy = (row + 1).min(223);
             let suffix = if press { 'M' } else { 'm' };
             let seq = format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix);
             trace!(
@@ -1838,6 +1869,8 @@ impl Terminal {
             );
             self.pty.write(seq.as_bytes())?;
         } else {
+            let cx = (col + 1).min(223);
+            let cy = (row + 1).min(223);
             let bytes = [0x1b, b'[', b'M', cb + 32, (cx as u8) + 32, (cy as u8) + 32];
             trace!("Mouse event → PTY (X10): cb={} col={} row={}", cb, cx, cy);
             self.pty.write(&bytes)?;
@@ -1847,31 +1880,52 @@ impl Terminal {
 
     /// Send mouse button press event to PTY
     /// button: 0=left, 1=middle, 2=right
-    /// col, row: 0-indexed
-    pub fn send_mouse_press(&self, button: u8, col: usize, row: usize) -> Result<()> {
+    /// col, row: 0-indexed cell coordinates
+    /// pixel_coords: optional (px, py) for SGR-Pixels mode (1016)
+    pub fn send_mouse_press(
+        &self,
+        button: u8,
+        col: usize,
+        row: usize,
+        pixel_coords: Option<(u32, u32)>,
+    ) -> Result<()> {
         if self.grid.modes.mouse_mode == grid::MouseMode::None {
             return Ok(());
         }
-        self.send_mouse_event(button, col, row, true)
+        self.send_mouse_event(button, col, row, pixel_coords, true)
     }
 
     /// Send mouse button release event to PTY
-    pub fn send_mouse_release(&self, button: u8, col: usize, row: usize) -> Result<()> {
+    /// pixel_coords: optional (px, py) for SGR-Pixels mode (1016)
+    pub fn send_mouse_release(
+        &self,
+        button: u8,
+        col: usize,
+        row: usize,
+        pixel_coords: Option<(u32, u32)>,
+    ) -> Result<()> {
         if self.grid.modes.mouse_mode == grid::MouseMode::None {
             return Ok(());
         }
 
-        if self.grid.modes.mouse_sgr {
-            // SGR format uses original button with lowercase 'm'
-            self.send_mouse_event(button, col, row, false)
+        if self.grid.modes.mouse_sgr || self.grid.modes.mouse_sgr_pixels {
+            // SGR/SGR-Pixels format uses original button with lowercase 'm'
+            self.send_mouse_event(button, col, row, pixel_coords, false)
         } else {
             // Normal format: button 3 means release
-            self.send_mouse_event(3, col, row, true)
+            self.send_mouse_event(3, col, row, None, true)
         }
     }
 
     /// Send mouse move event to PTY (in ButtonEvent/AnyEvent mode)
-    pub fn send_mouse_move(&self, col: usize, row: usize, button_held: Option<u8>) -> Result<()> {
+    /// pixel_coords: optional (px, py) for SGR-Pixels mode (1016)
+    pub fn send_mouse_move(
+        &self,
+        col: usize,
+        row: usize,
+        button_held: Option<u8>,
+        pixel_coords: Option<(u32, u32)>,
+    ) -> Result<()> {
         // AnyEvent (1003) or ButtonEvent (1002) + button held only
         match self.grid.modes.mouse_mode {
             grid::MouseMode::AnyEvent => {}
@@ -1885,19 +1939,26 @@ impl Terminal {
             None => 35,        // motion only
         };
 
-        self.send_mouse_event(cb, col, row, true)
+        self.send_mouse_event(cb, col, row, pixel_coords, true)
     }
 
     /// Send mouse wheel event to PTY
     /// delta: positive=down, negative=up
-    pub fn send_mouse_wheel(&self, delta: i8, col: usize, row: usize) -> Result<()> {
+    /// pixel_coords: optional (px, py) for SGR-Pixels mode (1016)
+    pub fn send_mouse_wheel(
+        &self,
+        delta: i8,
+        col: usize,
+        row: usize,
+        pixel_coords: Option<(u32, u32)>,
+    ) -> Result<()> {
         if self.grid.modes.mouse_mode == grid::MouseMode::None {
             return Ok(());
         }
 
         // button code: 64=up, 65=down
         let cb = if delta < 0 { 64 } else { 65 };
-        self.send_mouse_event(cb, col, row, true)
+        self.send_mouse_event(cb, col, row, pixel_coords, true)
     }
 
     /// Get cell for display row (considering scroll_offset)
