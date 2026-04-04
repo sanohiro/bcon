@@ -1,0 +1,37 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: bcon
+Label: bcon
+Suite: stable
+Codename: stable
+Architectures: amd64 arm64
+Components: main
+Description: bcon apt repository
+Date: Sat, 04 Apr 2026 13:11:59 +0000
+MD5Sum:
+ 1b11abb5c92ee3a21fe49bd21f228407 765 main/binary-amd64/Packages
+ 07bef407f95fd0bf40252fc16b541ef2 537 main/binary-amd64/Packages.gz
+ 09904e15283f27bcdb4d466303daef44 765 main/binary-arm64/Packages
+ 8822f3da9f19663797a013cd5a3d6c75 534 main/binary-arm64/Packages.gz
+SHA256:
+ 1389dc1eb8a9b74169ec31b8942b75134934390507650a99cf8e02e2f030f94a 765 main/binary-amd64/Packages
+ e67c360e1958dcff45fbf5af4d3a68861062f018f8c899873ecb918138a4c516 537 main/binary-amd64/Packages.gz
+ b917413d6a0a342f54648cc60404b892263376f965fc7e5bdc915b4adec917ea 765 main/binary-arm64/Packages
+ 947bf792b51f0ec19ad0b4f00cd05ef86243cbc1c6e4056f4c724d797bfac9d7 534 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEEF38P8zCqxTq54YJmwUQK89zeK0kFAmnRDh8ACgkQwUQK89ze
+K0nxTBAAuQkMweISzP987kXw3ZFPWZyGcO7IP+x4XO0J8vKrFws2Ya4hk4Ll2Y5r
+Qm3G3vhgcnlJ7F1W3nPVdsQcseHRlqXusv9wjQoK1I6vIj2V/sruEJce71cS5vV2
+5yywNK1vmngkdkA+ci5LfdIgxstwUoY31DrV4i6b59qyQGQi0u6LLzrIQAhrrJtR
+UgaPYPSmIVKvC+0d8I1zPVwSUCWyWUeHehAZGXWd60XPWcy59dJ/tDeVMFAjSfOU
+CuKoUevbvqQbCGnOYIximxRNeeY7zHGa1HpJXHd3Nr4rgtOlc4x0tAYwfj8ff/co
+1HLTC9ClDqLZ95iYG8JF0V4Bf01Zt/uprCudIl+jTB84e6Wd6832nqcXHKYSnfwg
+rv4KicPMCs7XzCofhkAOPSbnlx39R4rBd93rAmKLtuMpvDFYxeByTKmkcSXT05My
+QGdMi25CW+GV5pjJCxJCMUP53u+RuXJ+bzHqzN47wxHSV5CSXG6g+aHCkfClqny8
+Qt2CSp1jAF3G3fmOSskM+hxBP7C3LNJzH3gx3vln8RfZ0l7ZB3SF66HVg4AzHLeT
+LtOIjq4MjlW2btiWdDB+8aUH6uWXWlac1PnGpNkKY+JWdr5wwbmIvEsHZeuX0vuE
+4/Ub2I0DnEKAbUmBUY0fdU0Ttc/94ASsxyGqonjNqgphxBlcf4k=
+=HyZG
+-----END PGP SIGNATURE-----
