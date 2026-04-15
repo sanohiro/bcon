@@ -2402,6 +2402,15 @@ impl Grid {
     /// Place image at current cursor position
     ///
     /// Calculates occupied cell count and moves cursor below image.
+    /// Place an image onto the grid.
+    ///
+    /// Returns the ids of any placements this call superseded. Currently that
+    /// happens for overlay-mode (`C=1`) placements that are fully covered by
+    /// the new one at the same z-index — `mpv --vo=kitty` streams identically
+    /// sized frames at the same cell position, so without this dedupe each
+    /// frame would leak a placement and its backing image, overwhelming the
+    /// registry and stalling PTY reads within seconds. Callers should drop
+    /// the returned ids from the image registry to free their texture data.
     pub fn place_image(
         &mut self,
         id: u32,
@@ -2419,10 +2428,10 @@ impl Grid {
         src_y: u32,
         src_w: u32,
         src_h: u32,
-    ) {
+    ) -> Vec<u32> {
         if cell_width == 0 || cell_height == 0 {
             log::warn!("place_image: cell size not set, skipping placement");
-            return;
+            return Vec::new();
         }
 
         // Use explicit c=/r= if provided, otherwise calculate from pixel size (round up)
@@ -2447,14 +2456,38 @@ impl Grid {
             if do_not_move_cursor { 1 } else { 0 }
         );
 
+        let mut superseded: Vec<u32> = Vec::new();
+
         if do_not_move_cursor {
             // C=1: place image at cursor position, do not move cursor
             // Overlay mode: text writes don't remove this image
             // Overlay uses screen-relative row (doesn't scroll with text)
+            let new_row = self.cursor_row as u64;
+            let new_col = self.cursor_col;
+            let new_row_end = new_row + height_cells as u64;
+            let new_col_end = new_col + width_cells;
+            self.image_placements.retain(|p| {
+                if !p.overlay || p.z != z_index {
+                    return true;
+                }
+                let p_row_end = p.row + p.height_cells as u64;
+                let p_col_end = p.col + p.width_cells;
+                let fully_covered = p.row >= new_row
+                    && p_row_end <= new_row_end
+                    && p.col >= new_col
+                    && p_col_end <= new_col_end;
+                if fully_covered {
+                    superseded.push(p.id);
+                    false
+                } else {
+                    true
+                }
+            });
+
             let placement = ImagePlacement {
                 id,
-                row: self.cursor_row as u64,
-                col: self.cursor_col,
+                row: new_row,
+                col: new_col,
                 width_cells,
                 height_cells,
                 pixel_width,
@@ -2476,75 +2509,55 @@ impl Grid {
             };
             self.image_placements.push(placement);
         } else {
-            // Default: place image and move cursor below it
-            // For large images that exceed screen, scroll first, then place
-            let rows_below = self.rows - self.cursor_row;
-            if height_cells > rows_below {
-                // Need to scroll to make room; scroll before placing
-                // so the placement doesn't get deleted by scroll_up
-                let scroll_needed = height_cells - rows_below;
+            // Place the image at the current cursor position (absolute row =
+            // screen row + scrollback), then advance the cursor onto the row
+            // one past the image. Landing the cursor inside the image area
+            // is destructive: the next `put_char` invokes
+            // `remove_images_at_cell`, which would discard the placement we
+            // just created (observed with `chafa -f sixel` when the prompt
+            // rewrite or a newline wrote the first cell after placement).
+            let placement = ImagePlacement {
+                id,
+                row: self.cursor_row as u64 + self.scrollback_total,
+                col: self.cursor_col,
+                width_cells,
+                height_cells,
+                pixel_width,
+                pixel_height,
+                overlay: false,
+                z: z_index,
+                offset_x,
+                offset_y,
+                src_x,
+                src_y,
+                src_w,
+                src_h,
+                is_virtual: false,
+                placement_id: 0,
+                parent_id: 0,
+                parent_placement_id: 0,
+                rel_h: 0,
+                rel_v: 0,
+            };
+            self.image_placements.push(placement);
+
+            let target_cursor_row = self.cursor_row + height_cells;
+            if target_cursor_row >= self.rows {
+                // Scroll so the row immediately below the image exists on
+                // screen. Placements use absolute coordinates, so scrolling
+                // after the push does not shift the image we just added.
+                let scroll_needed = target_cursor_row + 1 - self.rows;
                 for _ in 0..scroll_needed {
                     self.scroll_up(1);
                 }
-                // Image starts at adjusted position
-                let start_row = self.rows.saturating_sub(height_cells);
-                let placement = ImagePlacement {
-                    id,
-                    row: start_row as u64 + self.scrollback_total,
-                    col: self.cursor_col,
-                    width_cells,
-                    height_cells,
-                    pixel_width,
-                    pixel_height,
-                    overlay: false,
-                    z: z_index,
-                    offset_x,
-                    offset_y,
-                    src_x,
-                    src_y,
-                    src_w,
-                    src_h,
-                    is_virtual: false,
-                    placement_id: 0,
-                    parent_id: 0,
-                    parent_placement_id: 0,
-                    rel_h: 0,
-                    rel_v: 0,
-                };
-                self.image_placements.push(placement);
                 self.cursor_row = self.rows - 1;
             } else {
-                let placement = ImagePlacement {
-                    id,
-                    row: self.cursor_row as u64 + self.scrollback_total,
-                    col: self.cursor_col,
-                    width_cells,
-                    height_cells,
-                    pixel_width,
-                    pixel_height,
-                    overlay: false,
-                    z: z_index,
-                    offset_x,
-                    offset_y,
-                    src_x,
-                    src_y,
-                    src_w,
-                    src_h,
-                    is_virtual: false,
-                    placement_id: 0,
-                    parent_id: 0,
-                    parent_placement_id: 0,
-                    rel_h: 0,
-                    rel_v: 0,
-                };
-                self.image_placements.push(placement);
-                self.cursor_row += height_cells;
-                if self.cursor_row >= self.rows {
-                    self.cursor_row = self.rows - 1;
-                }
+                self.cursor_row = target_cursor_row;
             }
             self.cursor_col = 0;
         }
+
+        superseded
     }
 
     /// Delete image placements that scrolled out of screen

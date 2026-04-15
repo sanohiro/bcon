@@ -317,7 +317,9 @@ pub struct KittyParams {
 
 /// Kitty decoder
 pub struct KittyDecoder {
-    /// Accumulated raw base64 payload (decoded in finish())
+    /// Accumulated decoded payload bytes.
+    /// Each chunk's base64 payload is a self-contained unit (may end with `=`
+    /// padding), so we decode per-chunk and append the resulting bytes here.
     payload_buffer: Vec<u8>,
     /// Current parameters
     params: KittyParams,
@@ -369,13 +371,22 @@ impl KittyDecoder {
             }
         }
 
-        // Accumulate raw base64 payload (decoded later in finish())
-        // Must accumulate raw text to avoid corruption at non-4-char chunk boundaries
+        // Decode each chunk's base64 payload independently and append the
+        // resulting bytes. Chunks are self-contained base64 units per the Kitty
+        // protocol — e.g. chafa ends every chunk with `=` padding — so we must
+        // NOT concatenate raw base64 across chunks (that would drop the
+        // leftover bits of each chunk's final group into the next chunk's
+        // bitstream and shift the decoded output).
         if !payload.is_empty() {
-            let new_len = self.payload_buffer.len() + payload.len();
-            // Approximate decoded size check (base64 is ~4/3 of binary)
-            if new_len * 3 / 4 <= MAX_IMAGE_DATA_SIZE {
-                self.payload_buffer.extend_from_slice(payload.as_bytes());
+            let decoded = match base64_decode(payload.as_bytes()) {
+                Some(d) => d,
+                None => {
+                    warn!("Kitty: invalid base64 in chunk");
+                    return (true, None);
+                }
+            };
+            if self.payload_buffer.len() + decoded.len() <= MAX_IMAGE_DATA_SIZE {
+                self.payload_buffer.extend_from_slice(&decoded);
             } else {
                 warn!(
                     "Kitty: image data exceeds {}MB limit, truncating",
@@ -546,19 +557,10 @@ impl KittyDecoder {
         let params = self.params;
         let id = if params.id != 0 { params.id } else { next_id };
 
-        // Decode accumulated base64 payload
-        let raw_data = if self.payload_buffer.is_empty() {
-            Vec::new()
-        } else {
-            let decoded = base64_decode(&self.payload_buffer)
-                .ok_or_else(|| "invalid base64 data".to_string())?;
-            info!(
-                "Kitty: base64 decoded {} chars -> {} bytes",
-                self.payload_buffer.len(),
-                decoded.len()
-            );
-            decoded
-        };
+        // payload_buffer already contains decoded bytes (chunks are decoded
+        // on arrival in process()).
+        let raw_data = self.payload_buffer;
+        info!("Kitty: total decoded payload = {} bytes", raw_data.len());
 
         // Handle non-data actions first
         match params.action {
@@ -1003,5 +1005,84 @@ pub fn make_response(id: u32, ok: bool, message: &str) -> Vec<u8> {
         format!("\x1b_Gi={};OK\x1b\\", id).into_bytes()
     } else {
         format!("\x1b_Gi={};{}\x1b\\", id, message).into_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn b64_encode(data: &[u8]) -> String {
+        const TBL: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+        let mut i = 0;
+        while i + 3 <= data.len() {
+            let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | data[i + 2] as u32;
+            out.push(TBL[((n >> 18) & 0x3f) as usize] as char);
+            out.push(TBL[((n >> 12) & 0x3f) as usize] as char);
+            out.push(TBL[((n >> 6) & 0x3f) as usize] as char);
+            out.push(TBL[(n & 0x3f) as usize] as char);
+            i += 3;
+        }
+        let rem = data.len() - i;
+        if rem == 1 {
+            let n = (data[i] as u32) << 16;
+            out.push(TBL[((n >> 18) & 0x3f) as usize] as char);
+            out.push(TBL[((n >> 12) & 0x3f) as usize] as char);
+            out.push_str("==");
+        } else if rem == 2 {
+            let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8);
+            out.push(TBL[((n >> 18) & 0x3f) as usize] as char);
+            out.push(TBL[((n >> 12) & 0x3f) as usize] as char);
+            out.push(TBL[((n >> 6) & 0x3f) as usize] as char);
+            out.push('=');
+        }
+        out
+    }
+
+    /// Reproduces the chafa-style chunked Kitty transmission where each chunk
+    /// is a self-contained base64 unit ending in `=` padding. The bug: bcon
+    /// used to concatenate raw base64 across chunks and skip `=` during decode,
+    /// leaking 2 leftover bits from each chunk's final group into the next
+    /// chunk and producing `num_chunks * 2 / 8` extra bytes in the output.
+    #[test]
+    fn chunked_base64_with_per_chunk_padding_decodes_exact() {
+        let w = 32u32;
+        let h = 16u32;
+        let pixel_count = (w * h) as usize;
+        // Distinct byte pattern so off-by-one errors become visible.
+        let rgba: Vec<u8> = (0..pixel_count * 4).map(|i| (i & 0xff) as u8).collect();
+        assert_eq!(rgba.len(), 32 * 16 * 4);
+
+        // Chunk size chosen so each chunk encodes to a base64 unit ending in
+        // `=` padding (512 bytes → 684 chars with one trailing `=`, matching
+        // chafa's actual chunking).
+        let chunk_bytes = 512;
+        let chunks: Vec<&[u8]> = rgba.chunks(chunk_bytes).collect();
+        let num_chunks = chunks.len();
+        assert!(num_chunks >= 2);
+
+        let mut decoder = KittyDecoder::new();
+        // First APC: metadata only, no payload, m=1 (chafa-style).
+        let first = format!("a=T,f=32,s={},v={},m=1", w, h);
+        decoder.process(first.as_bytes());
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let more = if i + 1 < num_chunks { 1 } else { 0 };
+            let body = format!("m={};{}", more, b64_encode(chunk));
+            decoder.process(body.as_bytes());
+        }
+
+        let result = decoder.finish(1, false).expect("decode");
+        match result {
+            KittyDecodeResult::Image(img) => {
+                assert_eq!(img.width, w);
+                assert_eq!(img.height, h);
+                assert_eq!(img.data.len(), rgba.len());
+                assert_eq!(img.data, rgba);
+            }
+            _ => panic!("expected Image result"),
+        }
     }
 }

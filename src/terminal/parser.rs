@@ -120,6 +120,9 @@ pub struct Performer<'a> {
     pub pty_response: &'a mut Vec<u8>,
     pub dcs_handler: &'a mut Option<DcsHandler>,
     pub images: &'a mut ImageRegistry,
+    /// Newly produced or updated image IDs that need GPU texture re-upload.
+    /// Sixel/Kitty decoders push here when an image is registered.
+    pub dirty_image_ids: &'a mut Vec<u32>,
     /// Cell width (pixels)
     cell_width: u32,
     /// Cell height (pixels)
@@ -146,6 +149,7 @@ impl<'a> Performer<'a> {
         clipboard: &'a mut String,
         dcs_handler: &'a mut Option<DcsHandler>,
         images: &'a mut ImageRegistry,
+        dirty_image_ids: &'a mut Vec<u32>,
         cell_width: u32,
         cell_height: u32,
         current_dir: &'a mut Option<String>,
@@ -163,6 +167,7 @@ impl<'a> Performer<'a> {
             pty_response,
             dcs_handler,
             images,
+            dirty_image_ids,
             cell_width,
             cell_height,
             current_dir,
@@ -726,9 +731,15 @@ impl<'a> Perform for Performer<'a> {
                             last_frame_time: std::time::Instant::now(),
                         };
                         let img_id = self.images.insert(term_img);
+                        // Mark for GPU texture upload — without this the
+                        // renderer never sees the new pixel data and the
+                        // placement renders as a solid black rectangle.
+                        self.dirty_image_ids.push(img_id);
                         // Place image on grid
                         if let Some(image) = self.images.get(img_id) {
-                            self.grid.place_image(
+                            // Sixel is always non-overlay, so no placements
+                            // are superseded — ignore the returned vec.
+                            let _ = self.grid.place_image(
                                 img_id,
                                 image.width,
                                 image.height,

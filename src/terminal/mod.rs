@@ -849,6 +849,7 @@ impl Terminal {
             &mut self.clipboard,
             &mut self.dcs_handler,
             &mut self.images,
+            &mut self.dirty_image_ids,
             self.cell_width,
             self.cell_height,
             &mut self.current_directory,
@@ -940,6 +941,7 @@ impl Terminal {
             &mut self.clipboard,
             &mut self.dcs_handler,
             &mut self.images,
+            &mut self.dirty_image_ids,
             self.cell_width,
             self.cell_height,
             &mut self.current_directory,
@@ -990,7 +992,7 @@ impl Terminal {
 
     /// Finish Kitty decode processing
     fn finish_kitty_decode(&mut self) {
-        use kitty::{make_response, KittyAction};
+        use kitty::KittyAction;
 
         if let Some(decoder) = self.kitty_decoder.take() {
             let params = decoder.params();
@@ -999,6 +1001,9 @@ impl Terminal {
             let no_cursor_move = params.do_not_move_cursor;
             let display_cols = params.cols;
             let display_rows = params.rows;
+            // Per Kitty graphics spec: terminals must not emit responses
+            // unless the client identified the command with i= or I=.
+            let client_requested_response = params.id != 0 || params.number != 0;
             let id = if params.id != 0 {
                 params.id
             } else {
@@ -1198,7 +1203,11 @@ impl Terminal {
                             }
                         }
                     } else if let Some(image) = self.images.get(id) {
-                        self.grid.place_image(
+                        // Re-display of an existing image (a=p). Don't drop
+                        // superseded ids here — the image may still be owned
+                        // by other live placements; let registry LRU handle
+                        // reclamation.
+                        let _ = self.grid.place_image(
                             id,
                             image.width,
                             image.height,
@@ -1218,11 +1227,15 @@ impl Terminal {
                     }
                 }
                 KittyAction::Query => {
-                    // a=q is for protocol support detection - always return OK
-                    if quiet < 2 {
-                        let resp = make_response(id, true, "");
-                        self.write_response(&resp);
-                    }
+                    // a=q is for protocol support detection. Query responses
+                    // are still gated on the client identifying the command.
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        id,
+                        true,
+                        "",
+                    );
                 }
                 // Actions that produce decode results
                 KittyAction::Transmit
@@ -1232,14 +1245,22 @@ impl Terminal {
                 | KittyAction::Animation => {
                     match decoder.finish(self.images.next_id, self.allow_kitty_remote) {
                         Ok(result) => {
-                            self.handle_kitty_result(result, action, quiet);
+                            self.handle_kitty_result(
+                                result,
+                                action,
+                                quiet,
+                                client_requested_response,
+                            );
                         }
                         Err(e) => {
                             log::warn!("Kitty decode error: {}", e);
-                            if quiet < 2 {
-                                let resp = make_response(id, false, &e);
-                                self.write_response(&resp);
-                            }
+                            self.maybe_send_kitty_response(
+                                client_requested_response,
+                                quiet,
+                                id,
+                                false,
+                                &e,
+                            );
                         }
                     }
                 }
@@ -1247,14 +1268,21 @@ impl Terminal {
         }
     }
 
-    /// Handle Kitty decode result
+    /// Handle Kitty decode result.
+    ///
+    /// `client_requested_response` reflects whether the client identified the
+    /// image with `i=` or `I=`. Per the Kitty graphics protocol, terminals
+    /// must not emit responses for commands without one of those keys —
+    /// chafa's transmissions omit both, so honoring this is what stops the
+    /// "OK" reply from leaking into the shell's input as visible text.
     fn handle_kitty_result(
         &mut self,
         result: kitty::KittyDecodeResult,
         action: kitty::KittyAction,
         quiet: u8,
+        client_requested_response: bool,
     ) {
-        use kitty::{make_response, KittyAction, KittyDecodeResult};
+        use kitty::{KittyAction, KittyDecodeResult};
 
         match result {
             KittyDecodeResult::Image(kitty_img) => {
@@ -1298,7 +1326,7 @@ impl Terminal {
                 self.images.insert(term_img);
 
                 if action == KittyAction::TransmitAndDisplay {
-                    self.grid.place_image(
+                    let superseded = self.grid.place_image(
                         img_id,
                         width,
                         height,
@@ -1312,17 +1340,22 @@ impl Terminal {
                         kitty_img.src_x, kitty_img.src_y,
                         kitty_img.src_w, kitty_img.src_h,
                     );
+                    // Drop images that were fully covered by this placement so
+                    // their memory and cached GPU textures are reclaimed every
+                    // frame (critical under `mpv --vo=kitty`-style streaming).
+                    for old_id in superseded {
+                        self.images.remove(old_id);
+                        self.dirty_image_ids.push(old_id);
+                    }
                 }
 
-                if quiet < 2 {
-                    let resp = make_response(img_id, true, "");
-                    log::info!(
-                        "Kitty graphics: sending OK response for id={} ({} bytes)",
-                        img_id,
-                        resp.len()
-                    );
-                    self.write_response(&resp);
-                }
+                self.maybe_send_kitty_response(
+                    client_requested_response,
+                    quiet,
+                    img_id,
+                    true,
+                    "",
+                );
             }
             KittyDecodeResult::Frame(frame_data) => {
                 info!(
@@ -1386,17 +1419,22 @@ impl Terminal {
                     // Recalculate tracked memory after frame mutation
                     self.images.enforce_limits();
 
-                    if quiet < 2 {
-                        let resp = make_response(frame_data.image_id, true, "");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        frame_data.image_id,
+                        true,
+                        "",
+                    );
                 } else {
                     log::warn!("Kitty frame: image {} not found", frame_data.image_id);
-                    if quiet < 2 {
-                        let resp =
-                            make_response(frame_data.image_id, false, "ENOENT:image not found");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        frame_data.image_id,
+                        false,
+                        "ENOENT:image not found",
+                    );
                 }
             }
             KittyDecodeResult::Compose(cmd) => {
@@ -1420,19 +1458,25 @@ impl Terminal {
                         cmd.compose_mode,
                     );
 
-                    if quiet < 2 {
-                        let resp = if result.is_ok() {
-                            make_response(cmd.image_id, true, "")
-                        } else {
-                            make_response(cmd.image_id, false, &result.unwrap_err())
-                        };
-                        self.write_response(&resp);
-                    }
+                    let (ok, msg) = match &result {
+                        Ok(()) => (true, String::new()),
+                        Err(e) => (false, e.clone()),
+                    };
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        ok,
+                        &msg,
+                    );
                 } else {
-                    if quiet < 2 {
-                        let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        false,
+                        "ENOENT:image not found",
+                    );
                 }
             }
             KittyDecodeResult::Animation(cmd) => {
@@ -1474,15 +1518,21 @@ impl Terminal {
                         }
                     }
 
-                    if quiet < 2 {
-                        let resp = make_response(cmd.image_id, true, "");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        true,
+                        "",
+                    );
                 } else {
-                    if quiet < 2 {
-                        let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        false,
+                        "ENOENT:image not found",
+                    );
                 }
             }
         }
@@ -1599,6 +1649,24 @@ impl Terminal {
         if let Err(e) = self.pty.write_all(data) {
             log::warn!("PTY response write failed: {}", e);
         }
+    }
+
+    /// Send a Kitty graphics response only when the spec permits it:
+    /// the client must have identified the command with `i=` or `I=`
+    /// (`client_requested_response`), and `q=2` always suppresses output.
+    fn maybe_send_kitty_response(
+        &self,
+        client_requested_response: bool,
+        quiet: u8,
+        id: u32,
+        ok: bool,
+        message: &str,
+    ) {
+        if !client_requested_response || quiet >= 2 {
+            return;
+        }
+        let resp = kitty::make_response(id, ok, message);
+        self.write_response(&resp);
     }
 
     /// Write data to PTY (for keyboard input forwarding)
@@ -2520,6 +2588,7 @@ impl Terminal {
             &mut self.clipboard,
             &mut self.dcs_handler,
             &mut self.images,
+            &mut self.dirty_image_ids,
             self.cell_width,
             self.cell_height,
             &mut self.current_directory,
