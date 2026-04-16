@@ -2518,36 +2518,49 @@ impl Grid {
             // rewrite or a newline wrote the first cell after placement).
             let mut new_row = self.cursor_row as u64 + self.scrollback_total;
             let mut new_col = self.cursor_col;
-            // `mpv --vo=sixel` resets the cursor to the same cell before each
-            // frame, but its status-display thread may interleave text after
-            // the positioning CUP, advancing the cursor past the intended
-            // column. If an existing same-dimension, same-z placement exists,
-            // reuse its position — the client clearly intended to replace
-            // that exact frame.
-            // Deduplicate for video streaming: `mpv --vo=sixel` sends
-            // identically-sized frames but mpv's status thread may have
-            // shifted the cursor between frames, so their positions differ
-            // slightly. Match by (z, width, height) to catch these.
-            // When a match is found, reuse the FIRST correct position so
-            // subsequent frames don't drift.
-            let mut reuse_pos: Option<(u64, usize)> = None;
-            self.image_placements.retain(|p| {
-                if p.overlay {
-                    return true;
-                }
-                if p.z == z_index {
+            // Sixel video streaming dedup (z < 0 only): mpv --vo=sixel
+            // sends frames at z=-1 with cursor positions corrupted by
+            // interleaved status text. Reuse the first frame's position.
+            // For z >= 0 (Kitty graphics, static sixel), just remove
+            // fully-covered placements without position reuse — apps like
+            // yazi place different images at different positions.
+            if z_index < 0 {
+                let mut reuse_pos: Option<(u64, usize)> = None;
+                self.image_placements.retain(|p| {
+                    if p.overlay || p.z != z_index {
+                        return true;
+                    }
                     if reuse_pos.is_none() {
                         reuse_pos = Some((p.row, p.col));
                     }
                     superseded.push(p.id);
                     false
-                } else {
-                    true
+                });
+                if let Some((prev_row, prev_col)) = reuse_pos {
+                    new_row = prev_row;
+                    new_col = prev_col;
                 }
-            });
-            if let Some((prev_row, prev_col)) = reuse_pos {
-                new_row = prev_row;
-                new_col = prev_col;
+            } else {
+                // z >= 0: remove fully-covered placements at same z
+                let new_row_end = new_row + height_cells as u64;
+                let new_col_end = new_col + width_cells;
+                self.image_placements.retain(|p| {
+                    if p.overlay || p.z != z_index {
+                        return true;
+                    }
+                    let p_row_end = p.row + p.height_cells as u64;
+                    let p_col_end = p.col + p.width_cells;
+                    let fully_covered = p.row >= new_row
+                        && p_row_end <= new_row_end
+                        && p.col >= new_col
+                        && p_col_end <= new_col_end;
+                    if fully_covered {
+                        superseded.push(p.id);
+                        false
+                    } else {
+                        true
+                    }
+                });
             }
 
             let placement = ImagePlacement {
