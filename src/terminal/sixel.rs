@@ -317,34 +317,31 @@ impl SixelDecoder {
         }
     }
 
-    /// Draw Sixel pattern
+    /// Draw Sixel pattern — hot path, called for every sixel data character.
+    /// Writes directly to the pixel buffer without per-pixel ensure_size.
     fn draw_sixel(&mut self, pattern: u8, count: u32) {
+        let py_base = self.y * 6;
+        let max_py = py_base + 5;
+        let max_x = self.x + count;
+        // Single ensure_size for the entire run
+        self.ensure_size(max_x, max_py + 1);
+        let w = self.width;
+        let color = self.current_color;
+        let pixels = &mut self.pixels;
+        let len = pixels.len();
         for _ in 0..count {
-            // Draw 6-bit pattern as 6 vertical pixels
             let px = self.x;
-            let py_base = self.y * 6;
-
-            for bit in 0..6 {
-                if (pattern >> bit) & 1 != 0 {
-                    let py = py_base + bit;
-                    self.set_pixel(px, py, self.current_color);
+            if pattern != 0 {
+                for bit in 0u32..6 {
+                    if (pattern >> bit) & 1 != 0 {
+                        let idx = ((py_base + bit) * w + px) as usize;
+                        if idx < len {
+                            pixels[idx] = color;
+                        }
+                    }
                 }
             }
-
             self.x += 1;
-        }
-    }
-
-    /// Set pixel (expand buffer as needed)
-    fn set_pixel(&mut self, x: u32, y: u32, color: u8) {
-        // Expand image size
-        let new_w = x + 1;
-        let new_h = y + 1;
-        self.ensure_size(new_w, new_h);
-
-        let idx = (y * self.width + x) as usize;
-        if idx < self.pixels.len() {
-            self.pixels[idx] = color;
         }
     }
 
@@ -415,16 +412,25 @@ impl SixelDecoder {
             }
         };
 
-        // Convert palette indices to RGBA
-        let mut data = Vec::with_capacity(rgba_size);
-        for &idx in &self.pixels {
-            if idx == 255 {
-                // Transparent pixel
-                data.extend_from_slice(&[0, 0, 0, 0]);
+        // Convert palette indices to RGBA — pre-build a 256-entry RGBA LUT
+        // so the inner loop is a single indexed copy per pixel.
+        let mut lut = [[0u8; 4]; 256];
+        for (i, entry) in lut.iter_mut().enumerate() {
+            if i == 255 {
+                *entry = [0, 0, 0, 0]; // transparent
             } else {
-                let (r, g, b) = self.palette[idx as usize];
-                data.extend_from_slice(&[r, g, b, 255]);
+                let (r, g, b) = self.palette[i];
+                *entry = [r, g, b, 255];
             }
+        }
+        let mut data = vec![0u8; rgba_size];
+        for (i, &idx) in self.pixels.iter().enumerate() {
+            let rgba = &lut[idx as usize];
+            let off = i * 4;
+            data[off] = rgba[0];
+            data[off + 1] = rgba[1];
+            data[off + 2] = rgba[2];
+            data[off + 3] = rgba[3];
         }
 
         trace!(
