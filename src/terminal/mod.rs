@@ -83,6 +83,18 @@ fn has_esc_underscore(buf: &[u8]) -> bool {
     false
 }
 
+fn has_esc_p(buf: &[u8]) -> bool {
+    if buf.len() < 2 {
+        return false;
+    }
+    for i in 0..buf.len() - 1 {
+        if buf[i] == 0x1B && buf[i + 1] == b'P' {
+            return true;
+        }
+    }
+    false
+}
+
 /// Copy mode state
 pub struct CopyModeState {
     /// Copy mode cursor row (display coordinates)
@@ -540,6 +552,14 @@ enum ApcState {
     InApc,
     /// Waiting for APC termination (ESC detected)
     ApcEscape,
+    /// ESC P detected, collecting DCS params until final char (0x40-0x7E)
+    DcsParams,
+    /// Inside DCS sixel data (final char was 'q'). Bytes go directly to
+    /// the SixelDecoder without touching vte, avoiding vte state bugs that
+    /// cause sixel data to leak as printed text under streaming load.
+    DcsData,
+    /// ESC detected inside DCS data (potential ST = ESC \)
+    DcsEscape,
 }
 
 /// Terminal emulator
@@ -820,17 +840,21 @@ impl Terminal {
 
         trace!("PTY read: {} bytes", n);
 
-        // Fast path: if already in APC state or buffer contains ESC _, use slow path
-        // This handles the rare APC (Kitty graphics) case
-        // Use manual loop instead of windows(2).any() to avoid iterator overhead
-        // Include ApcState::Escape to handle ESC at buffer boundary (ESC in prev buffer, _ in this one)
-        let has_apc = matches!(
+        // Slow path is needed when we're inside (or about to enter) an APC
+        // or DCS sequence that bcon handles directly (bypassing vte).
+        let needs_slow = matches!(
             self.apc_state,
-            ApcState::Escape | ApcState::InApc | ApcState::ApcEscape
-        ) || has_esc_underscore(&self.read_buf[..n]);
+            ApcState::Escape
+                | ApcState::InApc
+                | ApcState::ApcEscape
+                | ApcState::DcsParams
+                | ApcState::DcsData
+                | ApcState::DcsEscape
+        ) || has_esc_underscore(&self.read_buf[..n])
+            || has_esc_p(&self.read_buf[..n]);
 
-        if has_apc {
-            // Slow path: byte-by-byte for APC handling
+        if needs_slow {
+            // Slow path: byte-by-byte for APC/DCS handling
             self.process_pty_output_slow(n);
         } else {
             // Fast path: single Performer for all bytes
@@ -898,6 +922,11 @@ impl Terminal {
                     if byte == b'_' {
                         self.apc_state = ApcState::InApc;
                         self.apc_buffer.clear();
+                    } else if byte == b'P' {
+                        // DCS start — handle sixel ourselves to avoid vte
+                        // state bugs under streaming sixel load.
+                        self.apc_state = ApcState::DcsParams;
+                        self.apc_buffer.clear();
                     } else {
                         self.apc_state = ApcState::Normal;
                         self.process_byte_with_vte(0x1B);
@@ -926,6 +955,69 @@ impl Terminal {
                             self.apc_buffer.push(byte);
                             self.apc_state = ApcState::InApc;
                         }
+                    }
+                }
+                ApcState::DcsParams => {
+                    // Collect bytes until the final char (0x40-0x7E).
+                    if (0x40..=0x7E).contains(&byte) {
+                        if byte == b'q' {
+                            // Sixel DCS — start collecting data directly
+                            info!("Sixel DCS started (direct)");
+                            self.dcs_handler = Some(DcsHandler::Sixel(
+                                SixelDecoder::new(),
+                            ));
+                            self.apc_state = ApcState::DcsData;
+                        } else {
+                            // Non-sixel DCS (DECRQSS, XTGETTCAP, etc.) —
+                            // replay ESC P <params> <final> to vte for
+                            // standard handling and return to Normal.
+                            self.process_byte_with_vte(0x1B);
+                            self.process_byte_with_vte(b'P');
+                            for &b in &self.apc_buffer.clone() {
+                                self.process_byte_with_vte(b);
+                            }
+                            self.process_byte_with_vte(byte);
+                            self.apc_state = ApcState::Normal;
+                        }
+                    } else {
+                        // DCS parameter/intermediate byte — buffer it
+                        if self.apc_buffer.len() < 64 {
+                            self.apc_buffer.push(byte);
+                        }
+                    }
+                }
+                ApcState::DcsData => {
+                    // Sixel data bytes — feed directly to decoder.
+                    // This is the hot path; no vte, no Performer overhead.
+                    if byte == 0x1B {
+                        self.apc_state = ApcState::DcsEscape;
+                    } else if byte == 0x9C {
+                        // C1 ST — end of DCS
+                        self.finish_dcs_sixel();
+                        self.apc_state = ApcState::Normal;
+                    } else if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
+                        dec.push(byte);
+                    }
+                }
+                ApcState::DcsEscape => {
+                    if byte == b'\\' {
+                        // ESC \ = ST — end of DCS
+                        self.finish_dcs_sixel();
+                        self.apc_state = ApcState::Normal;
+                    } else if byte == 0x1B {
+                        // Double ESC — first was data, second might be ST
+                        if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
+                            dec.push(0x1B);
+                        }
+                        // stay in DcsEscape
+                    } else {
+                        // False alarm — ESC was part of data (shouldn't
+                        // happen in valid sixel, but be safe)
+                        if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
+                            dec.push(0x1B);
+                            dec.push(byte);
+                        }
+                        self.apc_state = ApcState::DcsData;
                     }
                 }
             }
@@ -958,6 +1050,54 @@ impl Terminal {
         if !self.pty_response.is_empty() {
             log::trace!("PTY response: {} bytes", self.pty_response.len());
             self.write_response(&self.pty_response);
+        }
+    }
+
+    /// Finish a DCS sixel sequence that was handled directly (bypassing vte).
+    /// Mirrors the unhook logic in parser.rs but operates on Terminal fields.
+    fn finish_dcs_sixel(&mut self) {
+        // SixelDecoder is already imported at module level (use sixel::SixelDecoder)
+        if let Some(DcsHandler::Sixel(decoder)) = self.dcs_handler.take() {
+            let id = self.images.next_id;
+            if let Some(sixel_img) = decoder.finish(id) {
+                info!(
+                    "Sixel image decode complete: {}x{} (id={})",
+                    sixel_img.width, sixel_img.height, sixel_img.id
+                );
+                let term_img = TerminalImage {
+                    id: sixel_img.id,
+                    width: sixel_img.width,
+                    height: sixel_img.height,
+                    data: sixel_img.data,
+                    frames: Vec::new(),
+                    animation_state: AnimationState::Stopped,
+                    current_frame: 0,
+                    loop_count: 0,
+                    current_loop: 0,
+                    root_gap: 0,
+                    last_frame_time: std::time::Instant::now(),
+                };
+                let img_id = self.images.insert(term_img);
+                self.dirty_image_ids.push(img_id);
+                if let Some(image) = self.images.get(img_id) {
+                    let superseded = self.grid.place_image(
+                        img_id,
+                        image.width,
+                        image.height,
+                        self.cell_width,
+                        self.cell_height,
+                        false,
+                        0, 0,
+                        -1, // z < 0: sixel survives text overwrites
+                        0, 0,
+                        0, 0, 0, 0,
+                    );
+                    for old_id in superseded {
+                        self.images.remove(old_id);
+                        self.dirty_image_ids.push(old_id);
+                    }
+                }
+            }
         }
     }
 

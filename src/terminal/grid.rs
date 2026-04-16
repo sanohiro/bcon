@@ -2516,10 +2516,47 @@ impl Grid {
             // `remove_images_at_cell`, which would discard the placement we
             // just created (observed with `chafa -f sixel` when the prompt
             // rewrite or a newline wrote the first cell after placement).
+            let mut new_row = self.cursor_row as u64 + self.scrollback_total;
+            let mut new_col = self.cursor_col;
+            // `mpv --vo=sixel` resets the cursor to the same cell before each
+            // frame, but its status-display thread may interleave text after
+            // the positioning CUP, advancing the cursor past the intended
+            // column. If an existing same-dimension, same-z placement exists,
+            // reuse its position — the client clearly intended to replace
+            // that exact frame.
+            // Deduplicate for video streaming: `mpv --vo=sixel` sends
+            // identically-sized frames but mpv's status thread may have
+            // shifted the cursor between frames, so their positions differ
+            // slightly. Match by (z, width, height) to catch these.
+            // When a match is found, reuse the FIRST correct position so
+            // subsequent frames don't drift.
+            let mut reuse_pos: Option<(u64, usize)> = None;
+            self.image_placements.retain(|p| {
+                if p.overlay {
+                    return true;
+                }
+                if p.z == z_index
+                    && p.width_cells == width_cells
+                    && p.height_cells == height_cells
+                {
+                    if reuse_pos.is_none() {
+                        reuse_pos = Some((p.row, p.col));
+                    }
+                    superseded.push(p.id);
+                    false
+                } else {
+                    true
+                }
+            });
+            if let Some((prev_row, prev_col)) = reuse_pos {
+                new_row = prev_row;
+                new_col = prev_col;
+            }
+
             let placement = ImagePlacement {
                 id,
-                row: self.cursor_row as u64 + self.scrollback_total,
-                col: self.cursor_col,
+                row: new_row,
+                col: new_col,
                 width_cells,
                 height_cells,
                 pixel_width,

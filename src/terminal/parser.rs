@@ -709,7 +709,6 @@ impl<'a> Perform for Performer<'a> {
                     self.handle_decrqss(&buffer);
                 }
                 DcsHandler::Sixel(decoder) => {
-                    // Decode complete, register image
                     let id = self.images.next_id;
                     if let Some(sixel_img) = decoder.finish(id) {
                         info!(
@@ -737,9 +736,7 @@ impl<'a> Perform for Performer<'a> {
                         self.dirty_image_ids.push(img_id);
                         // Place image on grid
                         if let Some(image) = self.images.get(img_id) {
-                            // Sixel is always non-overlay, so no placements
-                            // are superseded — ignore the returned vec.
-                            let _ = self.grid.place_image(
+                            let superseded = self.grid.place_image(
                                 img_id,
                                 image.width,
                                 image.height,
@@ -748,10 +745,20 @@ impl<'a> Perform for Performer<'a> {
                                 false, // Sixel always moves cursor
                                 0,     // No explicit display cols
                                 0,     // No explicit display rows
-                                0,     // Sixel has no z-index
+                                -1,    // z < 0: sixel survives text overwrites
                                 0, 0,  // No cell offset
                                 0, 0, 0, 0, // No source rect
                             );
+                            // `mpv --vo=sixel` replays the same absolute
+                            // cell every frame because it resets the cursor
+                            // before each DCS. Reclaim the RGBA backing
+                            // buffer and GPU texture of the frame we just
+                            // superseded so neither the image registry nor
+                            // the texture cache grows unbounded.
+                            for old_id in superseded {
+                                self.images.remove(old_id);
+                                self.dirty_image_ids.push(old_id);
+                            }
                         }
                     }
                 }
