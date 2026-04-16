@@ -904,11 +904,48 @@ impl Terminal {
         }
     }
 
-    /// Slow path: byte-by-byte processing with APC state machine
+    /// Slow path: byte-by-byte processing with APC/DCS state machine.
+    ///
+    /// When in DcsData state (sixel streaming), uses a tight inner loop
+    /// that scans for ESC/0x9C and feeds everything else to the decoder
+    /// in bulk — avoiding per-byte match + Option check overhead.
     fn process_pty_output_slow(&mut self, n: usize) {
         self.pty_response.clear();
-        for i in 0..n {
+        let mut i = 0;
+        while i < n {
+            // Fast inner loop for sixel data: skip the outer match entirely
+            // and scan for ESC (DCS terminator) in bulk.
+            if matches!(self.apc_state, ApcState::DcsData) {
+                if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
+                    while i < n {
+                        let byte = self.read_buf[i];
+                        if byte == 0x1B {
+                            self.apc_state = ApcState::DcsEscape;
+                            i += 1;
+                            break;
+                        } else if byte == 0x9C {
+                            i += 1;
+                            // Need to drop the mutable borrow before calling finish
+                            break;
+                        }
+                        dec.push(byte);
+                        i += 1;
+                    }
+                    // Handle 0x9C (C1 ST) that broke out of the inner loop
+                    if i > 0 && self.read_buf[i - 1] == 0x9C
+                        && matches!(self.apc_state, ApcState::DcsData)
+                    {
+                        self.finish_dcs_sixel();
+                        self.apc_state = ApcState::Normal;
+                    }
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+
             let byte = self.read_buf[i];
+            i += 1;
 
             match self.apc_state {
                 ApcState::Normal => {
@@ -923,8 +960,6 @@ impl Terminal {
                         self.apc_state = ApcState::InApc;
                         self.apc_buffer.clear();
                     } else if byte == b'P' {
-                        // DCS start — handle sixel ourselves to avoid vte
-                        // state bugs under streaming sixel load.
                         self.apc_state = ApcState::DcsParams;
                         self.apc_buffer.clear();
                     } else {
@@ -958,19 +993,14 @@ impl Terminal {
                     }
                 }
                 ApcState::DcsParams => {
-                    // Collect bytes until the final char (0x40-0x7E).
                     if (0x40..=0x7E).contains(&byte) {
                         if byte == b'q' {
-                            // Sixel DCS — start collecting data directly
                             trace!("Sixel DCS started (direct)");
                             self.dcs_handler = Some(DcsHandler::Sixel(
                                 SixelDecoder::new(),
                             ));
                             self.apc_state = ApcState::DcsData;
                         } else {
-                            // Non-sixel DCS (DECRQSS, XTGETTCAP, etc.) —
-                            // replay ESC P <params> <final> to vte for
-                            // standard handling and return to Normal.
                             self.process_byte_with_vte(0x1B);
                             self.process_byte_with_vte(b'P');
                             for &b in &self.apc_buffer.clone() {
@@ -979,40 +1009,23 @@ impl Terminal {
                             self.process_byte_with_vte(byte);
                             self.apc_state = ApcState::Normal;
                         }
-                    } else {
-                        // DCS parameter/intermediate byte — buffer it
-                        if self.apc_buffer.len() < 64 {
-                            self.apc_buffer.push(byte);
-                        }
+                    } else if self.apc_buffer.len() < 64 {
+                        self.apc_buffer.push(byte);
                     }
                 }
                 ApcState::DcsData => {
-                    // Sixel data bytes — feed directly to decoder.
-                    // This is the hot path; no vte, no Performer overhead.
-                    if byte == 0x1B {
-                        self.apc_state = ApcState::DcsEscape;
-                    } else if byte == 0x9C {
-                        // C1 ST — end of DCS
-                        self.finish_dcs_sixel();
-                        self.apc_state = ApcState::Normal;
-                    } else if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
-                        dec.push(byte);
-                    }
+                    // Fallback (shouldn't reach here due to fast path above)
+                    unreachable!("DcsData handled by fast inner loop");
                 }
                 ApcState::DcsEscape => {
                     if byte == b'\\' {
-                        // ESC \ = ST — end of DCS
                         self.finish_dcs_sixel();
                         self.apc_state = ApcState::Normal;
                     } else if byte == 0x1B {
-                        // Double ESC — first was data, second might be ST
                         if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
                             dec.push(0x1B);
                         }
-                        // stay in DcsEscape
                     } else {
-                        // False alarm — ESC was part of data (shouldn't
-                        // happen in valid sixel, but be safe)
                         if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
                             dec.push(0x1B);
                             dec.push(byte);
