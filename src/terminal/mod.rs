@@ -23,7 +23,7 @@ use pty::Pty;
 use sixel::SixelDecoder;
 
 /// Read buffer size
-const READ_BUF_SIZE: usize = 4096;
+const READ_BUF_SIZE: usize = 262144; // 256KB — one sixel frame fits in ~2 reads
 
 /// Maximum notification history entries
 const MAX_NOTIFICATIONS: usize = 100;
