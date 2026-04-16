@@ -2535,10 +2535,7 @@ impl Grid {
                 if p.overlay {
                     return true;
                 }
-                if p.z == z_index
-                    && p.width_cells == width_cells
-                    && p.height_cells == height_cells
-                {
+                if p.z == z_index {
                     if reuse_pos.is_none() {
                         reuse_pos = Some((p.row, p.col));
                     }
