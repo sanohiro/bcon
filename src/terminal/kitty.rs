@@ -560,7 +560,7 @@ impl KittyDecoder {
         // payload_buffer already contains decoded bytes (chunks are decoded
         // on arrival in process()).
         let raw_data = self.payload_buffer;
-        info!("Kitty: total decoded payload = {} bytes", raw_data.len());
+        trace!("Kitty: total decoded payload = {} bytes", raw_data.len());
 
         // Handle non-data actions first
         match params.action {
@@ -629,7 +629,7 @@ impl KittyDecoder {
         // For image actions (Transmit, TransmitAndDisplay, Query)
         let (width, height, rgba) = decode_image_data(&params, data)?;
 
-        info!("Kitty: decoded image {}x{} (id={})", width, height, id);
+        trace!("Kitty: decoded image {}x{} (id={})", width, height, id);
 
         Ok(KittyDecodeResult::Image(KittyImage {
             id,

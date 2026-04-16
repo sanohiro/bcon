@@ -962,7 +962,7 @@ impl Terminal {
                     if (0x40..=0x7E).contains(&byte) {
                         if byte == b'q' {
                             // Sixel DCS — start collecting data directly
-                            info!("Sixel DCS started (direct)");
+                            trace!("Sixel DCS started (direct)");
                             self.dcs_handler = Some(DcsHandler::Sixel(
                                 SixelDecoder::new(),
                             ));
@@ -1109,7 +1109,7 @@ impl Terminal {
         }
 
         let payload = &self.apc_buffer[1..];
-        log::info!("Kitty APC received: {} bytes payload", payload.len());
+        log::trace!("Kitty APC received: {} bytes payload", payload.len());
 
         // Create new decoder if none exists
         if self.kitty_decoder.is_none() {

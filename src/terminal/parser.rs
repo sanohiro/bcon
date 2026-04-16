@@ -659,7 +659,7 @@ impl<'a> Perform for Performer<'a> {
         match (action, intermediates) {
             // Sixel: DCS q or DCS P q
             ('q', []) | ('q', [b'0'..=b'9']) => {
-                info!("Sixel DCS started");
+                trace!("Sixel DCS started");
                 *self.dcs_handler = Some(DcsHandler::Sixel(SixelDecoder::new()));
             }
             // XTGETTCAP: DCS + q Pt ST
