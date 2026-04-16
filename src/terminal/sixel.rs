@@ -131,6 +131,7 @@ impl SixelDecoder {
     }
 
     /// Process one byte in streaming fashion
+    #[inline(always)]
     pub fn push(&mut self, byte: u8) {
         match self.state {
             State::Normal => self.handle_normal(byte),
@@ -141,6 +142,7 @@ impl SixelDecoder {
     }
 
     /// Handle normal state
+    #[inline(always)]
     fn handle_normal(&mut self, byte: u8) {
         match byte {
             b'#' => {
@@ -180,6 +182,7 @@ impl SixelDecoder {
     }
 
     /// Handle color command (#Pc or #Pc;Pu;Px;Py;Pz)
+    #[inline(always)]
     fn handle_color(&mut self, byte: u8) {
         match byte {
             b'0'..=b'9' | b';' => {
@@ -206,6 +209,7 @@ impl SixelDecoder {
     }
 
     /// Handle RLE count (!n)
+    #[inline(always)]
     fn handle_rle(&mut self, byte: u8) {
         match byte {
             b'0'..=b'9' => {
@@ -225,6 +229,7 @@ impl SixelDecoder {
     }
 
     /// Handle raster attributes ("Pan;Pad;Ph;Pv)
+    #[inline(always)]
     fn handle_raster_attr(&mut self, byte: u8) {
         match byte {
             b'0'..=b'9' | b';' => {
@@ -319,6 +324,7 @@ impl SixelDecoder {
 
     /// Draw Sixel pattern — hot path, called for every sixel data character.
     /// Writes directly to the pixel buffer without per-pixel ensure_size.
+    #[inline(always)]
     fn draw_sixel(&mut self, pattern: u8, count: u32) {
         let py_base = self.y * 6;
         let max_py = py_base + 5;
@@ -346,6 +352,7 @@ impl SixelDecoder {
     }
 
     /// Ensure image size
+    #[inline(always)]
     fn ensure_size(&mut self, new_w: u32, new_h: u32) {
         let need_resize = new_w > self.width || new_h > self.height;
         if !need_resize {
