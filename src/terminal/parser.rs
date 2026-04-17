@@ -745,7 +745,7 @@ impl<'a> Perform for Performer<'a> {
                                 false, // Sixel always moves cursor
                                 0,     // No explicit display cols
                                 0,     // No explicit display rows
-                                -1,    // z < 0: sixel survives text overwrites
+                                0,     // z=0: removed by text writes (yazi preview clear)
                                 0, 0,  // No cell offset
                                 0, 0, 0, 0, // No source rect
                             );

@@ -1101,7 +1101,7 @@ impl Terminal {
                         self.cell_height,
                         false,
                         0, 0,
-                        -1, // z < 0: sixel survives text overwrites
+                        0, // z=0: removed by text writes (yazi preview clear)
                         0, 0,
                         0, 0, 0, 0,
                     );
@@ -1163,14 +1163,16 @@ impl Terminal {
                 self.images.next_id
             };
 
-            log::info!(
-                "Kitty finish_decode: action={:?}, id={}, quiet={}, C={}, size={}x{}",
+            log::trace!(
+                "Kitty finish_decode: action={:?}, id={}, quiet={}, C={}, U={}, size={}x{}, placements={}",
                 action,
                 id,
                 quiet,
                 if no_cursor_move { 1 } else { 0 },
+                if params.unicode_placement { 1 } else { 0 },
                 params.width,
-                params.height
+                params.height,
+                self.grid.image_placements.len()
             );
 
             match action {
@@ -1271,7 +1273,6 @@ impl Terminal {
                         }
                         _ => {}
                     }
-                    // Trigger redraw after image deletion
                     self.grid.mark_all_dirty();
                 }
                 KittyAction::Display => {

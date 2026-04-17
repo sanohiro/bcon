@@ -3040,14 +3040,14 @@ mod tests {
         // First chafa -f sixel at row 0
         g.cursor_row = 0;
         g.cursor_col = 2;
-        g.place_image(1, 640, 200, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        g.place_image(1, 640, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         // 200/20 = 10 rows. cursor now at row 10.
         assert_eq!(g.cursor_row, 10);
         assert_eq!(g.image_placements.len(), 1);
 
         // Second chafa -f sixel at row 10 (below first)
         g.cursor_col = 2;
-        g.place_image(2, 640, 200, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        g.place_image(2, 640, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         // Both images should coexist (different rows, no overlap)
         assert_eq!(g.image_placements.len(), 2);
         assert_eq!(g.image_placements[0].id, 1);
@@ -3055,18 +3055,16 @@ mod tests {
     }
 
     #[test]
-    fn sixel_dedup_survives_text_writes() {
+    fn sixel_removed_by_text_writes() {
         let mut g = make_grid();
         g.cursor_row = 0;
         g.cursor_col = 2;
-        g.place_image(1, 960, 720, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
-        // Simulate text write at row 0 (mpv status)
+        g.place_image(1, 960, 720, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         g.cursor_row = 0;
-        g.cursor_col = 0;
-        g.put_char('V');
-        g.put_char(':');
-        // z<0 image should survive text writes
-        assert_eq!(g.image_placements.len(), 1);
+        g.cursor_col = 2;
+        g.put_char('X');
+        // z=0 image removed by text write (yazi preview clear)
+        assert_eq!(g.image_placements.len(), 0);
     }
 
     // ---- z>=0 dedup (kitty/yazi) ----
