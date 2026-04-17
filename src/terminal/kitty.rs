@@ -380,10 +380,7 @@ impl KittyDecoder {
         if !payload.is_empty() {
             let decoded = match base64_decode(payload.as_bytes()) {
                 Some(d) => d,
-                None => {
-                    warn!("Kitty: invalid base64 in chunk");
-                    return (true, None);
-                }
+                None => Vec::new(), // base64_decode is lenient, shouldn't reach here
             };
             if self.payload_buffer.len() + decoded.len() <= MAX_IMAGE_DATA_SIZE {
                 self.payload_buffer.extend_from_slice(&decoded);
@@ -761,24 +758,27 @@ fn decode_image_data(params: &KittyParams, data: Vec<u8>) -> Result<(u32, u32, V
             if w == 0 || h == 0 {
                 return Err("missing width/height for RGBA".to_string());
             }
-            // Use checked arithmetic to prevent overflow
             let expected_size = (w as usize)
                 .checked_mul(h as usize)
                 .and_then(|wh| wh.checked_mul(4))
                 .ok_or_else(|| "RGBA dimensions too large".to_string())?;
+            let mut data = data;
             if data.len() != expected_size {
-                return Err(format!(
-                    "RGBA size mismatch: expected {}, got {}",
-                    expected_size,
-                    data.len()
-                ));
+                trace!(
+                    "RGBA size: expected {}, got {} (delta {})",
+                    expected_size, data.len(),
+                    expected_size as i64 - data.len() as i64
+                );
+                data.resize(expected_size, 0);
             }
             Ok((w, h, data))
         }
     }
 }
 
-/// Base64 decode
+/// Base64 decode — lenient: skips invalid bytes instead of aborting.
+/// Some mpv versions emit chunks with stray bytes; aborting the
+/// entire frame on a single bad byte makes video unplayable.
 fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut output = Vec::with_capacity(input.len() * 3 / 4);
     let mut buf: u32 = 0;
@@ -792,7 +792,7 @@ fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
             b'+' => 62,
             b'/' => 63,
             b'=' | b'\n' | b'\r' | b' ' => continue,
-            _ => return None,
+            _ => continue, // skip invalid bytes instead of aborting
         };
         buf = (buf << 6) | val as u32;
         bits += 6;
@@ -898,25 +898,29 @@ fn rgb_to_rgba(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> 
         .checked_mul(height as usize)
         .and_then(|wh| wh.checked_mul(3))
         .ok_or_else(|| "RGB dimensions too large".to_string())?;
+    // Tolerate minor size differences — base64 chunk boundaries or
+    // mpv version quirks can cause a few hundred bytes of drift.
+    // Use whichever is smaller to avoid out-of-bounds reads.
+    let usable = data.len().min(expected);
     if data.len() != expected {
-        return Err(format!(
-            "RGB size mismatch: expected {}, got {}",
-            expected,
-            data.len()
-        ));
+        trace!(
+            "RGB size: expected {}, got {} (delta {}), using {}",
+            expected, data.len(),
+            expected as i64 - data.len() as i64, usable
+        );
     }
 
-    let rgba_size = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|wh| wh.checked_mul(4))
-        .ok_or_else(|| "RGB dimensions too large".to_string())?;
+    let pixel_count = usable / 3;
+    let rgba_size = pixel_count * 4;
     let mut rgba = Vec::with_capacity(rgba_size);
-    for chunk in data.chunks(3) {
+    for chunk in data[..pixel_count * 3].chunks_exact(3) {
         rgba.push(chunk[0]);
         rgba.push(chunk[1]);
         rgba.push(chunk[2]);
         rgba.push(255);
     }
+    // Pad to expected RGBA size if data was short
+    rgba.resize(width as usize * height as usize * 4, 0);
     Ok(rgba)
 }
 
@@ -1084,5 +1088,50 @@ mod tests {
             }
             _ => panic!("expected Image result"),
         }
+    }
+
+    /// Reproduces the mpv v0.40.0 bug from issue #7: RGB data is slightly
+    /// short of expected w*h*3 (720 bytes / 240 pixels missing). bcon must
+    /// pad with zeros instead of rejecting the frame.
+    #[test]
+    fn rgb_size_mismatch_tolerant() {
+        let w = 100u32;
+        let h = 100u32;
+        let expected_rgb = (w * h * 3) as usize; // 30000
+        let short_by = 720usize; // same magnitude as reported bug
+        let actual_rgb = expected_rgb - short_by; // 29280
+
+        let rgb_data: Vec<u8> = (0..actual_rgb).map(|i| (i & 0xff) as u8).collect();
+        let b64 = b64_encode(&rgb_data);
+
+        let mut decoder = KittyDecoder::new();
+        let first = format!("a=T,f=24,s={},v={},m=0;{}", w, h, b64);
+        decoder.process(first.as_bytes());
+
+        let result = decoder.finish(1, false);
+        assert!(result.is_ok(), "should not reject short RGB data");
+        match result.unwrap() {
+            KittyDecodeResult::Image(img) => {
+                assert_eq!(img.width, w);
+                assert_eq!(img.height, h);
+                // RGBA output padded to full size
+                assert_eq!(img.data.len(), (w * h * 4) as usize);
+            }
+            _ => panic!("expected Image result"),
+        }
+    }
+
+    /// base64 with stray bytes should not abort decoding.
+    #[test]
+    fn base64_stray_bytes_tolerated() {
+        let data = vec![0xFFu8; 12]; // 12 bytes = 16 base64 chars
+        let mut b64 = b64_encode(&data);
+        // Insert a stray byte (tab, null, or other non-base64)
+        b64.insert(4, '\t');
+        b64.insert(8, '\0' as char);
+
+        let decoded = super::base64_decode(b64.as_bytes());
+        assert!(decoded.is_some(), "should not abort on stray bytes");
+        assert_eq!(decoded.unwrap(), data);
     }
 }
