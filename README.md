@@ -58,8 +58,9 @@ https://github.com/user-attachments/assets/ebff498c-25b7-4662-8750-8d6e35661963
 - **HDR Detection**: Automatic HDR capability detection from EDID
 
 ### Graphics
-- **Sixel Graphics**: Display images in terminal
+- **Sixel Graphics**: Display images and video in terminal
 - **Kitty Graphics Protocol**: Fast image transfer (direct, file, shared memory)
+- **Video Playback**: `mpv --vo=kitty` for near-realtime terminal video playback
 
 ### Terminal
 - **Scrollback**: Configurable scrollback buffer (default: 10,000 lines)
