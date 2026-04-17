@@ -23,7 +23,7 @@ use pty::Pty;
 use sixel::SixelDecoder;
 
 /// Read buffer size
-const READ_BUF_SIZE: usize = 4096;
+const READ_BUF_SIZE: usize = 262144; // 256KB — one sixel frame fits in ~2 reads
 
 /// Maximum notification history entries
 const MAX_NOTIFICATIONS: usize = 100;
@@ -77,6 +77,18 @@ fn has_esc_underscore(buf: &[u8]) -> bool {
     }
     for i in 0..buf.len() - 1 {
         if buf[i] == 0x1B && buf[i + 1] == b'_' {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_esc_p(buf: &[u8]) -> bool {
+    if buf.len() < 2 {
+        return false;
+    }
+    for i in 0..buf.len() - 1 {
+        if buf[i] == 0x1B && buf[i + 1] == b'P' {
             return true;
         }
     }
@@ -540,6 +552,14 @@ enum ApcState {
     InApc,
     /// Waiting for APC termination (ESC detected)
     ApcEscape,
+    /// ESC P detected, collecting DCS params until final char (0x40-0x7E)
+    DcsParams,
+    /// Inside DCS sixel data (final char was 'q'). Bytes go directly to
+    /// the SixelDecoder without touching vte, avoiding vte state bugs that
+    /// cause sixel data to leak as printed text under streaming load.
+    DcsData,
+    /// ESC detected inside DCS data (potential ST = ESC \)
+    DcsEscape,
 }
 
 /// Terminal emulator
@@ -820,17 +840,21 @@ impl Terminal {
 
         trace!("PTY read: {} bytes", n);
 
-        // Fast path: if already in APC state or buffer contains ESC _, use slow path
-        // This handles the rare APC (Kitty graphics) case
-        // Use manual loop instead of windows(2).any() to avoid iterator overhead
-        // Include ApcState::Escape to handle ESC at buffer boundary (ESC in prev buffer, _ in this one)
-        let has_apc = matches!(
+        // Slow path is needed when we're inside (or about to enter) an APC
+        // or DCS sequence that bcon handles directly (bypassing vte).
+        let needs_slow = matches!(
             self.apc_state,
-            ApcState::Escape | ApcState::InApc | ApcState::ApcEscape
-        ) || has_esc_underscore(&self.read_buf[..n]);
+            ApcState::Escape
+                | ApcState::InApc
+                | ApcState::ApcEscape
+                | ApcState::DcsParams
+                | ApcState::DcsData
+                | ApcState::DcsEscape
+        ) || has_esc_underscore(&self.read_buf[..n])
+            || has_esc_p(&self.read_buf[..n]);
 
-        if has_apc {
-            // Slow path: byte-by-byte for APC handling
+        if needs_slow {
+            // Slow path: byte-by-byte for APC/DCS handling
             self.process_pty_output_slow(n);
         } else {
             // Fast path: single Performer for all bytes
@@ -849,6 +873,7 @@ impl Terminal {
             &mut self.clipboard,
             &mut self.dcs_handler,
             &mut self.images,
+            &mut self.dirty_image_ids,
             self.cell_width,
             self.cell_height,
             &mut self.current_directory,
@@ -879,11 +904,48 @@ impl Terminal {
         }
     }
 
-    /// Slow path: byte-by-byte processing with APC state machine
+    /// Slow path: byte-by-byte processing with APC/DCS state machine.
+    ///
+    /// When in DcsData state (sixel streaming), uses a tight inner loop
+    /// that scans for ESC/0x9C and feeds everything else to the decoder
+    /// in bulk — avoiding per-byte match + Option check overhead.
     fn process_pty_output_slow(&mut self, n: usize) {
         self.pty_response.clear();
-        for i in 0..n {
+        let mut i = 0;
+        while i < n {
+            // Fast inner loop for sixel data: skip the outer match entirely
+            // and scan for ESC (DCS terminator) in bulk.
+            if matches!(self.apc_state, ApcState::DcsData) {
+                if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
+                    while i < n {
+                        let byte = self.read_buf[i];
+                        if byte == 0x1B {
+                            self.apc_state = ApcState::DcsEscape;
+                            i += 1;
+                            break;
+                        } else if byte == 0x9C {
+                            i += 1;
+                            // Need to drop the mutable borrow before calling finish
+                            break;
+                        }
+                        dec.push(byte);
+                        i += 1;
+                    }
+                    // Handle 0x9C (C1 ST) that broke out of the inner loop
+                    if i > 0 && self.read_buf[i - 1] == 0x9C
+                        && matches!(self.apc_state, ApcState::DcsData)
+                    {
+                        self.finish_dcs_sixel();
+                        self.apc_state = ApcState::Normal;
+                    }
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+
             let byte = self.read_buf[i];
+            i += 1;
 
             match self.apc_state {
                 ApcState::Normal => {
@@ -896,6 +958,9 @@ impl Terminal {
                 ApcState::Escape => {
                     if byte == b'_' {
                         self.apc_state = ApcState::InApc;
+                        self.apc_buffer.clear();
+                    } else if byte == b'P' {
+                        self.apc_state = ApcState::DcsParams;
                         self.apc_buffer.clear();
                     } else {
                         self.apc_state = ApcState::Normal;
@@ -927,6 +992,47 @@ impl Terminal {
                         }
                     }
                 }
+                ApcState::DcsParams => {
+                    if (0x40..=0x7E).contains(&byte) {
+                        if byte == b'q' {
+                            trace!("Sixel DCS started (direct)");
+                            self.dcs_handler = Some(DcsHandler::Sixel(
+                                SixelDecoder::new(),
+                            ));
+                            self.apc_state = ApcState::DcsData;
+                        } else {
+                            self.process_byte_with_vte(0x1B);
+                            self.process_byte_with_vte(b'P');
+                            for &b in &self.apc_buffer.clone() {
+                                self.process_byte_with_vte(b);
+                            }
+                            self.process_byte_with_vte(byte);
+                            self.apc_state = ApcState::Normal;
+                        }
+                    } else if self.apc_buffer.len() < 64 {
+                        self.apc_buffer.push(byte);
+                    }
+                }
+                ApcState::DcsData => {
+                    // Fallback (shouldn't reach here due to fast path above)
+                    unreachable!("DcsData handled by fast inner loop");
+                }
+                ApcState::DcsEscape => {
+                    if byte == b'\\' {
+                        self.finish_dcs_sixel();
+                        self.apc_state = ApcState::Normal;
+                    } else if byte == 0x1B {
+                        if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
+                            dec.push(0x1B);
+                        }
+                    } else {
+                        if let Some(DcsHandler::Sixel(ref mut dec)) = self.dcs_handler {
+                            dec.push(0x1B);
+                            dec.push(byte);
+                        }
+                        self.apc_state = ApcState::DcsData;
+                    }
+                }
             }
         }
     }
@@ -940,6 +1046,7 @@ impl Terminal {
             &mut self.clipboard,
             &mut self.dcs_handler,
             &mut self.images,
+            &mut self.dirty_image_ids,
             self.cell_width,
             self.cell_height,
             &mut self.current_directory,
@@ -959,6 +1066,54 @@ impl Terminal {
         }
     }
 
+    /// Finish a DCS sixel sequence that was handled directly (bypassing vte).
+    /// Mirrors the unhook logic in parser.rs but operates on Terminal fields.
+    fn finish_dcs_sixel(&mut self) {
+        // SixelDecoder is already imported at module level (use sixel::SixelDecoder)
+        if let Some(DcsHandler::Sixel(decoder)) = self.dcs_handler.take() {
+            let id = self.images.next_id;
+            if let Some(sixel_img) = decoder.finish(id) {
+                info!(
+                    "Sixel image decode complete: {}x{} (id={})",
+                    sixel_img.width, sixel_img.height, sixel_img.id
+                );
+                let term_img = TerminalImage {
+                    id: sixel_img.id,
+                    width: sixel_img.width,
+                    height: sixel_img.height,
+                    data: sixel_img.data,
+                    frames: Vec::new(),
+                    animation_state: AnimationState::Stopped,
+                    current_frame: 0,
+                    loop_count: 0,
+                    current_loop: 0,
+                    root_gap: 0,
+                    last_frame_time: std::time::Instant::now(),
+                };
+                let img_id = self.images.insert(term_img);
+                self.dirty_image_ids.push(img_id);
+                if let Some(image) = self.images.get(img_id) {
+                    let superseded = self.grid.place_image(
+                        img_id,
+                        image.width,
+                        image.height,
+                        self.cell_width,
+                        self.cell_height,
+                        false,
+                        0, 0,
+                        0, // z=0: removed by text writes (yazi preview clear)
+                        0, 0,
+                        0, 0, 0, 0,
+                    );
+                    for old_id in superseded {
+                        self.images.remove(old_id);
+                        self.dirty_image_ids.push(old_id);
+                    }
+                }
+            }
+        }
+    }
+
     /// Process APC sequence
     fn process_apc(&mut self) {
         // Kitty graphics: ESC _ G ... ST
@@ -967,7 +1122,7 @@ impl Terminal {
         }
 
         let payload = &self.apc_buffer[1..];
-        log::info!("Kitty APC received: {} bytes payload", payload.len());
+        log::trace!("Kitty APC received: {} bytes payload", payload.len());
 
         // Create new decoder if none exists
         if self.kitty_decoder.is_none() {
@@ -990,7 +1145,7 @@ impl Terminal {
 
     /// Finish Kitty decode processing
     fn finish_kitty_decode(&mut self) {
-        use kitty::{make_response, KittyAction};
+        use kitty::KittyAction;
 
         if let Some(decoder) = self.kitty_decoder.take() {
             let params = decoder.params();
@@ -999,20 +1154,25 @@ impl Terminal {
             let no_cursor_move = params.do_not_move_cursor;
             let display_cols = params.cols;
             let display_rows = params.rows;
+            // Per Kitty graphics spec: terminals must not emit responses
+            // unless the client identified the command with i= or I=.
+            let client_requested_response = params.id != 0 || params.number != 0;
             let id = if params.id != 0 {
                 params.id
             } else {
                 self.images.next_id
             };
 
-            log::info!(
-                "Kitty finish_decode: action={:?}, id={}, quiet={}, C={}, size={}x{}",
+            log::trace!(
+                "Kitty finish_decode: action={:?}, id={}, quiet={}, C={}, U={}, size={}x{}, placements={}",
                 action,
                 id,
                 quiet,
                 if no_cursor_move { 1 } else { 0 },
+                if params.unicode_placement { 1 } else { 0 },
                 params.width,
-                params.height
+                params.height,
+                self.grid.image_placements.len()
             );
 
             match action {
@@ -1113,7 +1273,6 @@ impl Terminal {
                         }
                         _ => {}
                     }
-                    // Trigger redraw after image deletion
                     self.grid.mark_all_dirty();
                 }
                 KittyAction::Display => {
@@ -1198,7 +1357,11 @@ impl Terminal {
                             }
                         }
                     } else if let Some(image) = self.images.get(id) {
-                        self.grid.place_image(
+                        // Re-display of an existing image (a=p). Don't drop
+                        // superseded ids here — the image may still be owned
+                        // by other live placements; let registry LRU handle
+                        // reclamation.
+                        let _ = self.grid.place_image(
                             id,
                             image.width,
                             image.height,
@@ -1218,11 +1381,15 @@ impl Terminal {
                     }
                 }
                 KittyAction::Query => {
-                    // a=q is for protocol support detection - always return OK
-                    if quiet < 2 {
-                        let resp = make_response(id, true, "");
-                        self.write_response(&resp);
-                    }
+                    // a=q is for protocol support detection. Query responses
+                    // are still gated on the client identifying the command.
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        id,
+                        true,
+                        "",
+                    );
                 }
                 // Actions that produce decode results
                 KittyAction::Transmit
@@ -1232,14 +1399,22 @@ impl Terminal {
                 | KittyAction::Animation => {
                     match decoder.finish(self.images.next_id, self.allow_kitty_remote) {
                         Ok(result) => {
-                            self.handle_kitty_result(result, action, quiet);
+                            self.handle_kitty_result(
+                                result,
+                                action,
+                                quiet,
+                                client_requested_response,
+                            );
                         }
                         Err(e) => {
                             log::warn!("Kitty decode error: {}", e);
-                            if quiet < 2 {
-                                let resp = make_response(id, false, &e);
-                                self.write_response(&resp);
-                            }
+                            self.maybe_send_kitty_response(
+                                client_requested_response,
+                                quiet,
+                                id,
+                                false,
+                                &e,
+                            );
                         }
                     }
                 }
@@ -1247,14 +1422,21 @@ impl Terminal {
         }
     }
 
-    /// Handle Kitty decode result
+    /// Handle Kitty decode result.
+    ///
+    /// `client_requested_response` reflects whether the client identified the
+    /// image with `i=` or `I=`. Per the Kitty graphics protocol, terminals
+    /// must not emit responses for commands without one of those keys —
+    /// chafa's transmissions omit both, so honoring this is what stops the
+    /// "OK" reply from leaking into the shell's input as visible text.
     fn handle_kitty_result(
         &mut self,
         result: kitty::KittyDecodeResult,
         action: kitty::KittyAction,
         quiet: u8,
+        client_requested_response: bool,
     ) {
-        use kitty::{make_response, KittyAction, KittyDecodeResult};
+        use kitty::{KittyAction, KittyDecodeResult};
 
         match result {
             KittyDecodeResult::Image(kitty_img) => {
@@ -1298,7 +1480,7 @@ impl Terminal {
                 self.images.insert(term_img);
 
                 if action == KittyAction::TransmitAndDisplay {
-                    self.grid.place_image(
+                    let superseded = self.grid.place_image(
                         img_id,
                         width,
                         height,
@@ -1312,17 +1494,22 @@ impl Terminal {
                         kitty_img.src_x, kitty_img.src_y,
                         kitty_img.src_w, kitty_img.src_h,
                     );
+                    // Drop images that were fully covered by this placement so
+                    // their memory and cached GPU textures are reclaimed every
+                    // frame (critical under `mpv --vo=kitty`-style streaming).
+                    for old_id in superseded {
+                        self.images.remove(old_id);
+                        self.dirty_image_ids.push(old_id);
+                    }
                 }
 
-                if quiet < 2 {
-                    let resp = make_response(img_id, true, "");
-                    log::info!(
-                        "Kitty graphics: sending OK response for id={} ({} bytes)",
-                        img_id,
-                        resp.len()
-                    );
-                    self.write_response(&resp);
-                }
+                self.maybe_send_kitty_response(
+                    client_requested_response,
+                    quiet,
+                    img_id,
+                    true,
+                    "",
+                );
             }
             KittyDecodeResult::Frame(frame_data) => {
                 info!(
@@ -1386,17 +1573,22 @@ impl Terminal {
                     // Recalculate tracked memory after frame mutation
                     self.images.enforce_limits();
 
-                    if quiet < 2 {
-                        let resp = make_response(frame_data.image_id, true, "");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        frame_data.image_id,
+                        true,
+                        "",
+                    );
                 } else {
                     log::warn!("Kitty frame: image {} not found", frame_data.image_id);
-                    if quiet < 2 {
-                        let resp =
-                            make_response(frame_data.image_id, false, "ENOENT:image not found");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        frame_data.image_id,
+                        false,
+                        "ENOENT:image not found",
+                    );
                 }
             }
             KittyDecodeResult::Compose(cmd) => {
@@ -1420,19 +1612,25 @@ impl Terminal {
                         cmd.compose_mode,
                     );
 
-                    if quiet < 2 {
-                        let resp = if result.is_ok() {
-                            make_response(cmd.image_id, true, "")
-                        } else {
-                            make_response(cmd.image_id, false, &result.unwrap_err())
-                        };
-                        self.write_response(&resp);
-                    }
+                    let (ok, msg) = match &result {
+                        Ok(()) => (true, String::new()),
+                        Err(e) => (false, e.clone()),
+                    };
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        ok,
+                        &msg,
+                    );
                 } else {
-                    if quiet < 2 {
-                        let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        false,
+                        "ENOENT:image not found",
+                    );
                 }
             }
             KittyDecodeResult::Animation(cmd) => {
@@ -1474,15 +1672,21 @@ impl Terminal {
                         }
                     }
 
-                    if quiet < 2 {
-                        let resp = make_response(cmd.image_id, true, "");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        true,
+                        "",
+                    );
                 } else {
-                    if quiet < 2 {
-                        let resp = make_response(cmd.image_id, false, "ENOENT:image not found");
-                        self.write_response(&resp);
-                    }
+                    self.maybe_send_kitty_response(
+                        client_requested_response,
+                        quiet,
+                        cmd.image_id,
+                        false,
+                        "ENOENT:image not found",
+                    );
                 }
             }
         }
@@ -1599,6 +1803,24 @@ impl Terminal {
         if let Err(e) = self.pty.write_all(data) {
             log::warn!("PTY response write failed: {}", e);
         }
+    }
+
+    /// Send a Kitty graphics response only when the spec permits it:
+    /// the client must have identified the command with `i=` or `I=`
+    /// (`client_requested_response`), and `q=2` always suppresses output.
+    fn maybe_send_kitty_response(
+        &self,
+        client_requested_response: bool,
+        quiet: u8,
+        id: u32,
+        ok: bool,
+        message: &str,
+    ) {
+        if !client_requested_response || quiet >= 2 {
+            return;
+        }
+        let resp = kitty::make_response(id, ok, message);
+        self.write_response(&resp);
     }
 
     /// Write data to PTY (for keyboard input forwarding)
@@ -2520,6 +2742,7 @@ impl Terminal {
             &mut self.clipboard,
             &mut self.dcs_handler,
             &mut self.images,
+            &mut self.dirty_image_ids,
             self.cell_width,
             self.cell_height,
             &mut self.current_directory,

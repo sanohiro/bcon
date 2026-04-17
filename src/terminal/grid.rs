@@ -2402,6 +2402,15 @@ impl Grid {
     /// Place image at current cursor position
     ///
     /// Calculates occupied cell count and moves cursor below image.
+    /// Place an image onto the grid.
+    ///
+    /// Returns the ids of any placements this call superseded. Currently that
+    /// happens for overlay-mode (`C=1`) placements that are fully covered by
+    /// the new one at the same z-index — `mpv --vo=kitty` streams identically
+    /// sized frames at the same cell position, so without this dedupe each
+    /// frame would leak a placement and its backing image, overwhelming the
+    /// registry and stalling PTY reads within seconds. Callers should drop
+    /// the returned ids from the image registry to free their texture data.
     pub fn place_image(
         &mut self,
         id: u32,
@@ -2419,10 +2428,10 @@ impl Grid {
         src_y: u32,
         src_w: u32,
         src_h: u32,
-    ) {
+    ) -> Vec<u32> {
         if cell_width == 0 || cell_height == 0 {
             log::warn!("place_image: cell size not set, skipping placement");
-            return;
+            return Vec::new();
         }
 
         // Use explicit c=/r= if provided, otherwise calculate from pixel size (round up)
@@ -2447,14 +2456,38 @@ impl Grid {
             if do_not_move_cursor { 1 } else { 0 }
         );
 
+        let mut superseded: Vec<u32> = Vec::new();
+
         if do_not_move_cursor {
             // C=1: place image at cursor position, do not move cursor
             // Overlay mode: text writes don't remove this image
             // Overlay uses screen-relative row (doesn't scroll with text)
+            let new_row = self.cursor_row as u64;
+            let new_col = self.cursor_col;
+            let new_row_end = new_row + height_cells as u64;
+            let new_col_end = new_col + width_cells;
+            self.image_placements.retain(|p| {
+                if !p.overlay || p.z != z_index {
+                    return true;
+                }
+                let p_row_end = p.row + p.height_cells as u64;
+                let p_col_end = p.col + p.width_cells;
+                let fully_covered = p.row >= new_row
+                    && p_row_end <= new_row_end
+                    && p.col >= new_col
+                    && p_col_end <= new_col_end;
+                if fully_covered {
+                    superseded.push(p.id);
+                    false
+                } else {
+                    true
+                }
+            });
+
             let placement = ImagePlacement {
                 id,
-                row: self.cursor_row as u64,
-                col: self.cursor_col,
+                row: new_row,
+                col: new_col,
                 width_cells,
                 height_cells,
                 pixel_width,
@@ -2476,75 +2509,114 @@ impl Grid {
             };
             self.image_placements.push(placement);
         } else {
-            // Default: place image and move cursor below it
-            // For large images that exceed screen, scroll first, then place
-            let rows_below = self.rows - self.cursor_row;
-            if height_cells > rows_below {
-                // Need to scroll to make room; scroll before placing
-                // so the placement doesn't get deleted by scroll_up
-                let scroll_needed = height_cells - rows_below;
+            // Place the image at the current cursor position (absolute row =
+            // screen row + scrollback), then advance the cursor onto the row
+            // one past the image. Landing the cursor inside the image area
+            // is destructive: the next `put_char` invokes
+            // `remove_images_at_cell`, which would discard the placement we
+            // just created (observed with `chafa -f sixel` when the prompt
+            // rewrite or a newline wrote the first cell after placement).
+            let mut new_row = self.cursor_row as u64 + self.scrollback_total;
+            let mut new_col = self.cursor_col;
+            // Sixel video streaming dedup (z < 0 only): mpv --vo=sixel
+            // sends frames at z=-1 with cursor positions corrupted by
+            // interleaved status text. Reuse the first frame's position.
+            // For z >= 0 (Kitty graphics, static sixel), just remove
+            // fully-covered placements without position reuse — apps like
+            // yazi place different images at different positions.
+            if z_index < 0 {
+                // Sixel video streaming dedup: only supersede z<0
+                // placements whose rows OVERLAP with the new image.
+                // This allows consecutive `chafa -f sixel` calls to
+                // stack images vertically while still deduplicating
+                // mpv's repeated same-position frames.
+                let new_row_end = new_row + height_cells as u64;
+                let mut reuse_pos: Option<(u64, usize)> = None;
+                self.image_placements.retain(|p| {
+                    if p.overlay || p.z != z_index {
+                        return true;
+                    }
+                    let p_row_end = p.row + p.height_cells as u64;
+                    let overlaps = new_row < p_row_end && new_row_end > p.row;
+                    if overlaps {
+                        if reuse_pos.is_none() {
+                            reuse_pos = Some((p.row, p.col));
+                        }
+                        superseded.push(p.id);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if let Some((prev_row, prev_col)) = reuse_pos {
+                    new_row = prev_row;
+                    new_col = prev_col;
+                }
+            } else {
+                // z >= 0: remove fully-covered placements at same z
+                let new_row_end = new_row + height_cells as u64;
+                let new_col_end = new_col + width_cells;
+                self.image_placements.retain(|p| {
+                    if p.overlay || p.z != z_index {
+                        return true;
+                    }
+                    let p_row_end = p.row + p.height_cells as u64;
+                    let p_col_end = p.col + p.width_cells;
+                    let fully_covered = p.row >= new_row
+                        && p_row_end <= new_row_end
+                        && p.col >= new_col
+                        && p_col_end <= new_col_end;
+                    if fully_covered {
+                        superseded.push(p.id);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+
+            let placement = ImagePlacement {
+                id,
+                row: new_row,
+                col: new_col,
+                width_cells,
+                height_cells,
+                pixel_width,
+                pixel_height,
+                overlay: false,
+                z: z_index,
+                offset_x,
+                offset_y,
+                src_x,
+                src_y,
+                src_w,
+                src_h,
+                is_virtual: false,
+                placement_id: 0,
+                parent_id: 0,
+                parent_placement_id: 0,
+                rel_h: 0,
+                rel_v: 0,
+            };
+            self.image_placements.push(placement);
+
+            let target_cursor_row = self.cursor_row + height_cells;
+            if target_cursor_row >= self.rows {
+                // Scroll so the row immediately below the image exists on
+                // screen. Placements use absolute coordinates, so scrolling
+                // after the push does not shift the image we just added.
+                let scroll_needed = target_cursor_row + 1 - self.rows;
                 for _ in 0..scroll_needed {
                     self.scroll_up(1);
                 }
-                // Image starts at adjusted position
-                let start_row = self.rows.saturating_sub(height_cells);
-                let placement = ImagePlacement {
-                    id,
-                    row: start_row as u64 + self.scrollback_total,
-                    col: self.cursor_col,
-                    width_cells,
-                    height_cells,
-                    pixel_width,
-                    pixel_height,
-                    overlay: false,
-                    z: z_index,
-                    offset_x,
-                    offset_y,
-                    src_x,
-                    src_y,
-                    src_w,
-                    src_h,
-                    is_virtual: false,
-                    placement_id: 0,
-                    parent_id: 0,
-                    parent_placement_id: 0,
-                    rel_h: 0,
-                    rel_v: 0,
-                };
-                self.image_placements.push(placement);
                 self.cursor_row = self.rows - 1;
             } else {
-                let placement = ImagePlacement {
-                    id,
-                    row: self.cursor_row as u64 + self.scrollback_total,
-                    col: self.cursor_col,
-                    width_cells,
-                    height_cells,
-                    pixel_width,
-                    pixel_height,
-                    overlay: false,
-                    z: z_index,
-                    offset_x,
-                    offset_y,
-                    src_x,
-                    src_y,
-                    src_w,
-                    src_h,
-                    is_virtual: false,
-                    placement_id: 0,
-                    parent_id: 0,
-                    parent_placement_id: 0,
-                    rel_h: 0,
-                    rel_v: 0,
-                };
-                self.image_placements.push(placement);
-                self.cursor_row += height_cells;
-                if self.cursor_row >= self.rows {
-                    self.cursor_row = self.rows - 1;
-                }
+                self.cursor_row = target_cursor_row;
             }
             self.cursor_col = 0;
         }
+
+        superseded
     }
 
     /// Delete image placements that scrolled out of screen
@@ -2889,4 +2961,169 @@ fn row_content_len(cells: &[Cell]) -> usize {
         }
     }
     last_non_empty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_grid() -> Grid {
+        Grid::with_scrollback(100, 40, 1000)
+    }
+
+    // ---- place_image cursor advancement ----
+
+    #[test]
+    fn place_image_cursor_below_image() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        g.place_image(1, 640, 480, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // 480/20 = 24 rows. cursor should land at row 24, not inside image.
+        assert_eq!(g.cursor_row, 24);
+        assert_eq!(g.cursor_col, 0);
+        assert_eq!(g.image_placements.len(), 1);
+        assert_eq!(g.image_placements[0].col, 2);
+    }
+
+    #[test]
+    fn place_image_cursor_scrolls_when_at_bottom() {
+        let mut g = make_grid();
+        g.cursor_row = 30; // near bottom (40 rows)
+        g.cursor_col = 0;
+        // Image 24 rows tall, only 10 rows below cursor → must scroll
+        g.place_image(1, 640, 480, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // cursor should be at rows-1 = 39, below image
+        assert_eq!(g.cursor_row, 39);
+        // image placement should exist
+        assert_eq!(g.image_placements.len(), 1);
+    }
+
+    #[test]
+    fn place_image_cursor_not_inside_image_exact_fit() {
+        let mut g = make_grid();
+        g.cursor_row = 16;
+        // Image exactly fills remaining rows: 24 rows, rows_below=24
+        g.place_image(1, 640, 480, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // 16 + 24 = 40 = rows → needs scroll
+        assert_eq!(g.cursor_row, 39);
+    }
+
+    // ---- z<0 dedup (sixel video) ----
+
+    #[test]
+    fn sixel_dedup_reuses_position() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        // Frame 1: z=-1, placed at (0,2)
+        let sup = g.place_image(1, 960, 720, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        assert!(sup.is_empty());
+        assert_eq!(g.image_placements.len(), 1);
+        assert_eq!(g.image_placements[0].col, 2);
+
+        // Frame 2: cursor drifted to col 56 (mpv status pollution)
+        // but same row → overlaps → dedup fires
+        g.cursor_row = 0;
+        g.cursor_col = 56;
+        let sup = g.place_image(2, 960, 720, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        assert_eq!(sup.len(), 1); // superseded frame 1
+        assert_eq!(sup[0], 1);
+        assert_eq!(g.image_placements.len(), 1);
+        // Should reuse frame 1's position, NOT cursor col 56
+        assert_eq!(g.image_placements[0].col, 2);
+    }
+
+    #[test]
+    fn sixel_consecutive_images_stack_vertically() {
+        let mut g = make_grid();
+        // First chafa -f sixel at row 0
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        g.place_image(1, 640, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // 200/20 = 10 rows. cursor now at row 10.
+        assert_eq!(g.cursor_row, 10);
+        assert_eq!(g.image_placements.len(), 1);
+
+        // Second chafa -f sixel at row 10 (below first)
+        g.cursor_col = 2;
+        g.place_image(2, 640, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // Both images should coexist (different rows, no overlap)
+        assert_eq!(g.image_placements.len(), 2);
+        assert_eq!(g.image_placements[0].id, 1);
+        assert_eq!(g.image_placements[1].id, 2);
+    }
+
+    #[test]
+    fn sixel_removed_by_text_writes() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        g.place_image(1, 960, 720, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        g.put_char('X');
+        // z=0 image removed by text write (yazi preview clear)
+        assert_eq!(g.image_placements.len(), 0);
+    }
+
+    // ---- z>=0 dedup (kitty/yazi) ----
+
+    #[test]
+    fn kitty_dedup_does_not_reuse_position() {
+        let mut g = make_grid();
+        // Image A at (0, 5)
+        g.cursor_row = 0;
+        g.cursor_col = 5;
+        g.place_image(1, 200, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(g.image_placements[0].col, 5);
+
+        // Image B at (10, 20) — different position, z=0
+        g.cursor_row = 10;
+        g.cursor_col = 20;
+        g.place_image(2, 200, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // Should NOT reuse image A's position
+        assert_eq!(g.image_placements.last().unwrap().col, 20);
+    }
+
+    #[test]
+    fn kitty_image_removed_by_text_write() {
+        let mut g = make_grid();
+        g.cursor_row = 5;
+        g.cursor_col = 0;
+        g.place_image(1, 200, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(g.image_placements.len(), 1);
+        // Write text over the image area (z>=0 should be removed)
+        g.cursor_row = 5;
+        g.cursor_col = 0;
+        g.put_char('X');
+        assert_eq!(g.image_placements.len(), 0);
+    }
+
+    // ---- overlay (C=1) ----
+
+    #[test]
+    fn overlay_not_removed_by_text() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 0;
+        g.place_image(1, 200, 200, 10, 20, true, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // Overlay should survive text writes
+        g.cursor_row = 0;
+        g.cursor_col = 0;
+        g.put_char('X');
+        assert_eq!(g.image_placements.len(), 1);
+    }
+
+    #[test]
+    fn overlay_dedup_same_position() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 0;
+        g.place_image(1, 200, 200, 10, 20, true, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        g.place_image(2, 200, 200, 10, 20, true, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // Second overlay at same position should supersede first
+        assert_eq!(g.image_placements.len(), 1);
+        assert_eq!(g.image_placements[0].id, 2);
+    }
 }

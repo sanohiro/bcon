@@ -120,6 +120,9 @@ pub struct Performer<'a> {
     pub pty_response: &'a mut Vec<u8>,
     pub dcs_handler: &'a mut Option<DcsHandler>,
     pub images: &'a mut ImageRegistry,
+    /// Newly produced or updated image IDs that need GPU texture re-upload.
+    /// Sixel/Kitty decoders push here when an image is registered.
+    pub dirty_image_ids: &'a mut Vec<u32>,
     /// Cell width (pixels)
     cell_width: u32,
     /// Cell height (pixels)
@@ -146,6 +149,7 @@ impl<'a> Performer<'a> {
         clipboard: &'a mut String,
         dcs_handler: &'a mut Option<DcsHandler>,
         images: &'a mut ImageRegistry,
+        dirty_image_ids: &'a mut Vec<u32>,
         cell_width: u32,
         cell_height: u32,
         current_dir: &'a mut Option<String>,
@@ -163,6 +167,7 @@ impl<'a> Performer<'a> {
             pty_response,
             dcs_handler,
             images,
+            dirty_image_ids,
             cell_width,
             cell_height,
             current_dir,
@@ -654,7 +659,7 @@ impl<'a> Perform for Performer<'a> {
         match (action, intermediates) {
             // Sixel: DCS q or DCS P q
             ('q', []) | ('q', [b'0'..=b'9']) => {
-                info!("Sixel DCS started");
+                trace!("Sixel DCS started");
                 *self.dcs_handler = Some(DcsHandler::Sixel(SixelDecoder::new()));
             }
             // XTGETTCAP: DCS + q Pt ST
@@ -704,7 +709,6 @@ impl<'a> Perform for Performer<'a> {
                     self.handle_decrqss(&buffer);
                 }
                 DcsHandler::Sixel(decoder) => {
-                    // Decode complete, register image
                     let id = self.images.next_id;
                     if let Some(sixel_img) = decoder.finish(id) {
                         info!(
@@ -726,9 +730,13 @@ impl<'a> Perform for Performer<'a> {
                             last_frame_time: std::time::Instant::now(),
                         };
                         let img_id = self.images.insert(term_img);
+                        // Mark for GPU texture upload — without this the
+                        // renderer never sees the new pixel data and the
+                        // placement renders as a solid black rectangle.
+                        self.dirty_image_ids.push(img_id);
                         // Place image on grid
                         if let Some(image) = self.images.get(img_id) {
-                            self.grid.place_image(
+                            let superseded = self.grid.place_image(
                                 img_id,
                                 image.width,
                                 image.height,
@@ -737,10 +745,20 @@ impl<'a> Perform for Performer<'a> {
                                 false, // Sixel always moves cursor
                                 0,     // No explicit display cols
                                 0,     // No explicit display rows
-                                0,     // Sixel has no z-index
+                                0,     // z=0: removed by text writes (yazi preview clear)
                                 0, 0,  // No cell offset
                                 0, 0, 0, 0, // No source rect
                             );
+                            // `mpv --vo=sixel` replays the same absolute
+                            // cell every frame because it resets the cursor
+                            // before each DCS. Reclaim the RGBA backing
+                            // buffer and GPU texture of the frame we just
+                            // superseded so neither the image registry nor
+                            // the texture cache grows unbounded.
+                            for old_id in superseded {
+                                self.images.remove(old_id);
+                                self.dirty_image_ids.push(old_id);
+                            }
                         }
                     }
                 }
