@@ -2525,16 +2525,28 @@ impl Grid {
             // fully-covered placements without position reuse — apps like
             // yazi place different images at different positions.
             if z_index < 0 {
+                // Sixel video streaming dedup: only supersede z<0
+                // placements whose rows OVERLAP with the new image.
+                // This allows consecutive `chafa -f sixel` calls to
+                // stack images vertically while still deduplicating
+                // mpv's repeated same-position frames.
+                let new_row_end = new_row + height_cells as u64;
                 let mut reuse_pos: Option<(u64, usize)> = None;
                 self.image_placements.retain(|p| {
                     if p.overlay || p.z != z_index {
                         return true;
                     }
-                    if reuse_pos.is_none() {
-                        reuse_pos = Some((p.row, p.col));
+                    let p_row_end = p.row + p.height_cells as u64;
+                    let overlaps = new_row < p_row_end && new_row_end > p.row;
+                    if overlaps {
+                        if reuse_pos.is_none() {
+                            reuse_pos = Some((p.row, p.col));
+                        }
+                        superseded.push(p.id);
+                        false
+                    } else {
+                        true
                     }
-                    superseded.push(p.id);
-                    false
                 });
                 if let Some((prev_row, prev_col)) = reuse_pos {
                     new_row = prev_row;
@@ -2949,4 +2961,171 @@ fn row_content_len(cells: &[Cell]) -> usize {
         }
     }
     last_non_empty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_grid() -> Grid {
+        Grid::with_scrollback(100, 40, 1000)
+    }
+
+    // ---- place_image cursor advancement ----
+
+    #[test]
+    fn place_image_cursor_below_image() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        g.place_image(1, 640, 480, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // 480/20 = 24 rows. cursor should land at row 24, not inside image.
+        assert_eq!(g.cursor_row, 24);
+        assert_eq!(g.cursor_col, 0);
+        assert_eq!(g.image_placements.len(), 1);
+        assert_eq!(g.image_placements[0].col, 2);
+    }
+
+    #[test]
+    fn place_image_cursor_scrolls_when_at_bottom() {
+        let mut g = make_grid();
+        g.cursor_row = 30; // near bottom (40 rows)
+        g.cursor_col = 0;
+        // Image 24 rows tall, only 10 rows below cursor → must scroll
+        g.place_image(1, 640, 480, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // cursor should be at rows-1 = 39, below image
+        assert_eq!(g.cursor_row, 39);
+        // image placement should exist
+        assert_eq!(g.image_placements.len(), 1);
+    }
+
+    #[test]
+    fn place_image_cursor_not_inside_image_exact_fit() {
+        let mut g = make_grid();
+        g.cursor_row = 16;
+        // Image exactly fills remaining rows: 24 rows, rows_below=24
+        g.place_image(1, 640, 480, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // 16 + 24 = 40 = rows → needs scroll
+        assert_eq!(g.cursor_row, 39);
+    }
+
+    // ---- z<0 dedup (sixel video) ----
+
+    #[test]
+    fn sixel_dedup_reuses_position() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        // Frame 1: z=-1, placed at (0,2)
+        let sup = g.place_image(1, 960, 720, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        assert!(sup.is_empty());
+        assert_eq!(g.image_placements.len(), 1);
+        assert_eq!(g.image_placements[0].col, 2);
+
+        // Frame 2: cursor drifted to col 56 (mpv status pollution)
+        // but same row → overlaps → dedup fires
+        g.cursor_row = 0;
+        g.cursor_col = 56;
+        let sup = g.place_image(2, 960, 720, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        assert_eq!(sup.len(), 1); // superseded frame 1
+        assert_eq!(sup[0], 1);
+        assert_eq!(g.image_placements.len(), 1);
+        // Should reuse frame 1's position, NOT cursor col 56
+        assert_eq!(g.image_placements[0].col, 2);
+    }
+
+    #[test]
+    fn sixel_consecutive_images_stack_vertically() {
+        let mut g = make_grid();
+        // First chafa -f sixel at row 0
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        g.place_image(1, 640, 200, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        // 200/20 = 10 rows. cursor now at row 10.
+        assert_eq!(g.cursor_row, 10);
+        assert_eq!(g.image_placements.len(), 1);
+
+        // Second chafa -f sixel at row 10 (below first)
+        g.cursor_col = 2;
+        g.place_image(2, 640, 200, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        // Both images should coexist (different rows, no overlap)
+        assert_eq!(g.image_placements.len(), 2);
+        assert_eq!(g.image_placements[0].id, 1);
+        assert_eq!(g.image_placements[1].id, 2);
+    }
+
+    #[test]
+    fn sixel_dedup_survives_text_writes() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 2;
+        g.place_image(1, 960, 720, 10, 20, false, 0, 0, -1, 0, 0, 0, 0, 0, 0);
+        // Simulate text write at row 0 (mpv status)
+        g.cursor_row = 0;
+        g.cursor_col = 0;
+        g.put_char('V');
+        g.put_char(':');
+        // z<0 image should survive text writes
+        assert_eq!(g.image_placements.len(), 1);
+    }
+
+    // ---- z>=0 dedup (kitty/yazi) ----
+
+    #[test]
+    fn kitty_dedup_does_not_reuse_position() {
+        let mut g = make_grid();
+        // Image A at (0, 5)
+        g.cursor_row = 0;
+        g.cursor_col = 5;
+        g.place_image(1, 200, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(g.image_placements[0].col, 5);
+
+        // Image B at (10, 20) — different position, z=0
+        g.cursor_row = 10;
+        g.cursor_col = 20;
+        g.place_image(2, 200, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // Should NOT reuse image A's position
+        assert_eq!(g.image_placements.last().unwrap().col, 20);
+    }
+
+    #[test]
+    fn kitty_image_removed_by_text_write() {
+        let mut g = make_grid();
+        g.cursor_row = 5;
+        g.cursor_col = 0;
+        g.place_image(1, 200, 200, 10, 20, false, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(g.image_placements.len(), 1);
+        // Write text over the image area (z>=0 should be removed)
+        g.cursor_row = 5;
+        g.cursor_col = 0;
+        g.put_char('X');
+        assert_eq!(g.image_placements.len(), 0);
+    }
+
+    // ---- overlay (C=1) ----
+
+    #[test]
+    fn overlay_not_removed_by_text() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 0;
+        g.place_image(1, 200, 200, 10, 20, true, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // Overlay should survive text writes
+        g.cursor_row = 0;
+        g.cursor_col = 0;
+        g.put_char('X');
+        assert_eq!(g.image_placements.len(), 1);
+    }
+
+    #[test]
+    fn overlay_dedup_same_position() {
+        let mut g = make_grid();
+        g.cursor_row = 0;
+        g.cursor_col = 0;
+        g.place_image(1, 200, 200, 10, 20, true, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        g.place_image(2, 200, 200, 10, 20, true, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        // Second overlay at same position should supersede first
+        assert_eq!(g.image_placements.len(), 1);
+        assert_eq!(g.image_placements[0].id, 2);
+    }
 }
