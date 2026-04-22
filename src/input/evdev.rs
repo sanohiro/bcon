@@ -6,13 +6,14 @@
 #![allow(dead_code)]
 
 use anyhow::{anyhow, Result};
+use input::event::device::DeviceEvent;
 use input::event::keyboard::{KeyState, KeyboardEventTrait};
 use input::event::pointer::{Axis, ButtonState, PointerScrollEvent};
 use input::event::gesture::{
     GestureEventCoordinates, GestureEventTrait, GesturePinchEventTrait, GestureSwipeEvent,
     GesturePinchEvent,
 };
-use input::event::{Event, GestureEvent, PointerEvent};
+use input::event::{Event, EventTrait, GestureEvent, PointerEvent};
 use input::{Device as LibinputDevice, Libinput, LibinputInterface};
 use log::{debug, info, warn};
 use std::collections::HashMap;
@@ -226,12 +227,17 @@ pub struct EvdevKeyboard {
     gesture_swipe_fingers: i32,
     /// Gesture state: accumulated pinch scale
     gesture_pinch_scale: f64,
+    /// Mouse/touchpad configuration, retained to apply to hotplugged devices
+    mouse_config: MouseConfig,
 }
 
 impl EvdevKeyboard {
     /// Initialize evdev input
     ///
-    /// Scan /dev/input/event* and add devices to libinput.
+    /// Create a libinput context in udev mode so devices added after startup
+    /// (USB hotplug, uinput virtual devices, etc.) are picked up automatically.
+    /// Existing devices and any later hotplug events are delivered as
+    /// `DeviceEvent::Added` / `Removed` through `process_raw_events`.
     /// Set up keymap with xkbcommon.
     /// screen_width/height used for mouse coordinate clamping.
     pub fn new(
@@ -240,34 +246,16 @@ impl EvdevKeyboard {
         kb_config: &KeyboardInputConfig,
         mouse_config: &MouseConfig,
     ) -> Result<Self> {
-        // Create libinput context
-        let mut input = Libinput::new_from_path(InputInterface);
+        // Create libinput context in udev mode and activate it on seat0.
+        // udev_assign_seat() must be called exactly once per context; it
+        // activates event delivery for existing devices and enables hotplug
+        // monitoring for future ones.
+        let mut input = Libinput::new_with_udev(InputInterface);
+        input
+            .udev_assign_seat("seat0")
+            .map_err(|_| anyhow!("Failed to assign udev seat0 to libinput"))?;
 
-        // Scan and add devices from /dev/input/event*
-        let mut device_count = 0;
-        for entry in
-            std::fs::read_dir("/dev/input").map_err(|e| anyhow!("Cannot scan /dev/input: {}", e))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("event") {
-                let path_str = path.to_str().unwrap_or("");
-                if let Some(mut device) = input.path_add_device(path_str) {
-                    debug!("Input device added: {}", path_str);
-                    configure_touchpad(&mut device, mouse_config);
-                    device_count += 1;
-                }
-            }
-        }
-
-        if device_count == 0 {
-            return Err(anyhow!(
-                "No input devices found. Check permissions for /dev/input/event*."
-            ));
-        }
-
-        info!("evdev: {} input devices added", device_count);
+        info!("evdev: libinput udev context initialized (seat0)");
 
         // Get libinput fd
         let fd = input.as_raw_fd();
@@ -355,6 +343,7 @@ impl EvdevKeyboard {
             gesture_swipe_dy: 0.0,
             gesture_swipe_fingers: 0,
             gesture_pinch_scale: 1.0,
+            mouse_config: mouse_config.clone(),
         })
     }
 
@@ -369,37 +358,19 @@ impl EvdevKeyboard {
         kb_config: &KeyboardInputConfig,
         mouse_config: &MouseConfig,
     ) -> Result<Self> {
-        // Create libinput context with seat-based interface
+        // Create libinput context with seat-based interface, in udev mode so
+        // hotplugged devices (USB, uinput virtual devices, etc.) are picked up
+        // automatically after startup. Device enumeration happens via
+        // DeviceEvent::Added in process_raw_events.
         let interface = SeatInputInterface {
             session: session.clone(),
         };
-        let mut input = Libinput::new_from_path(interface);
+        let mut input = Libinput::new_with_udev(interface);
+        input
+            .udev_assign_seat("seat0")
+            .map_err(|_| anyhow!("Failed to assign udev seat0 to libinput (libseat)"))?;
 
-        // Scan and add devices from /dev/input/event*
-        let mut device_count = 0;
-        for entry in
-            std::fs::read_dir("/dev/input").map_err(|e| anyhow!("Cannot scan /dev/input: {}", e))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("event") {
-                let path_str = path.to_str().unwrap_or("");
-                if let Some(mut device) = input.path_add_device(path_str) {
-                    debug!("Input device added via libseat: {}", path_str);
-                    configure_touchpad(&mut device, mouse_config);
-                    device_count += 1;
-                }
-            }
-        }
-
-        if device_count == 0 {
-            return Err(anyhow!(
-                "No input devices found via libseat. Check seatd/logind permissions."
-            ));
-        }
-
-        info!("evdev: {} input devices added via libseat", device_count);
+        info!("evdev: libinput udev context initialized via libseat (seat0)");
 
         // Get libinput fd
         let fd = input.as_raw_fd();
@@ -480,6 +451,7 @@ impl EvdevKeyboard {
             held_keys: HashMap::new(),
             repeat_delay_ms: kb_config.repeat_delay,
             repeat_rate_ms: kb_config.repeat_rate,
+            mouse_config: mouse_config.clone(),
             gesture_swipe_dx: 0.0,
             gesture_swipe_dy: 0.0,
             gesture_swipe_fingers: 0,
@@ -766,6 +738,28 @@ impl EvdevKeyboard {
                         _ => {}
                     }
                 }
+                Event::Device(dev_event) => match dev_event {
+                    DeviceEvent::Added(ev) => {
+                        let mut device = ev.device();
+                        debug!("Input device added: {:?}", device.name());
+                        configure_touchpad(&mut device, &self.mouse_config);
+                    }
+                    DeviceEvent::Removed(ev) => {
+                        debug!("Input device removed: {:?}", ev.device().name());
+                        // Simple cleanup: clear all held keys and modifier
+                        // state. If the removed device was a keyboard with
+                        // keys held down, its Released events never arrive,
+                        // which would otherwise stick keys in self.held_keys
+                        // and generate phantom key repeats. Suspending bcon
+                        // does the same thing, so users are already used to
+                        // this behavior on transient state loss.
+                        self.held_keys.clear();
+                        self.shift_pressed = false;
+                        self.ctrl_pressed = false;
+                        self.alt_pressed = false;
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
