@@ -456,31 +456,42 @@ impl UiShader {
 /// Map pixel coordinates (0,0)-(width,height)
 /// to NDC (-1,-1)-(1,1)
 pub fn ortho_projection(width: f32, height: f32) -> [f32; 16] {
-    let l = 0.0_f32;
-    let r = width;
-    let t = 0.0_f32; // top
-    let b = height; // bottom
-    let n = -1.0_f32;
-    let f = 1.0_f32;
+    ortho_projection_rotated(width, height, 0)
+}
 
-    // Column-major (OpenGL convention)
+/// Orthographic projection with display rotation applied.
+///
+/// Renderers draw in *logical* coordinates spanning (0,0)-(logical_w,logical_h).
+/// `rotation` (0/90/180/270 clockwise) twists the resulting NDC so that the
+/// content lands correctly on the underlying *physical* framebuffer.
+///
+/// At rotation = 0 the matrix matches the original `ortho_projection`.
+/// For 90/270, callers should pass the *logical* (post-swap) width/height —
+/// `DisplayConfig::logical_width()` / `logical_height()` are the canonical source.
+pub fn ortho_projection_rotated(logical_w: f32, logical_h: f32, rotation: u32) -> [f32; 16] {
+    // Column-major (OpenGL convention).
+    // For rotation r, NDC_x and NDC_y as linear functions of (x, y) in
+    // logical pixel space.  z/w identity columns are shared.
+    //
+    // 0°  : NDC_x = (2/lw)·x - 1,        NDC_y = -(2/lh)·y + 1
+    // 90° : NDC_x = -(2/lh)·y + 1,       NDC_y = -(2/lw)·x + 1
+    // 180°: NDC_x = -(2/lw)·x + 1,       NDC_y = (2/lh)·y - 1
+    // 270°: NDC_x = (2/lh)·y - 1,        NDC_y = (2/lw)·x - 1
+    let inv_lw = 2.0 / logical_w;
+    let inv_lh = 2.0 / logical_h;
+
+    let (m0, m1, m4, m5, m12, m13) = match rotation {
+        90 => (0.0, -inv_lw, -inv_lh, 0.0, 1.0, 1.0),
+        180 => (-inv_lw, 0.0, 0.0, inv_lh, 1.0, -1.0),
+        270 => (0.0, inv_lw, inv_lh, 0.0, -1.0, -1.0),
+        _ => (inv_lw, 0.0, 0.0, -inv_lh, -1.0, 1.0),
+    };
+
     [
-        2.0 / (r - l),
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        2.0 / (t - b),
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        -2.0 / (f - n),
-        0.0,
-        -(r + l) / (r - l),
-        -(t + b) / (t - b),
-        -(f + n) / (f - n),
-        1.0,
+        m0, m1, 0.0, 0.0, // column 0
+        m4, m5, 0.0, 0.0, // column 1
+        0.0, 0.0, -1.0, 0.0, // column 2 (z)
+        m12, m13, 0.0, 1.0, // column 3 (translation)
     ]
 }
 
@@ -540,5 +551,112 @@ fn compile_shader(gl: &glow::Context, shader_type: u32, source: &str) -> Result<
         }
 
         Ok(shader)
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::ortho_projection_rotated;
+    use crate::drm::display::logical_to_physical_cursor;
+    use crate::input::evdev::physical_to_logical_point;
+
+    /// Apply a column-major 4x4 matrix to a 2D point with z=0, w=1.
+    /// Returns (NDC_x, NDC_y).
+    fn apply(m: &[f32; 16], x: f32, y: f32) -> (f32, f32) {
+        // column-major: m[col * 4 + row]
+        let ndc_x = m[0] * x + m[4] * y + m[8] * 0.0 + m[12];
+        let ndc_y = m[1] * x + m[5] * y + m[9] * 0.0 + m[13];
+        (ndc_x, ndc_y)
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn rotation_0_top_left_to_minus_one_one() {
+        let m = ortho_projection_rotated(100.0, 50.0, 0);
+        let (x, y) = apply(&m, 0.0, 0.0);
+        assert!(close(x, -1.0) && close(y, 1.0), "got ({}, {})", x, y);
+        let (x, y) = apply(&m, 100.0, 50.0);
+        assert!(close(x, 1.0) && close(y, -1.0), "got ({}, {})", x, y);
+    }
+
+    #[test]
+    fn rotation_90_top_left_to_physical_top_right() {
+        // Logical (0, 0) should land at physical top-right corner -> NDC (1, 1).
+        let m = ortho_projection_rotated(100.0, 50.0, 90);
+        let (x, y) = apply(&m, 0.0, 0.0);
+        assert!(close(x, 1.0) && close(y, 1.0), "got ({}, {})", x, y);
+        let (x, y) = apply(&m, 100.0, 50.0);
+        assert!(close(x, -1.0) && close(y, -1.0), "got ({}, {})", x, y);
+    }
+
+    #[test]
+    fn rotation_180_top_left_to_physical_bottom_right() {
+        let m = ortho_projection_rotated(100.0, 50.0, 180);
+        let (x, y) = apply(&m, 0.0, 0.0);
+        assert!(close(x, 1.0) && close(y, -1.0), "got ({}, {})", x, y);
+        let (x, y) = apply(&m, 100.0, 50.0);
+        assert!(close(x, -1.0) && close(y, 1.0), "got ({}, {})", x, y);
+    }
+
+    #[test]
+    fn rotation_270_top_left_to_physical_bottom_left() {
+        let m = ortho_projection_rotated(100.0, 50.0, 270);
+        let (x, y) = apply(&m, 0.0, 0.0);
+        assert!(close(x, -1.0) && close(y, -1.0), "got ({}, {})", x, y);
+        let (x, y) = apply(&m, 100.0, 50.0);
+        assert!(close(x, 1.0) && close(y, 1.0), "got ({}, {})", x, y);
+    }
+
+    #[test]
+    fn rendered_pixels_pointer_input_and_hardware_cursor_agree() {
+        let (physical_w, physical_h) = (320_u32, 200_u32);
+        for rotation in [0, 90, 180, 270] {
+            let (logical_w, logical_h) = if rotation == 90 || rotation == 270 {
+                (physical_h, physical_w)
+            } else {
+                (physical_w, physical_h)
+            };
+            let matrix = ortho_projection_rotated(logical_w as f32, logical_h as f32, rotation);
+            for (x, y) in [
+                (0.0, 0.0),
+                ((logical_w - 1) as f64, (logical_h - 1) as f64),
+                ((logical_w / 3) as f64, (logical_h / 4) as f64),
+            ] {
+                let (cursor_x, cursor_y) =
+                    logical_to_physical_cursor(x, y, physical_w, physical_h, rotation);
+                let (ndc_x, ndc_y) = apply(&matrix, (x + 0.5) as f32, (y + 0.5) as f32);
+                let drawn_x = (ndc_x as f64 + 1.0) * physical_w as f64 / 2.0;
+                let drawn_y = (1.0 - ndc_y as f64) * physical_h as f64 / 2.0;
+                assert!((drawn_x - cursor_x - 0.5).abs() < 0.001);
+                assert!((drawn_y - cursor_y - 0.5).abs() < 0.001);
+                let (input_x, input_y) = physical_to_logical_point(
+                    cursor_x,
+                    cursor_y,
+                    physical_w as f64,
+                    physical_h as f64,
+                    rotation,
+                );
+                assert_eq!((input_x, input_y), (x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn absolute_pointer_stays_inside_rotated_screen() {
+        for rotation in [0, 90, 180, 270] {
+            let (w, h) = if matches!(rotation, 90 | 270) {
+                (200.0, 320.0)
+            } else {
+                (320.0, 200.0)
+            };
+            for (px, py) in [(-10.0, -10.0), (320.0, 200.0), (330.0, 210.0)] {
+                let (x, y) = physical_to_logical_point(px, py, 320.0, 200.0, rotation);
+                assert!((0.0..w).contains(&x), "rotation={rotation}, x={x}");
+                assert!((0.0..h).contains(&y), "rotation={rotation}, y={y}");
+            }
+        }
     }
 }

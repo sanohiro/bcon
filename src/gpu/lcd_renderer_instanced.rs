@@ -262,6 +262,7 @@ pub struct LcdTextRendererInstanced {
     stem_darkening: f32,
     contrast: f32,
     fringe_reduction: f32,
+    rotation: u32,
 }
 
 impl LcdTextRendererInstanced {
@@ -324,8 +325,13 @@ impl LcdTextRendererInstanced {
                 stem_darkening: 0.0,
                 contrast: LCD_DEFAULT_CONTRAST,
                 fringe_reduction: 0.1,
+                rotation: 0,
             })
         }
+    }
+
+    pub fn set_rotation(&mut self, rotation: u32) {
+        self.rotation = rotation;
     }
 
     pub fn set_bg_color(&mut self, r: f32, g: f32, b: f32) {
@@ -690,7 +696,8 @@ impl LcdTextRendererInstanced {
 
             self.shader.bind(gl);
 
-            let projection = shader::ortho_projection(width as f32, height as f32);
+            let projection =
+                shader::ortho_projection_rotated(width as f32, height as f32, self.rotation);
             self.shader.set_projection(gl, &projection);
             self.shader.set_gamma(gl, self.gamma);
             self.shader.set_stem_darkening(gl, self.stem_darkening);

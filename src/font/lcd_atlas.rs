@@ -242,12 +242,12 @@ impl LcdGlyphAtlas {
                 // Copy RGB bitmap
                 for y in 0..bh {
                     for x in 0..bw {
-                        let src_idx = ((y * bw + x) * 3) as usize;
+                        let pixel_idx = (y * bw + x) as usize;
                         let dst_idx = (((y0 + y) * atlas_width + (x0 + x)) * 3) as usize;
-                        if src_idx + 2 < ft_glyph.bitmap.len() && dst_idx + 2 < atlas_data.len() {
-                            atlas_data[dst_idx] = ft_glyph.bitmap[src_idx];
-                            atlas_data[dst_idx + 1] = ft_glyph.bitmap[src_idx + 1];
-                            atlas_data[dst_idx + 2] = ft_glyph.bitmap[src_idx + 2];
+                        if let Some(rgb) = glyph_pixel_rgb(&ft_glyph.bitmap, pixel_idx, lcd_mode) {
+                            if dst_idx + 2 < atlas_data.len() {
+                                atlas_data[dst_idx..dst_idx + 3].copy_from_slice(&rgb);
+                            }
                         }
                     }
                 }
@@ -532,12 +532,12 @@ impl LcdGlyphAtlas {
 
         for y in 0..bh {
             for x in 0..bw {
-                let src_idx = ((y * bw + x) * 3) as usize;
+                let pixel_idx = (y * bw + x) as usize;
                 let dst_idx = (((y0 + y) * self.atlas_width + (x0 + x)) * 3) as usize;
-                if src_idx + 2 < glyph.bitmap.len() && dst_idx + 2 < self.atlas_data.len() {
-                    self.atlas_data[dst_idx] = glyph.bitmap[src_idx];
-                    self.atlas_data[dst_idx + 1] = glyph.bitmap[src_idx + 1];
-                    self.atlas_data[dst_idx + 2] = glyph.bitmap[src_idx + 2];
+                if let Some(rgb) = glyph_pixel_rgb(&glyph.bitmap, pixel_idx, self.lcd_mode) {
+                    if dst_idx + 2 < self.atlas_data.len() {
+                        self.atlas_data[dst_idx..dst_idx + 3].copy_from_slice(&rgb);
+                    }
                 }
             }
         }
@@ -991,5 +991,38 @@ impl LcdGlyphAtlas {
         );
 
         (self.cell_width, self.cell_height)
+    }
+}
+
+// The GPU atlas always uses RGB8, while FreeType grayscale glyphs contain R8.
+fn glyph_pixel_rgb(bitmap: &[u8], pixel: usize, mode: LcdMode) -> Option<[u8; 3]> {
+    if mode == LcdMode::Grayscale {
+        bitmap.get(pixel).map(|&coverage| [coverage; 3])
+    } else {
+        let start = pixel * 3;
+        bitmap
+            .get(start..start + 3)
+            .map(|rgb| [rgb[0], rgb[1], rgb[2]])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grayscale_glyph_pixels_expand_without_color_or_truncation() {
+        let coverage = [0, 64, 128, 255];
+        let rgb: Vec<u8> = (0..coverage.len())
+            .flat_map(|pixel| glyph_pixel_rgb(&coverage, pixel, LcdMode::Grayscale).unwrap())
+            .collect();
+        assert_eq!(rgb, [0, 0, 0, 64, 64, 64, 128, 128, 128, 255, 255, 255]);
+        assert_eq!(glyph_pixel_rgb(&coverage, 4, LcdMode::Grayscale), None);
+        for mode in [LcdMode::LcdHorizontal, LcdMode::LcdVertical] {
+            assert_eq!(
+                glyph_pixel_rgb(&[10, 20, 30, 40, 50, 60], 1, mode),
+                Some([40, 50, 60])
+            );
+        }
     }
 }

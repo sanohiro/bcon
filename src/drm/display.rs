@@ -16,10 +16,57 @@ pub struct DisplayConfig {
     pub connector_handle: connector::Handle,
     pub crtc_handle: crtc::Handle,
     pub mode: Mode,
+    /// Physical framebuffer dimensions (always panel native, never swapped).
     pub width: u32,
     pub height: u32,
     /// HDR capabilities detected from display EDID
     pub hdr: HdrCapabilities,
+    /// Rotation applied to user-facing content in clockwise degrees: 0/90/180/270.
+    /// Set from the configured `display.rotation`. Does NOT change the framebuffer
+    /// or DRM mode — it only affects the projection matrix and input coordinates.
+    pub rotation: u32,
+}
+
+impl DisplayConfig {
+    /// Logical width seen by the application (rendering, terminal grid, layout, input).
+    /// For 0/180 it equals the physical width; for 90/270 it equals the physical height.
+    pub fn logical_width(&self) -> u32 {
+        match self.rotation {
+            90 | 270 => self.height,
+            _ => self.width,
+        }
+    }
+
+    /// Logical height seen by the application.
+    /// For 0/180 it equals the physical height; for 90/270 it equals the physical width.
+    pub fn logical_height(&self) -> u32 {
+        match self.rotation {
+            90 | 270 => self.width,
+            _ => self.height,
+        }
+    }
+
+    /// Map a logical pointer position to the physical cursor plane.
+    pub fn cursor_position(&self, x: f64, y: f64) -> (f64, f64) {
+        logical_to_physical_cursor(x, y, self.width, self.height, self.rotation)
+    }
+}
+
+pub(crate) fn logical_to_physical_cursor(
+    x: f64,
+    y: f64,
+    width: u32,
+    height: u32,
+    rotation: u32,
+) -> (f64, f64) {
+    let w = width as f64 - 1.0;
+    let h = height as f64 - 1.0;
+    match rotation {
+        90 => (w - y, x),
+        180 => (w - x, h - y),
+        270 => (y, h - x),
+        _ => (x, y),
+    }
 }
 
 impl DisplayConfig {
@@ -83,6 +130,7 @@ impl DisplayConfig {
             width: width as u32,
             height: height as u32,
             hdr,
+            rotation: 0,
         })
     }
 

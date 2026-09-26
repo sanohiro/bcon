@@ -66,6 +66,32 @@ bcon --init-config=~/foo.toml,vim       # generate the file
 BCON_CONFIG=~/foo.toml bcon              # load it exclusively
 ```
 
+## Display rotation
+
+For tablets or portrait monitors, add this to your configuration:
+
+```toml
+[display]
+rotation = 90
+
+[font]
+render_mode = "grayscale"
+```
+
+`rotation` accepts `0` (default), `90`, `180`, or `270`, clockwise. Restart
+bcon after changing it. Quarter turns swap the terminal's logical width and
+height; text, images, UI, and pointer coordinates use the same rotation.
+Invalid positive angles fall back to `0` with a warning.
+
+Grayscale avoids color fringes when the rotated content no longer matches the
+panel's subpixel layout. To retain LCD rendering, choose `lcd_subpixel` for the
+rotated layout (`rgb`, `bgr`, `vrgb`, or `vbgr`). Restart after changing the font
+rendering mode or subpixel layout as well.
+
+For `bcon@tty2.service`, edit `/etc/bcon/config.toml` and restart with
+`sudo systemctl restart bcon@tty2`, then switch to tty2 with `Ctrl+Alt+F2`.
+Rootless sessions can use `~/.config/bcon/config.toml`.
+
 ## Available Presets
 
 | Preset | Description |
@@ -109,6 +135,7 @@ speed = 1.0                  # Cursor speed multiplier (default: 1.0)
 [display]
 prefer_external = true       # Prefer external monitors (HDMI/DP) over internal
 auto_switch = true           # Auto-switch on hotplug connect/disconnect
+rotation = 0                 # Clockwise degrees: 0, 90, 180, or 270; restart to apply
 
 [drm]
 device = "auto"              # "auto" probes each GPU and selects one with a connected display

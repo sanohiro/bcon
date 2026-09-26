@@ -8,8 +8,6 @@ use log::info;
 
 use crate::font::emoji::EmojiAtlas;
 
-use super::shader::ortho_projection;
-
 /// Vertex shader for emoji rendering (GLSL ES 3.00)
 const EMOJI_VERTEX_SHADER: &str = r#"#version 300 es
 precision mediump float;
@@ -133,6 +131,7 @@ pub struct EmojiRenderer {
     vertices: Vec<f32>,
     /// Current character count in buffer
     glyph_count: usize,
+    rotation: u32,
 }
 
 impl EmojiRenderer {
@@ -197,8 +196,13 @@ impl EmojiRenderer {
                 ebo,
                 vertices: Vec::with_capacity(MAX_EMOJI * VERTICES_PER_QUAD * VERTEX_FLOATS),
                 glyph_count: 0,
+                rotation: 0,
             })
         }
+    }
+
+    pub fn set_rotation(&mut self, rotation: u32) {
+        self.rotation = rotation;
     }
 
     /// Clear buffer
@@ -271,8 +275,12 @@ impl EmojiRenderer {
             // Bind shader
             self.shader.bind(gl);
 
-            // Set orthographic projection matrix
-            let projection = ortho_projection(screen_width as f32, screen_height as f32);
+            // Set orthographic projection matrix (rotation-aware)
+            let projection = super::shader::ortho_projection_rotated(
+                screen_width as f32,
+                screen_height as f32,
+                self.rotation,
+            );
             self.shader.set_projection(gl, &projection);
             self.shader.set_texture_unit(gl, 0);
 

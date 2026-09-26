@@ -1577,12 +1577,14 @@ Make sure seatd/logind is running and you're on an active VT."
     let mut display_config =
         drm::DisplayConfig::detect_with_preference(&drm_device, cfg.display.prefer_external)
             .context("Failed to detect display configuration")?;
+    display_config.rotation = cfg.display.normalized_rotation();
 
     info!(
-        "Display: {}x{} (external: {})",
+        "Display: {}x{} (external: {}, rotation: {}°)",
         display_config.width,
         display_config.height,
-        display_config.is_external(&drm_device)
+        display_config.is_external(&drm_device),
+        display_config.rotation,
     );
 
     // Initialize DRM hotplug monitor (Linux only)
@@ -1740,7 +1742,11 @@ Make sure seatd/logind is running and you're on an active VT."
     // LCD filter settings (from config)
     let lcd_filter = font::freetype::LcdFilterMode::from_str(&cfg.font.lcd_filter);
     let lcd_subpixel = font::freetype::LcdSubpixel::from_str(&cfg.font.lcd_subpixel);
-    let lcd_mode = lcd_subpixel.to_lcd_mode();
+    let lcd_mode = if cfg.font.render_mode.eq_ignore_ascii_case("grayscale") {
+        font::freetype::LcdMode::Grayscale
+    } else {
+        lcd_subpixel.to_lcd_mode()
+    };
     let subpixel_bgr = lcd_subpixel.is_bgr();
     let hinting_mode = font::freetype::HintingMode::from_str(&cfg.font.lcd_hinting);
 
@@ -1847,6 +1853,16 @@ Make sure seatd/logind is running and you're on an active VT."
     let mut curly_renderer =
         gpu::CurlyRenderer::new(gl).context("Failed to initialize curly renderer")?;
 
+    // Propagate display rotation to all renderers (used by their projection matrix).
+    {
+        let rot = display_config.rotation;
+        text_renderer.set_rotation(rot);
+        ui_renderer.set_rotation(rot);
+        image_renderer.set_rotation(rot);
+        emoji_renderer.set_rotation(rot);
+        curly_renderer.set_rotation(rot);
+    }
+
     // Create FBO for cached rendering (enables partial updates)
     let fbo = gpu::Fbo::new(gl, display_config.width, display_config.height)
         .context("Failed to initialize FBO")?;
@@ -1856,8 +1872,11 @@ Make sure seatd/logind is running and you're on an active VT."
 
     // Phase 3: Terminal initialization
     info!("Phase 3: terminal/PTY...");
-    let screen_w = display_config.width;
-    let screen_h = display_config.height;
+    // Logical screen dimensions used by the renderer/grid/layout/input layers.
+    // When `display.rotation` is 90/270, these are the physical dims swapped.
+    // The framebuffer, DRM mode, and GL viewport keep the *physical* values.
+    let screen_w = display_config.logical_width();
+    let screen_h = display_config.logical_height();
     // Cell dimensions from font metrics (always positive, but guard against edge cases)
     let mut cell_w = glyph_atlas.cell_width.max(1.0);
     let mut cell_h = glyph_atlas.cell_height.max(1.0);
@@ -2040,6 +2059,11 @@ Make sure seatd/logind is running and you're on an active VT."
     // Require at least one input method
     if keyboard.is_none() && evdev_keyboard.is_none() {
         anyhow::bail!("No input method available (both TTY keyboard and evdev failed)");
+    }
+
+    // Propagate display rotation to evdev so mouse coords land in logical space.
+    if let Some(ref mut kb) = evdev_keyboard {
+        kb.set_rotation(display_config.rotation);
     }
 
     info!("Phase 4 initialization complete");
@@ -2416,7 +2440,8 @@ Make sure seatd/logind is running and you're on an active VT."
                                 // Restore hardware cursor after VT switch
                                 if let Some(ref hc) = hw_cursor {
                                     hc.show();
-                                    hc.move_to(mouse_x, mouse_y);
+                                    let (x, y) = display_config.cursor_position(mouse_x, mouse_y);
+                                    hc.move_to(x, y);
                                 }
                             }
                         }
@@ -2560,6 +2585,15 @@ Make sure seatd/logind is running and you're on an active VT."
                 term.notifications_enabled = new_cfg.notifications.enabled;
                 term.allow_kitty_remote = new_cfg.security.allow_kitty_remote;
 
+                // Display rotation is captured at startup; changing it requires a restart.
+                if new_cfg.display.normalized_rotation() != display_config.rotation {
+                    log::warn!(
+                        "display.rotation changed ({}° -> {}°). Restart bcon to apply.",
+                        display_config.rotation,
+                        new_cfg.display.normalized_rotation()
+                    );
+                }
+
                 // Update IME disable app list
                 cfg = new_cfg;
 
@@ -2595,7 +2629,11 @@ Make sure seatd/logind is running and you're on an active VT."
                                 &drm_device,
                                 cfg.display.prefer_external,
                             ) {
-                                Ok(new_config) => {
+                                Ok(mut new_config) => {
+                                    // Rotation is fixed for this process because every
+                                    // renderer and the input transform were configured
+                                    // at startup.
+                                    new_config.rotation = display_config.rotation;
                                     if new_config.connector_handle
                                         != display_config.connector_handle
                                     {
@@ -3330,7 +3368,8 @@ Make sure seatd/logind is running and you're on an active VT."
                             mouse_x = *x;
                             mouse_y = *y;
                             if let Some(ref hc) = hw_cursor {
-                                hc.move_to(mouse_x, mouse_y);
+                                let (x, y) = display_config.cursor_position(mouse_x, mouse_y);
+                                hc.move_to(x, y);
                             } else {
                                 needs_redraw = true;
                             }
@@ -3502,7 +3541,8 @@ Make sure seatd/logind is running and you're on an active VT."
                         mouse_y = *y;
                         // Hardware cursor: update position directly (no frame render needed)
                         if let Some(ref hc) = hw_cursor {
-                            hc.move_to(mouse_x, mouse_y);
+                            let (x, y) = display_config.cursor_position(mouse_x, mouse_y);
+                            hc.move_to(x, y);
                         } else {
                             needs_redraw = true;
                         }
@@ -4004,7 +4044,8 @@ Make sure seatd/logind is running and you're on an active VT."
                 for row in 0..term.grid.rows() {
                     if term.grid.is_row_dirty(row) {
                         fbo.clear_rows(
-                            gl, row, row, cell_h, margin_y, bg_color.0, bg_color.1, bg_color.2,
+                            gl, row, row, cell_h, margin_y, display_config.rotation,
+                            bg_color.0, bg_color.1, bg_color.2,
                         );
                     }
                 }
@@ -6247,8 +6288,8 @@ Make sure seatd/logind is running and you're on an active VT."
             let user_home = term.user_home_dir();
             if let Err(e) = save_screenshot(
                 gl,
-                screen_w,
-                screen_h,
+                display_config.width,
+                display_config.height,
                 &cfg.paths.screenshot_dir,
                 user_home.as_deref(),
             ) {
@@ -6273,7 +6314,7 @@ Make sure seatd/logind is running and you're on an active VT."
 
         // Unbind FBO and blit to screen
         fbo.unbind(gl);
-        fbo.blit_to_screen(gl, screen_w, screen_h);
+        fbo.blit_to_screen(gl, display_config.width, display_config.height);
 
         // === Tab bar (drawn directly to screen, outside FBO) ===
         // Drawn every frame to avoid FBO caching artifacts
@@ -6765,8 +6806,27 @@ Make sure seatd/logind is running and you're on an active VT."
                                         let sy = cursor_y.floor() as i32;
                                         let sw = cell_w.ceil() as i32;
                                         let sh = cell_h.ceil() as i32;
-                                        let flipped_y = screen_h as i32 - sy - sh;
-                                        gl.scissor(sx, flipped_y, sw, sh);
+                                        match display_config.rotation {
+                                            90 => gl.scissor(
+                                                display_config.width as i32 - sy - sh,
+                                                display_config.height as i32 - sx - sw,
+                                                sh,
+                                                sw,
+                                            ),
+                                            180 => gl.scissor(
+                                                display_config.width as i32 - sx - sw,
+                                                sy,
+                                                sw,
+                                                sh,
+                                            ),
+                                            270 => gl.scissor(sy, sx, sh, sw),
+                                            _ => gl.scissor(
+                                                sx,
+                                                display_config.height as i32 - sy - sh,
+                                                sw,
+                                                sh,
+                                            ),
+                                        }
                                     }
                                     text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
                                     unsafe {

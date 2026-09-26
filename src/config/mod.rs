@@ -272,6 +272,11 @@ pub struct DisplayOutputConfig {
     /// Auto-switch to external monitor when connected
     /// When true, automatically switch display on hotplug connect
     pub auto_switch: bool,
+    /// Display rotation in clockwise degrees: 0, 90, 180, or 270
+    /// Useful for tablets and portrait monitors where the panel reports
+    /// a fixed native orientation different from how the user holds it.
+    /// Implemented via a GL projection-matrix transform (no hardware dependency).
+    pub rotation: u32,
 }
 
 impl Default for DisplayOutputConfig {
@@ -279,6 +284,24 @@ impl Default for DisplayOutputConfig {
         Self {
             prefer_external: true,
             auto_switch: true,
+            rotation: 0,
+        }
+    }
+}
+
+impl DisplayOutputConfig {
+    /// Returns the rotation clamped to one of the valid values (0/90/180/270).
+    /// Logs a warning for invalid input and falls back to 0.
+    pub fn normalized_rotation(&self) -> u32 {
+        match self.rotation {
+            0 | 90 | 180 | 270 => self.rotation,
+            other => {
+                warn!(
+                    "Invalid display.rotation = {} (must be 0, 90, 180, or 270). Using 0.",
+                    other
+                );
+                0
+            }
         }
     }
 }
@@ -1368,6 +1391,16 @@ ime_disabled_apps = ["vim", "nvim", "vi", "vimdiff", "emacs", "nano", "less", "m
 # [display]
 # prefer_external = true    # Prefer external monitors (HDMI/DP) over internal (eDP)
 # auto_switch = true        # Auto-switch to external monitor on hotplug connect
+# rotation = 0              # Display rotation in clockwise degrees: 0, 90, 180, 270
+#                           # For tablets / portrait monitors whose panel ships
+#                           # in a different physical orientation than expected.
+#                           # 0 = no rotation (default). Applied via GL projection
+#                           # transform (no hardware dependency).
+#                           # Caveat: LCD subpixel rendering assumes the panel's
+#                           # physical subpixel layout, so when rotation is 90/270
+#                           # switch font.render_mode to "grayscale" or set
+#                           # font.lcd_subpixel = "vrgb"/"vbgr" to match.
+#                           # Changing this at runtime requires a restart.
 #
 # Connector priority (when prefer_external = true):
 #   HDMI > DisplayPort > DVI > VGA > eDP (internal)
@@ -1599,9 +1632,23 @@ impl ConfigWatcher {
     /// Start watching config file
     pub fn new(config_path: &Path) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
+        // notify emits absolute paths, including when BCON_CONFIG was relative.
+        // Preserve symlink names so atomic replacement still matches this path.
+        let config_path = if config_path.is_absolute() {
+            config_path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(config_path)
+        };
+        let watched_config = config_path.clone();
 
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             if let Ok(event) = res {
+                // The parent directory is watched to catch atomic renames, but
+                // changes to sibling files must not reload the config. In
+                // particular, a log in that directory would feed back forever.
+                if !event.paths.iter().any(|path| path == &watched_config) {
+                    return;
+                }
                 // Detect Modify, Create, and Rename events
                 // (editors often save by writing to temp file then rename)
                 use notify::EventKind;
@@ -1615,7 +1662,7 @@ impl ConfigWatcher {
         })?;
 
         // Watch the parent directory to catch rename operations
-        let watch_path = config_path.parent().unwrap_or(config_path);
+        let watch_path = config_path.parent().unwrap_or(&config_path);
         watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
 
         Ok(Self {
@@ -1626,7 +1673,11 @@ impl ConfigWatcher {
 
     /// Check if config file was modified (non-blocking)
     pub fn check_reload(&self) -> bool {
-        self.rx.try_recv().is_ok()
+        let mut changed = false;
+        while self.rx.try_recv().is_ok() {
+            changed = true;
+        }
+        changed
     }
 }
 
@@ -1697,6 +1748,51 @@ pub fn detect_nerd_font_path() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn config_watcher_detects_relative_path_and_atomic_replace() {
+        let cwd = std::env::current_dir().unwrap();
+        let dir = tempfile::tempdir_in(&cwd).unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(&config_path, "[display]\nrotation = 0\n").unwrap();
+        let watcher = ConfigWatcher::new(config_path.strip_prefix(&cwd).unwrap()).unwrap();
+
+        let replacement = dir.path().join("replacement.toml");
+        std::fs::write(&replacement, "[display]\nrotation = 90\n").unwrap();
+        std::fs::rename(&replacement, &config_path).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !watcher.check_reload() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "atomic save of relative config was not detected"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn config_watcher_ignores_sibling_log_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let log_path = dir.path().join("bcon.log");
+        std::fs::write(&config_path, "[display]\nrotation = 0\n").unwrap();
+        let watcher = ConfigWatcher::new(&config_path).unwrap();
+
+        std::fs::write(&log_path, "first log line\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!watcher.check_reload(), "a sibling log triggered config reload");
+
+        std::fs::write(&config_path, "[display]\nrotation = 90\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut detected = watcher.check_reload();
+        while !detected && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            detected = watcher.check_reload();
+        }
+        assert!(detected, "config edit was not detected");
+    }
 
     #[test]
     fn test_parse_color() {
