@@ -26,6 +26,7 @@ pub struct UiRenderer {
     vertices: Vec<f32>,
     /// Current number of rectangles in buffer
     rect_count: usize,
+    rotation: u32,
 }
 
 impl UiRenderer {
@@ -102,8 +103,13 @@ impl UiRenderer {
                 ebo,
                 vertices: Vec::with_capacity(MAX_RECTS * VERTICES_PER_QUAD * VERTEX_FLOATS),
                 rect_count: 0,
+                rotation: 0,
             })
         }
+    }
+
+    pub fn set_rotation(&mut self, rotation: u32) {
+        self.rotation = rotation;
     }
 
     /// Clear draw buffer
@@ -186,8 +192,9 @@ impl UiRenderer {
             // Bind shader
             self.shader.bind(gl);
 
-            // Set orthographic projection matrix
-            let projection = shader::ortho_projection(width as f32, height as f32);
+            // Set orthographic projection matrix (rotation-aware)
+            let projection =
+                shader::ortho_projection_rotated(width as f32, height as f32, self.rotation);
             self.shader.set_projection(gl, &projection);
 
             // Bind VAO and upload vertex data

@@ -10,8 +10,6 @@ use log::info;
 
 use crate::terminal::TerminalImage;
 
-use super::shader::ortho_projection;
-
 /// Image drawing vertex shader (GLSL ES 3.00)
 const IMAGE_VERTEX_SHADER: &str = r#"#version 300 es
 precision mediump float;
@@ -139,6 +137,7 @@ pub struct ImageRenderer {
     generation: u64,
     /// Draw queue
     draw_queue: Vec<DrawCall>,
+    rotation: u32,
 }
 
 /// Generate a unique texture key from pane ID and image ID.
@@ -210,8 +209,13 @@ impl ImageRenderer {
                 textures: HashMap::new(),
                 generation: 0,
                 draw_queue: Vec::new(),
+                rotation: 0,
             })
         }
+    }
+
+    pub fn set_rotation(&mut self, rotation: u32) {
+        self.rotation = rotation;
     }
 
     /// Upload image texture with explicit key.
@@ -336,8 +340,12 @@ impl ImageRenderer {
             // Bind shader
             self.shader.bind(gl);
 
-            // Set orthographic projection matrix
-            let projection = ortho_projection(screen_width as f32, screen_height as f32);
+            // Set orthographic projection matrix (rotation-aware)
+            let projection = super::shader::ortho_projection_rotated(
+                screen_width as f32,
+                screen_height as f32,
+                self.rotation,
+            );
             self.shader.set_projection(gl, &projection);
             self.shader.set_image_unit(gl, 0);
 

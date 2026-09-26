@@ -229,6 +229,11 @@ pub struct EvdevKeyboard {
     gesture_pinch_scale: f64,
     /// Mouse/touchpad configuration, retained to apply to hotplugged devices
     mouse_config: MouseConfig,
+    /// Display rotation in clockwise degrees (0/90/180/270).
+    /// `mouse_x`/`mouse_y` are kept in *physical* framebuffer coordinates
+    /// (libinput delivers events that way), and are transformed to *logical*
+    /// coordinates at the moment events are emitted.
+    rotation: u32,
 }
 
 impl EvdevKeyboard {
@@ -344,6 +349,7 @@ impl EvdevKeyboard {
             gesture_swipe_fingers: 0,
             gesture_pinch_scale: 1.0,
             mouse_config: mouse_config.clone(),
+            rotation: 0,
         })
     }
 
@@ -456,6 +462,7 @@ impl EvdevKeyboard {
             gesture_swipe_dy: 0.0,
             gesture_swipe_fingers: 0,
             gesture_pinch_scale: 1.0,
+            rotation: 0,
         })
     }
 
@@ -463,6 +470,37 @@ impl EvdevKeyboard {
     #[allow(dead_code)]
     pub fn fd(&self) -> i32 {
         self.fd
+    }
+
+    /// Update the display rotation (0/90/180/270 clockwise).
+    /// Affects how internal physical mouse coords are transformed before they
+    /// are exposed to consumers via `MouseEvent`.
+    pub fn set_rotation(&mut self, rotation: u32) {
+        self.rotation = rotation;
+    }
+
+    /// Transform a physical (framebuffer-space) point to logical
+    /// (application-space) coordinates according to `self.rotation`.
+    ///
+    /// Inverse of the rotation applied by the projection matrix in
+    /// `gpu::shader::ortho_projection_rotated`, so a click at physical (px, py)
+    /// lands on the same logical cell that the renderer drew there.
+    #[inline]
+    fn physical_to_logical(&self, px: f64, py: f64) -> (f64, f64) {
+        physical_to_logical_point(
+            px,
+            py,
+            self.screen_width,
+            self.screen_height,
+            self.rotation,
+        )
+    }
+
+    /// Convenience wrapper that returns the current mouse position in logical
+    /// coordinates.
+    #[inline]
+    fn logical_mouse(&self) -> (f64, f64) {
+        self.physical_to_logical(self.mouse_x, self.mouse_y)
     }
 
     /// Process events and return bytes to forward to PTY
@@ -569,7 +607,7 @@ impl EvdevKeyboard {
                             KeyState::Released => KeyAction::Release,
                         };
                         let raw_event = RawKeyEvent {
-                            keysym: sym.raw(),
+                            keysym: normalize_keypad_navigation(sym.raw()),
                             keycode: evdev_code,
                             xkb_state: mods,
                             utf8,
@@ -613,10 +651,8 @@ impl EvdevKeyboard {
                             // Clamp to screen bounds
                             self.mouse_x = self.mouse_x.clamp(0.0, self.screen_width - 1.0);
                             self.mouse_y = self.mouse_y.clamp(0.0, self.screen_height - 1.0);
-                            mouse_events.push(MouseEvent::Move {
-                                x: self.mouse_x,
-                                y: self.mouse_y,
-                            });
+                            let (x, y) = self.logical_mouse();
+                            mouse_events.push(MouseEvent::Move { x, y });
                         }
                         PointerEvent::MotionAbsolute(m) => {
                             // Absolute coordinates (touchpad, tablet, etc.)
@@ -624,26 +660,25 @@ impl EvdevKeyboard {
                                 m.absolute_x_transformed(self.screen_width as u32) as f64;
                             self.mouse_y =
                                 m.absolute_y_transformed(self.screen_height as u32) as f64;
-                            mouse_events.push(MouseEvent::Move {
-                                x: self.mouse_x,
-                                y: self.mouse_y,
-                            });
+                            let (x, y) = self.logical_mouse();
+                            mouse_events.push(MouseEvent::Move { x, y });
                         }
                         PointerEvent::Button(b) => {
                             let button = b.button();
+                            let (x, y) = self.logical_mouse();
                             match b.button_state() {
                                 ButtonState::Pressed => {
                                     mouse_events.push(MouseEvent::ButtonPress {
                                         button,
-                                        x: self.mouse_x,
-                                        y: self.mouse_y,
+                                        x,
+                                        y,
                                     });
                                 }
                                 ButtonState::Released => {
                                     mouse_events.push(MouseEvent::ButtonRelease {
                                         button,
-                                        x: self.mouse_x,
-                                        y: self.mouse_y,
+                                        x,
+                                        y,
                                     });
                                 }
                             }
@@ -766,10 +801,11 @@ impl EvdevKeyboard {
 
         // Emit accumulated scroll as event (even small values for smoothness)
         if self.scroll_accum.abs() >= 0.1 {
+            let (x, y) = self.logical_mouse();
             mouse_events.push(MouseEvent::Scroll {
                 delta: self.scroll_accum,
-                x: self.mouse_x,
-                y: self.mouse_y,
+                x,
+                y,
             });
             self.scroll_accum = 0.0;
         }
@@ -798,7 +834,7 @@ impl EvdevKeyboard {
     /// Get current mouse position
     #[allow(dead_code)]
     pub fn mouse_position(&self) -> (f64, f64) {
-        (self.mouse_x, self.mouse_y)
+        self.logical_mouse()
     }
 
     /// Suspend libinput (call when VT switches away)
@@ -822,6 +858,25 @@ impl EvdevKeyboard {
         if let Err(e) = self.input.resume() {
             warn!("Failed to resume libinput: {:?}", e);
         }
+    }
+}
+
+pub(crate) fn physical_to_logical_point(
+    px: f64,
+    py: f64,
+    width: f64,
+    height: f64,
+    rotation: u32,
+) -> (f64, f64) {
+    // Absolute devices can report the outer edge or coordinates outside the
+    // active area. Clamp before rotation so the inverse never becomes negative.
+    let px = px.clamp(0.0, (width - 1.0).max(0.0));
+    let py = py.clamp(0.0, (height - 1.0).max(0.0));
+    match rotation {
+        90 => (py, width - 1.0 - px),
+        180 => (width - 1.0 - px, height - 1.0 - py),
+        270 => (height - 1.0 - py, px),
+        _ => (px, py),
     }
 }
 
@@ -865,9 +920,27 @@ pub fn check_vt_switch(event: &RawKeyEvent) -> Option<u16> {
     }
 }
 
+/// NumLock-off keypad keys have distinct XKB keysyms, but their navigation
+/// behavior should match the dedicated keys in bcon and in terminal apps.
+fn normalize_keypad_navigation(raw: u32) -> u32 {
+    match raw {
+        keysyms::KEY_KP_Up => keysyms::KEY_Up,
+        keysyms::KEY_KP_Down => keysyms::KEY_Down,
+        keysyms::KEY_KP_Left => keysyms::KEY_Left,
+        keysyms::KEY_KP_Right => keysyms::KEY_Right,
+        keysyms::KEY_KP_Home => keysyms::KEY_Home,
+        keysyms::KEY_KP_End => keysyms::KEY_End,
+        keysyms::KEY_KP_Prior => keysyms::KEY_Page_Up,
+        keysyms::KEY_KP_Next => keysyms::KEY_Page_Down,
+        keysyms::KEY_KP_Insert => keysyms::KEY_Insert,
+        keysyms::KEY_KP_Delete => keysyms::KEY_Delete,
+        _ => raw,
+    }
+}
+
 /// Convert keysym to terminal escape sequence
 pub fn keysym_to_bytes(sym: xkb::Keysym, utf8: &str) -> Vec<u8> {
-    let raw = sym.raw();
+    let raw = normalize_keypad_navigation(sym.raw());
     match raw {
         // Control keys
         _ if raw == keysyms::KEY_Return || raw == keysyms::KEY_KP_Enter => vec![b'\r'],
@@ -997,7 +1070,8 @@ pub fn keysym_to_bytes_with_mods(
     shift: bool,
     config: &KeyboardConfig,
 ) -> Vec<u8> {
-    let raw = sym.raw();
+    let raw = normalize_keypad_navigation(sym.raw());
+    let sym = xkb::Keysym::new(raw);
     let has_mods = ctrl || alt || shift;
     let mod_code = modifier_code(ctrl, alt, shift);
 
@@ -1307,4 +1381,55 @@ fn encode_kitty_keyboard(
 
     // Not handled by Kitty protocol - fall back to legacy encoding
     None
+}
+
+#[cfg(test)]
+mod keypad_navigation_tests {
+    use super::*;
+
+    #[test]
+    fn keypad_navigation_matches_dedicated_keys_in_terminal_modes() {
+        let pairs = [
+            (keysyms::KEY_KP_Up, keysyms::KEY_Up),
+            (keysyms::KEY_KP_Down, keysyms::KEY_Down),
+            (keysyms::KEY_KP_Left, keysyms::KEY_Left),
+            (keysyms::KEY_KP_Right, keysyms::KEY_Right),
+            (keysyms::KEY_KP_Home, keysyms::KEY_Home),
+            (keysyms::KEY_KP_End, keysyms::KEY_End),
+            (keysyms::KEY_KP_Prior, keysyms::KEY_Page_Up),
+            (keysyms::KEY_KP_Next, keysyms::KEY_Page_Down),
+            (keysyms::KEY_KP_Insert, keysyms::KEY_Insert),
+            (keysyms::KEY_KP_Delete, keysyms::KEY_Delete),
+        ];
+        for config in [
+            KeyboardConfig::default(),
+            KeyboardConfig {
+                application_cursor_keys: true,
+                ..KeyboardConfig::default()
+            },
+            KeyboardConfig {
+                kitty_flags: 8,
+                ..KeyboardConfig::default()
+            },
+        ] {
+            for (keypad, dedicated) in pairs {
+                let keypad = xkb::Keysym::new(keypad);
+                let dedicated = xkb::Keysym::new(dedicated);
+                assert_eq!(
+                    keysym_to_bytes_with_mods(keypad, "", false, false, false, &config),
+                    keysym_to_bytes_with_mods(dedicated, "", false, false, false, &config),
+                    "keypad key {:?} differs with config {:?}",
+                    keypad,
+                    config
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn keypad_digits_keep_their_numeric_output() {
+        let key = xkb::Keysym::new(keysyms::KEY_KP_9);
+        assert_eq!(normalize_keypad_navigation(key.raw()), key.raw());
+        assert_eq!(keysym_to_bytes(key, "9"), b"9");
+    }
 }

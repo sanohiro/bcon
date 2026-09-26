@@ -361,7 +361,10 @@ impl KittyDecoder {
             self.parse_params(params_str);
             self.first_chunk = false;
         } else {
-            // For subsequent chunks, only update m parameter
+            // The continuation flag belongs to this chunk. An omitted m on
+            // the final chunk means m=0, even when preceding chunks had m=1.
+            self.params.more = false;
+            // For subsequent chunks, only update m parameter.
             for part in params_str.split(',') {
                 if let Some((key, value)) = part.split_once('=') {
                     if key == "m" {
@@ -1086,6 +1089,21 @@ mod tests {
                 assert_eq!(img.data.len(), rgba.len());
                 assert_eq!(img.data, rgba);
             }
+            _ => panic!("expected Image result"),
+        }
+    }
+
+    #[test]
+    fn final_chunk_without_m_completes_kitten_transmission() {
+        let rgba = [0x10, 0x20, 0x30, 0xff];
+        let mut decoder = KittyDecoder::new();
+        let first = format!("a=T,f=32,s=1,v=1,m=1;{}", b64_encode(&rgba[..2]));
+        assert!(!decoder.process(first.as_bytes()).0);
+        let last = format!("a=T;{}", b64_encode(&rgba[2..]));
+        assert!(decoder.process(last.as_bytes()).0);
+
+        match decoder.finish(1, false).expect("decode") {
+            KittyDecodeResult::Image(image) => assert_eq!(image.data, rgba),
             _ => panic!("expected Image result"),
         }
     }

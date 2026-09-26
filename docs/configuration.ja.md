@@ -65,6 +65,32 @@ bcon --init-config=~/foo.toml,vim       # ファイル生成
 BCON_CONFIG=~/foo.toml bcon              # そのファイルだけを読み込み起動
 ```
 
+## 画面の回転
+
+タブレットや縦置きモニターでは、設定に次を追加します。
+
+```toml
+[display]
+rotation = 90
+
+[font]
+render_mode = "grayscale"
+```
+
+`rotation` は時計回りに `0`（既定）、`90`、`180`、`270` 度を指定します。
+変更後は bcon を再起動してください。90/270 度では端末の論理的な幅と高さが
+入れ替わり、文字・画像・UI・ポインター座標に同じ回転が適用されます。
+対応していない正の角度は警告を出し、`0` に戻ります。
+
+グレースケールにすると、回転後の文字とパネルのサブピクセル配列が合わない
+場合の色にじみを避けられます。LCD 描画を使う場合は、回転後の配列に合わせて
+`lcd_subpixel`（`rgb`、`bgr`、`vrgb`、`vbgr`）を選んでください。
+描画モードやサブピクセル配列の変更後も再起動が必要です。
+
+`bcon@tty2.service` を使う場合は `/etc/bcon/config.toml` を編集し、
+`sudo systemctl restart bcon@tty2` の後に `Ctrl+Alt+F2` で tty2 に切り替えます。
+rootless セッションでは `~/.config/bcon/config.toml` を使えます。
+
 ## 利用可能なプリセット
 
 | プリセット | 説明 |
@@ -107,6 +133,7 @@ speed = 1.0                  # カーソル速度倍率 (デフォルト: 1.0、
 [display]
 prefer_external = true       # 外部モニター優先 (HDMI/DP > 内蔵)
 auto_switch = true           # ホットプラグ時に自動切り替え
+rotation = 0                 # 時計回り: 0、90、180、270 度。変更後は再起動が必要
 
 [drm]
 device = "auto"              # "auto" は各 GPU を probe して接続中のディスプレイを自動選択

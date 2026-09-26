@@ -387,6 +387,7 @@ pub struct CurlyRenderer {
     ebo: glow::Buffer,
     vertices: Vec<f32>,
     run_count: usize,
+    rotation: u32,
 }
 
 impl CurlyRenderer {
@@ -453,8 +454,13 @@ impl CurlyRenderer {
                 ebo,
                 vertices: Vec::with_capacity(CURLY_MAX_RUNS * 4 * CURLY_VERTEX_FLOATS),
                 run_count: 0,
+                rotation: 0,
             })
         }
+    }
+
+    pub fn set_rotation(&mut self, rotation: u32) {
+        self.rotation = rotation;
     }
 
     pub fn begin(&mut self) {
@@ -520,7 +526,8 @@ impl CurlyRenderer {
 
             self.shader.bind(gl);
 
-            let projection = shader::ortho_projection(width as f32, height as f32);
+            let projection =
+                shader::ortho_projection_rotated(width as f32, height as f32, self.rotation);
             self.shader.set_projection(gl, &projection);
 
             gl.bind_vertex_array(Some(self.vao));

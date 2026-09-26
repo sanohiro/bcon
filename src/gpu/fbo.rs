@@ -168,6 +168,7 @@ impl Fbo {
         end_row: usize,
         cell_height: f32,
         margin_y: f32,
+        rotation: u32,
         r: f32,
         g: f32,
         b: f32,
@@ -179,9 +180,14 @@ impl Fbo {
             let y = (margin_y + start_row as f32 * cell_height) as i32;
             let height = ((end_row - start_row + 1) as f32 * cell_height) as i32;
 
-            // OpenGL scissor Y is from bottom, need to flip
-            let flipped_y = self.height as i32 - y - height;
-            gl.scissor(0, flipped_y, self.width as i32, height);
+            // Convert the logical row strip to physical framebuffer coordinates.
+            // OpenGL scissor coordinates start at the bottom left.
+            match rotation {
+                90 => gl.scissor(self.width as i32 - y - height, 0, height, self.height as i32),
+                180 => gl.scissor(0, y, self.width as i32, height),
+                270 => gl.scissor(y, 0, height, self.height as i32),
+                _ => gl.scissor(0, self.height as i32 - y - height, self.width as i32, height),
+            }
 
             gl.clear_color(r, g, b, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);

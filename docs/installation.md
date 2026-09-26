@@ -147,6 +147,12 @@ bcon includes libseat support by default, enabling:
 
 The same binary works both with `sudo` and as a user session.
 
+For a rootless run, switch to an unused text VT (often `Ctrl+Alt+F3` on
+GNOME), log in there, and run `bcon --backend=seatd` from that login shell.
+You do not need to disable getty for this interactive setup: getty has already
+handed the VT to your login session. If a system service starts bcon directly
+on a VT instead, disable that VT's getty so the two services do not own it.
+
 
 ## For Arch Linux Users
 There are some differences compared to Debian/Ubuntu.
@@ -192,4 +198,3 @@ yay -S bcon
 4. User Login Session
 
 Session files (`bcon-session`, `bcon.desktop`) are installed in their final locations by the AUR package, so no manual deployment is needed.
-

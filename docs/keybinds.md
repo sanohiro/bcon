@@ -29,6 +29,14 @@ English | **[Japanese](keybinds.ja.md)**
 | Next Tab | `Ctrl+Shift+PageDown` | same | same | Switch to next tab |
 | Prev Tab | `Ctrl+Shift+PageUp` | same | same | Switch to previous tab |
 
+## Numeric keypad
+
+With NumLock off, keypad arrows, Home, End, PageUp, PageDown, Insert, and Delete
+work like the dedicated navigation keys, including bcon keybinds. With NumLock
+on, the keypad continues to enter digits. No extra configuration is required.
+The keysym selected by your XKB layout determines the behavior; some layouts
+make Shift temporarily reverse NumLock.
+
 ## Custom Keybinds
 
 Multiple keys can be assigned to a single action in config:

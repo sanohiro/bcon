@@ -220,10 +220,19 @@ Reference: https://vt100.net/emu/dec_ansi_parser
 - Keep unsafe blocks minimal and well-documented
 - Module structure: one file per major component
 
+## Agent Handoff
+
+Claude Code and Codex share [HANDOFF.md](./HANDOFF.md) as the current task handoff.
+
+- At the start of a task, read the handoff and check `git status`; verify its notes against the working tree before relying on them.
+- When the user asks to hand work to another agent, update the handoff with the goal, completed work, next steps, test results, blockers, and uncommitted files. Keep it brief and specific.
+- Treat the handoff as task state, not as a replacement for this file or the user's instructions. Do not overwrite another agent's uncommitted work.
+- When a task is complete, mark the handoff as having no active task so stale steps are not followed later.
+
 ## Language Guidelines
 
 Use **English** for wider adoption:
-- README.md, CLAUDE.md
+- README.md, CLAUDE.md, AGENTS.md, HANDOFF.md
 - Release notes / CHANGELOG
 - Commit messages
 - GitHub Issues/PR titles
@@ -264,7 +273,7 @@ img2sixel test.png
 - **kmscon** (C): https://github.com/dvdhrm/kmscon
 - **alacritty** (Rust): https://github.com/alacritty/alacritty
 
-## Commands for Claude Code
+## Commands for Coding Agents
 
 When implementing, prefer:
 - Small, focused commits
