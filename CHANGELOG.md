@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-09-26
+
+### Added
+- Clockwise display rotation (`0`, `90`, `180`, `270`) for tablets and portrait monitors, including rendering, pointer coordinates, and framebuffer updates ([#17](https://github.com/sanohiro/bcon/issues/17)).
+- Interactive rendering and rotated-pointer checks, plus bounded rendering and virtual-keyboard stress tools in `tests/`.
+- Shared agent instructions and task handoff documentation.
+
+### Fixed
+- NumLock-off keypad navigation now works like dedicated arrow, Home, End, PageUp, PageDown, Insert, and Delete keys ([#18](https://github.com/sanohiro/bcon/issues/18)).
+- Kitty image transfers finish when the last chunk omits `m`.
+- Config watching ignores sibling files, coalesces pending events, and supports relative config paths and atomic saves.
+- Honor `font.render_mode = "grayscale"` when initializing the glyph atlas.
+
 ## [1.3.1] - 2026-04-04
 
 ### Added
