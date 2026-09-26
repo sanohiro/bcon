@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Launch the temporary input helper from any working directory or symlink.
+set -euo pipefail
+
+script_path=$(readlink -f -- "${BASH_SOURCE[0]}")
+helper_path="$(dirname -- "$script_path")/input_helper.py"
+
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+    cat <<'EOF'
+Usage: bcon-test-input [start [--tty tty2] [--user USER] [--pid PID]]
+       bcon-test-input status
+       bcon-test-input screenshot
+       bcon-test-input tap CTRL+SHIFT+ENTER
+       bcon-test-input text 'echo bcon-test'
+
+With no arguments, start the helper on tty2 for the current user.
+Start requests sudo when necessary and stays in the foreground; stop with Ctrl+C.
+Other commands run without sudo. Reserve the bcon session before sending input.
+For the underlying client's options: bcon-test-input status --help
+EOF
+    exit 0
+fi
+
+if [[ $# == 0 || ${1:-} == start || ${1:-} == serve ]]; then
+    if [[ $# != 0 ]]; then shift; fi
+    target_user=${SUDO_USER:-$(id -un)}
+    if [[ $EUID == 0 ]]; then
+        exec /usr/bin/python3 -I -B "$helper_path" serve --user "$target_user" "$@"
+    else
+        exec /usr/bin/sudo /usr/bin/python3 -I -B "$helper_path" serve --user "$target_user" "$@"
+    fi
+fi
+
+exec /usr/bin/python3 -I -B "$helper_path" "$@"

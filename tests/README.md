@@ -1,5 +1,9 @@
 # Interactive checks
 
+For SSH-driven application testing, see [automation/README.md](automation/README.md).
+It includes a read-only environment probe and a temporary sudo-started keyboard
+helper for use from a separate SSH session.
+
 Run these inside bcon on a text VT, including a session started through
 `bcon@tty2.service`. A terminal window or SSH session alone cannot verify bcon's
 rendering or local keyboard handling. Stop a test before switching VTs when it
