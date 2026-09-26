@@ -6280,27 +6280,6 @@ Make sure seatd/logind is running and you're on an active VT."
             text_renderer.flush(gl, &glyph_atlas, screen_w, screen_h);
         }
 
-        // Bell flash is drawn after FBO blit (outside FBO cache)
-
-        // === Screenshot ===
-        if take_screenshot {
-            take_screenshot = false;
-            let user_home = term.user_home_dir();
-            if let Err(e) = save_screenshot(
-                gl,
-                display_config.width,
-                display_config.height,
-                &cfg.paths.screenshot_dir,
-                user_home.as_deref(),
-            ) {
-                log::warn!("Screenshot save failed: {}", e);
-            } else {
-                // Flash on success
-                bell_flash_until =
-                    Some(std::time::Instant::now() + Duration::from_millis(BELL_FLASH_DURATION_MS));
-            }
-        }
-
         // === Pane dividers (drawn in FBO, after all pane content) ===
         // Only draw divider lines between panes (not around outer edges)
         if !pane_dividers.is_empty() && any_content_dirty {
@@ -6954,6 +6933,31 @@ Make sure seatd/logind is running and you're on an active VT."
             if let Some(vt) = target_vt {
                 if !drm::is_vt_active(vt) {
                     continue;
+                }
+            }
+
+            // Capture the composed default framebuffer, including the tab bar,
+            // terminal cursor and overlays, before swapping it out. Keep the
+            // request pending while synchronized updates or VT state defer
+            // presentation. DRM hardware cursor planes are not part of this PNG.
+            if take_screenshot {
+                take_screenshot = false;
+                let user_home = term.user_home_dir();
+                if let Err(e) = save_screenshot(
+                    gl,
+                    display_config.width,
+                    display_config.height,
+                    &cfg.paths.screenshot_dir,
+                    user_home.as_deref(),
+                ) {
+                    log::warn!("Screenshot save failed: {}", e);
+                } else {
+                    // Acknowledge on the next frame so this capture does not
+                    // include its own success flash.
+                    bell_flash_until = Some(
+                        std::time::Instant::now()
+                            + Duration::from_millis(BELL_FLASH_DURATION_MS),
+                    );
                 }
             }
 

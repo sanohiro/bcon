@@ -1,58 +1,69 @@
 # Agent Handoff
 
-Status: Active — review complete; v1.5.0 merge and release pending.
+Status: No active task. Input helper and focused screenshot fix verified locally.
 
-## Goal
+## User direction
 
-Merge the reviewed display rotation (#17), NumLock-off keypad navigation (#18),
-and related rendering/config fixes. The user authorized merging and necessary
-documentation updates. The user also explicitly authorized a release. Use v1.5.0 because rotation adds
-a feature. All commit, PR, release, and issue messages must be English.
-Leave issue #19 unchanged.
-After release, reply to #17 and #18 in English, briefly apologizing for the slow reply
-(as requested by the user). Do not send those replies before release.
+- Prioritize stability and focused bug reviews with reproducible tests. Defer
+  issues #5/#6; leave #19 unchanged unless instructed otherwise.
+- Operate via Codex started over SSH on the Linux test machine, whether Parallels
+  or physical hardware. Use actual bcon input/captures for feature/app checks.
+- All commit, PR, release and issue messages must be English.
+- Never push/tag without an explicit instruction. No new publication requested.
 
-## Completed
+## Completed in this working tree
 
-- Reviewed all application, documentation, and test-tool changes.
-- Fixed review findings: relative-path config watch filtering, grayscale mode
-  selection and R8-to-RGB atlas upload, and out-of-bounds absolute pointer input
-  after rotation. Added regression coverage.
-- Fixed final-target handling in the interactive pointer check and NumLock
-  restoration in the keypad check.
-- Updated English/Japanese configuration, keybind, and installation docs;
-  added an Unreleased changelog section and tests/README.md.
-- Earlier systemd visual smoke run: 12 screenshots showed correct text, colors,
-  Sixel, both Kitty transfers, partial update cleanup, and alternate-screen
-  restoration. Service had zero restarts during that run. This predates the
-  additional code-review fixes; screenshots do not verify all rotation angles
-  or VT switching animations.
+- tests/automation/probe.py: read-only environment inventory.
+- input_helper.py: sudo bootstrap opens uinput and pins the target bcon PID;
+  drops UID/GID, then serves bounded keyboard requests on a private Unix socket.
+  Peer UID checks, release-on-interruption, VT/process guard, and cleanup.
+- bcon-test-input shell launcher, symlinked into /home/hiro/.local/bin; works
+  from any directory. No-argument invocation starts helper via sudo for tty2.
+- tests/automation/test_input_helper.py: 18 protocol/lifecycle tests passed.
+- src/main.rs: moved PNG capture from the content FBO to after screen composition,
+  just before buffer swap, within presentation guards. Success flash starts after
+  capture. No other product source changed.
+- cargo test --locked: 65 passed, 1 hardware-dependent seatd test ignored.
+- cargo build --release --locked: passed (CIFS cache hard-link warning in tests).
+- User installed binary and restarted bcon: PID 20247, start 12:45:23 JST.
+  Installed SHA256 55308c4bf690505d26d0fbc0ab314022360dcc6ec308f0ebc1bc5b97323f41eb.
+- Live helper test confirms new PNGs contain tab bar, divider, terminal cursor,
+  and 42% progress overlay. Focus, zoom/unzoom and test-tab closure exercised.
+  PID stayed 20247 and restart count stayed 0. Original login/shell tab restored.
 
-## Verification
+## Environment and evidence
 
-- `cargo test --locked`: 65 passed, 1 hardware-dependent seatd test ignored.
-- `cargo test --locked --no-default-features`: passed.
-- `cargo build --release --locked`: passed after the review fixes.
-- Shell/Python parsing and both C test utilities' strict syntax checks passed.
-- Relative-config atomic-save regression failed before the fix and passed after.
-- User reports overnight stress did not reproduce issue #19; not proof of a fix.
+- Helper remains running in the user's separate SSH session; query status before
+  using it and reserve the seat exclusively. It pins the PID, so restart helper
+  after bcon restarts. User stops it with Ctrl+C.
+- User added [paths] screenshot_dir to /etc/bcon/config.toml. Do not append again.
+  Directory /home/hiro/.local/state/bcon-test/screenshots: hiro:hiro, 0700;
+  PNG files root:root, 0644, readable by hiro but directory excludes other users.
+- Evidence/report: composed-frame-regression.md in that screenshot directory.
+  The earlier first-helper-check.md describes the pre-fix run.
+- Both focus states have tab-background RGBA (31,31,38,255) at (20,920),
+  divider RGBA (76,76,89,255) at (512,300). A fleeting visual suspicion of a
+  missing tab bar was disproved by PNG pixel checks; it is not a known defect.
 
-## Next steps
+## Limits and possible future work
 
-- Publish the reviewed branch/PR, verify CI, merge, tag v1.5.0, and verify the
-  release artifacts. Then reply to issues #17 and #18 in English with a brief
-  apology for the slow reply. Update this handoff once complete.
-- Update this file after merge so future agents do not repeat stale work.
+- CI runs the helper protocol/lifecycle tests and shell syntax check.
+- No complete application scenario runner or automatic PNG collector yet.
+- Hardware pointer planes are outside screenshots. Rotation, sync-update
+  deferral, VT recovery and host-display flicker were not live-tested here.
+- Earlier lines move out of view on split/unzoom and reappear on zoom. Observed
+  before and after the screenshot fix; separate resize/reflow review candidate.
+- Earlier pane-close logs reported SIGHUP/SIGKILL timeouts; not diagnosed here.
+- Do not silently expand into rendering refactors or mark these candidates fixed.
 
-## Uncommitted files and blockers
+## Working tree / publication
 
-- Changes are being prepared on a dedicated review branch. Check git status and
-  the PR before resuming. No application restart is needed for GitHub operations.
-- The development share is CIFS and reports every file as executable. Preserve
-  existing Git modes; ignore mode-only differences when reviewing/staging.
-- Privileged deployment requires the user's sudo interaction. The user offered
-  to execute commands themselves; never request their password.
-
-- CIFS rejected writing loose Git objects during staging. A local review clone
-  is recorded in /tmp/bcon-review-path; it has the same reviewed file contents
-  and preserves repository file modes. Use it for publication if needed.
+- Change includes src/main.rs, tests/README.md, tests/automation/, HANDOFF.md,
+  and CI coverage for the input helper. No release or tag is requested.
+- CIFS reports all files executable. Use git -c core.filemode=false status/diff
+  and preserve tracked modes when staging. The shell launcher needs executable mode.
+- Main baseline is v1.5.0, e3751738f4361cea94b081a2ae7b0e3483321d0c.
+- Earlier PR #20 merged and v1.5.0 released; artifact checksums verified.
+- Issue replies already posted; do not repeat:
+  https://github.com/sanohiro/bcon/issues/17#issuecomment-5842086768
+  https://github.com/sanohiro/bcon/issues/18#issuecomment-5842088706

@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test input helper
+        run: |
+          bash -n tests/automation/bcon-test-input
+          python3 -B -W error::ResourceWarning -m unittest discover -s tests/automation -p 'test_*.py' -v
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
