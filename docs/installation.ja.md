@@ -10,7 +10,7 @@ bcon は 2 種類のバイナリを配布しています。`install.sh` が glib
 | ディストリビューション | glibc | apt suite |
 |---|---|---|
 | Ubuntu 24.04+, Debian 13 (trixie)+ | 2.39+ | `stable` |
-| Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm) | 2.34+ | `legacy` |
+| Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm, 64-bit) | 2.34+ | `legacy` |
 
 Ubuntu 20.04 と Debian 11 (bullseye) は glibc 2.31 のため非対応です。
 `ldd --version` で確認できます。
@@ -29,6 +29,9 @@ Ubuntu 20.04 と Debian 11 (bullseye) は glibc 2.31 のため非対応です。
 > curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 > sudo apt install bcon
 > ```
+>
+> バージョンが変わらない場合でも、インストール済みのパッケージがどの suite からも
+> 提供されなくなるため、apt は legacy 版で置き換えます。
 
 ## 基本セットアップ (Debian/Ubuntu)
 

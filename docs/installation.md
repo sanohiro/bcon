@@ -10,7 +10,7 @@ the matching one, so normally you do not need to care which is which.
 | Distribution | glibc | apt suite |
 |---|---|---|
 | Ubuntu 24.04+, Debian 13 (trixie)+ | 2.39+ | `stable` |
-| Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm) | 2.34+ | `legacy` |
+| Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm, 64-bit) | 2.34+ | `legacy` |
 
 Ubuntu 20.04 and Debian 11 (bullseye) ship glibc 2.31 and are not supported.
 Run `ldd --version` to check what you have.
@@ -29,6 +29,9 @@ is only linked against an older glibc.
 > curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
 > sudo apt install bcon
 > ```
+>
+> apt replaces the package even when the version is unchanged, because the
+> installed one is no longer offered by any configured suite.
 
 ## Basic Setup (Debian/Ubuntu)
 

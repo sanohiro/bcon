@@ -257,7 +257,7 @@ jobs:
               echo " GPU acceleration, True Color, Sixel/Kitty graphics, Japanese input"
               echo " without X11/Wayland."
             } > "${root}/DEBIAN/control"
-            dpkg-deb --build "${root}" "${out}"
+            dpkg-deb --root-owner-group --build "${root}" "${out}"
           }
 
           build_deb amd64 release/bcon-linux-x86_64.tar.gz         2.39 release/bcon_amd64.deb
@@ -297,7 +297,7 @@ jobs:
             | Your system | glibc | Download |
             |---|---|---|
             | Ubuntu 24.04+, Debian 13 (trixie) | 2.39+ | `bcon_amd64.deb` / `bcon_arm64.deb`<br>`bcon-linux-x86_64.tar.gz` / `bcon-linux-aarch64.tar.gz` |
-            | Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm) | 2.34+ | `bcon_legacy_amd64.deb` / `bcon_legacy_arm64.deb`<br>`bcon-linux-x86_64-legacy.tar.gz` / `bcon-linux-aarch64-legacy.tar.gz` |
+            | Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm, 64-bit) | 2.34+ | `bcon_legacy_amd64.deb` / `bcon_legacy_arm64.deb`<br>`bcon-linux-x86_64-legacy.tar.gz` / `bcon-linux-aarch64-legacy.tar.gz` |
 
             The `legacy` builds are compiled against an older glibc and run
             everywhere the regular builds do. Ubuntu 20.04 and Debian 11 (glibc

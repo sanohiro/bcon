@@ -10,10 +10,12 @@ set -e
 #            (Ubuntu 24.04+, Debian 13 trixie+)
 #   legacy - built on Ubuntu 22.04, needs glibc 2.34+
 #            (Ubuntu 22.04, Debian 12 bookworm, Raspberry Pi OS bookworm)
-SUITE=stable
+# Default to legacy: it runs on every supported system, so a glibc version we
+# cannot parse degrades to a working install rather than an uninstallable one.
+SUITE=legacy
 GLIBC=$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$' || true)
-if [ -n "${GLIBC}" ] && [ "$(printf '2.39\n%s\n' "${GLIBC}" | sort -V | head -1)" != "2.39" ]; then
-    SUITE=legacy
+if [ -n "${GLIBC}" ] && [ "$(printf '2.39\n%s\n' "${GLIBC}" | sort -V | head -1)" = "2.39" ]; then
+    SUITE=stable
 fi
 echo "Detected glibc ${GLIBC:-unknown}, using '${SUITE}' suite."
 
