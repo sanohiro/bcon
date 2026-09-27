@@ -133,6 +133,10 @@ sudo systemctl enable --now bcon@tty2
 
 - Linux with DRM/KMS support (Debian/Ubuntu recommended)
 - GPU with OpenGL ES 3.0+
+- glibc 2.34 or newer — Ubuntu 22.04+, Debian 12 (bookworm)+, Raspberry Pi OS (bookworm)+
+
+See [Supported Systems](docs/installation.md#supported-systems) for which build
+applies to your distribution. The installer picks it automatically.
 
 ## Limitations
 

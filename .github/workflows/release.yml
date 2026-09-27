@@ -31,7 +31,7 @@ jobs:
             libxkbcommon-dev libinput-dev libudev-dev \
             libdbus-1-dev libwayland-dev \
             libfontconfig1-dev libfreetype-dev \
-            libseat-dev \
+            libseat-dev libsystemd-dev \
             pkg-config cmake clang
 
       - name: Install Rust
@@ -72,7 +72,7 @@ jobs:
             libxkbcommon-dev libinput-dev libudev-dev \
             libdbus-1-dev libwayland-dev \
             libfontconfig1-dev libfreetype-dev \
-            libseat-dev \
+            libseat-dev libsystemd-dev \
             pkg-config cmake clang
 
       - name: Install Rust
@@ -98,8 +98,102 @@ jobs:
           name: bcon-linux-aarch64
           path: bcon-linux-aarch64.tar.gz
 
+
+  # Legacy builds: run inside an Ubuntu 22.04 container so the binary only
+  # requires glibc 2.34+, covering Ubuntu 22.04, Debian 12 bookworm and
+  # Raspberry Pi OS bookworm. Published under the apt "legacy" suite.
+  build-legacy-x86_64:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            git curl ca-certificates \
+            libdrm-dev libgbm-dev \
+            libegl1-mesa-dev libgles2-mesa-dev \
+            libxkbcommon-dev libinput-dev libudev-dev \
+            libdbus-1-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libseat-dev libsystemd-dev \
+            build-essential pkg-config cmake clang
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Create archive
+        run: |
+          mkdir -p dist
+          cp target/release/bcon dist/
+          cp bcon@.service dist/
+          cp bcon.desktop dist/
+          cp bcon-session dist/
+          cp README.md dist/
+          cd dist
+          tar -czvf ../bcon-linux-x86_64-legacy.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bcon-linux-x86_64-legacy
+          path: bcon-linux-x86_64-legacy.tar.gz
+
+  build-legacy-aarch64:
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            git curl ca-certificates \
+            libdrm-dev libgbm-dev \
+            libegl1-mesa-dev libgles2-mesa-dev \
+            libxkbcommon-dev libinput-dev libudev-dev \
+            libdbus-1-dev libwayland-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libseat-dev libsystemd-dev \
+            build-essential pkg-config cmake clang
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Create archive
+        run: |
+          mkdir -p dist
+          cp target/release/bcon dist/
+          cp bcon@.service dist/
+          cp bcon.desktop dist/
+          cp bcon-session dist/
+          cp README.md dist/
+          cd dist
+          tar -czvf ../bcon-linux-aarch64-legacy.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bcon-linux-aarch64-legacy
+          path: bcon-linux-aarch64-legacy.tar.gz
+
   release:
-    needs: [build-x86_64, build-aarch64]
+    needs: [build-x86_64, build-aarch64, build-legacy-x86_64, build-legacy-aarch64]
     runs-on: ubuntu-latest
 
     steps:
@@ -126,63 +220,50 @@ jobs:
             VERSION="${GITHUB_REF#refs/tags/v}"
           fi
 
-          # amd64 .deb
-          mkdir -p /tmp/bcon-x86_64
-          tar -xzf release/bcon-linux-x86_64.tar.gz -C /tmp/bcon-x86_64
-          mkdir -p deb-amd64/DEBIAN deb-amd64/usr/local/bin deb-amd64/lib/systemd/system deb-amd64/usr/share/doc/bcon deb-amd64/usr/share/xsessions deb-amd64/usr/share/bcon
-          cp /tmp/bcon-x86_64/bcon deb-amd64/usr/local/bin/
-          cp /tmp/bcon-x86_64/bcon-session deb-amd64/usr/local/bin/
-          cp /tmp/bcon-x86_64/bcon@.service deb-amd64/lib/systemd/system/
-          cp /tmp/bcon-x86_64/bcon.desktop deb-amd64/usr/share/xsessions/
-          cp /tmp/bcon-x86_64/README.md deb-amd64/usr/share/doc/bcon/
-          chmod 755 deb-amd64/usr/local/bin/bcon
-          chmod 755 deb-amd64/usr/local/bin/bcon-session
-          cat > deb-amd64/DEBIAN/control << 'CTRL'
-          Package: bcon
-          Version: VERSION_PLACEHOLDER
-          Section: utils
-          Priority: optional
-          Architecture: amd64
-          Depends: libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1, libfontconfig1, fonts-dejavu-core
-          Maintainer: sanohiro <sanohiro@users.noreply.github.com>
-          Homepage: https://github.com/sanohiro/bcon
-          Description: GPU-accelerated terminal emulator for Linux console
-           bcon brings modern terminal features directly to the Linux console.
-           GPU acceleration, True Color, Sixel/Kitty graphics, Japanese input
-           without X11/Wayland.
-          CTRL
-          sed -i 's/^          //' deb-amd64/DEBIAN/control
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" deb-amd64/DEBIAN/control
-          dpkg-deb --build deb-amd64 release/bcon_amd64.deb
+          # Minimum glibc the binary actually needs, taken from its symbol
+          # versions. Falls back to the given default when objdump cannot read
+          # the ELF (e.g. a foreign architecture).
+          glibc_req() {
+            _v=$(objdump -T "$1" 2>/dev/null \
+                 | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/GLIBC_//' \
+                 | sort -V | tail -1)
+            echo "${_v:-$2}"
+          }
 
-          # arm64 .deb
-          mkdir -p /tmp/bcon-aarch64
-          tar -xzf release/bcon-linux-aarch64.tar.gz -C /tmp/bcon-aarch64
-          mkdir -p deb-arm64/DEBIAN deb-arm64/usr/local/bin deb-arm64/lib/systemd/system deb-arm64/usr/share/doc/bcon deb-arm64/usr/share/xsessions deb-arm64/usr/share/bcon
-          cp /tmp/bcon-aarch64/bcon deb-arm64/usr/local/bin/
-          cp /tmp/bcon-aarch64/bcon-session deb-arm64/usr/local/bin/
-          cp /tmp/bcon-aarch64/bcon@.service deb-arm64/lib/systemd/system/
-          cp /tmp/bcon-aarch64/bcon.desktop deb-arm64/usr/share/xsessions/
-          cp /tmp/bcon-aarch64/README.md deb-arm64/usr/share/doc/bcon/
-          chmod 755 deb-arm64/usr/local/bin/bcon
-          chmod 755 deb-arm64/usr/local/bin/bcon-session
-          cat > deb-arm64/DEBIAN/control << 'CTRL'
-          Package: bcon
-          Version: VERSION_PLACEHOLDER
-          Section: utils
-          Priority: optional
-          Architecture: arm64
-          Depends: libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1, libfontconfig1, fonts-dejavu-core
-          Maintainer: sanohiro <sanohiro@users.noreply.github.com>
-          Homepage: https://github.com/sanohiro/bcon
-          Description: GPU-accelerated terminal emulator for Linux console
-           bcon brings modern terminal features directly to the Linux console.
-           GPU acceleration, True Color, Sixel/Kitty graphics, Japanese input
-           without X11/Wayland.
-          CTRL
-          sed -i 's/^          //' deb-arm64/DEBIAN/control
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" deb-arm64/DEBIAN/control
-          dpkg-deb --build deb-arm64 release/bcon_arm64.deb
+          build_deb() {  # arch tarball fallback_glibc output
+            arch="$1"; tarball="$2"; fallback="$3"; out="$4"
+            src=$(mktemp -d); root=$(mktemp -d)/pkg
+            tar -xzf "${tarball}" -C "${src}"
+            libc=$(glibc_req "${src}/bcon" "${fallback}")
+            echo "==> ${out}: Depends libc6 (>= ${libc})"
+            mkdir -p "${root}/DEBIAN" "${root}/usr/local/bin" "${root}/lib/systemd/system" \
+                     "${root}/usr/share/doc/bcon" "${root}/usr/share/xsessions" "${root}/usr/share/bcon"
+            cp "${src}/bcon" "${src}/bcon-session" "${root}/usr/local/bin/"
+            cp "${src}/bcon@.service" "${root}/lib/systemd/system/"
+            cp "${src}/bcon.desktop" "${root}/usr/share/xsessions/"
+            cp "${src}/README.md" "${root}/usr/share/doc/bcon/"
+            chmod 755 "${root}/usr/local/bin/bcon" "${root}/usr/local/bin/bcon-session"
+            {
+              echo "Package: bcon"
+              echo "Version: ${VERSION}"
+              echo "Section: utils"
+              echo "Priority: optional"
+              echo "Architecture: ${arch}"
+              echo "Depends: libc6 (>= ${libc}), libdrm2, libgbm1, libegl1, libgles2, libxkbcommon0, libinput10, libudev1, libdbus-1-3, libseat1, libfontconfig1, fonts-dejavu-core"
+              echo "Maintainer: sanohiro <sanohiro@users.noreply.github.com>"
+              echo "Homepage: https://github.com/sanohiro/bcon"
+              echo "Description: GPU-accelerated terminal emulator for Linux console"
+              echo " bcon brings modern terminal features directly to the Linux console."
+              echo " GPU acceleration, True Color, Sixel/Kitty graphics, Japanese input"
+              echo " without X11/Wayland."
+            } > "${root}/DEBIAN/control"
+            dpkg-deb --build "${root}" "${out}"
+          }
+
+          build_deb amd64 release/bcon-linux-x86_64.tar.gz         2.39 release/bcon_amd64.deb
+          build_deb arm64 release/bcon-linux-aarch64.tar.gz        2.39 release/bcon_arm64.deb
+          build_deb amd64 release/bcon-linux-x86_64-legacy.tar.gz  2.34 release/bcon_legacy_amd64.deb
+          build_deb arm64 release/bcon-linux-aarch64-legacy.tar.gz 2.34 release/bcon_legacy_arm64.deb
 
           ls -la release/
 
@@ -199,76 +280,100 @@ jobs:
           files: release/*
           generate_release_notes: true
           draft: false
+          body: |
+            ### Installing
+
+            ```sh
+            curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
+            sudo apt install bcon
+            ```
+
+            The installer picks the right build for your system automatically.
+
+            ### Which file do I need?
+
+            If you prefer to download directly, pick by your distribution:
+
+            | Your system | glibc | Download |
+            |---|---|---|
+            | Ubuntu 24.04+, Debian 13 (trixie) | 2.39+ | `bcon_amd64.deb` / `bcon_arm64.deb`<br>`bcon-linux-x86_64.tar.gz` / `bcon-linux-aarch64.tar.gz` |
+            | Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm) | 2.34+ | `bcon_legacy_amd64.deb` / `bcon_legacy_arm64.deb`<br>`bcon-linux-x86_64-legacy.tar.gz` / `bcon-linux-aarch64-legacy.tar.gz` |
+
+            The `legacy` builds are compiled against an older glibc and run
+            everywhere the regular builds do. Ubuntu 20.04 and Debian 11 (glibc
+            2.31) are not supported.
+
+            Run `ldd --version` if you are unsure which glibc you have.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update apt repository
         env:
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           if [ -z "${APT_GPG_PRIVATE_KEY}" ]; then
             echo "APT_GPG_PRIVATE_KEY not set, skipping apt repo update"
             exit 0
           fi
 
-          if [ -n "${INPUT_TAG}" ]; then
-            VERSION="${INPUT_TAG#v}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          fi
-
           # Import GPG key
           echo "${APT_GPG_PRIVATE_KEY}" | gpg --batch --import
 
-          # Create apt repo structure
-          mkdir -p apt-repo/pool/main/b/bcon
-          mkdir -p apt-repo/dists/stable/main/binary-amd64
-          mkdir -p apt-repo/dists/stable/main/binary-arm64
+          # Two suites, each with its own pool so dpkg-scanpackages does not
+          # mix them up:
+          #   stable - glibc 2.39+ builds (Ubuntu 24.04+, Debian 13 trixie+)
+          #   legacy - glibc 2.34+ builds (Ubuntu 22.04, Debian 12 bookworm)
+          # install.sh selects the suite from the system's glibc version.
+          mkdir -p apt-repo/pool/main/b/bcon apt-repo/pool/legacy/b/bcon
+          mkdir -p apt-repo/dists/stable/main/binary-amd64 apt-repo/dists/stable/main/binary-arm64
+          mkdir -p apt-repo/dists/legacy/main/binary-amd64 apt-repo/dists/legacy/main/binary-arm64
 
-          # Copy .deb files
-          cp release/bcon_amd64.deb apt-repo/pool/main/b/bcon/
-          cp release/bcon_arm64.deb apt-repo/pool/main/b/bcon/
+          cp release/bcon_amd64.deb release/bcon_arm64.deb apt-repo/pool/main/b/bcon/
+          cp release/bcon_legacy_amd64.deb release/bcon_legacy_arm64.deb apt-repo/pool/legacy/b/bcon/
 
-          # Generate Packages files
           cd apt-repo
-          dpkg-scanpackages --arch amd64 pool/ > dists/stable/main/binary-amd64/Packages
-          dpkg-scanpackages --arch arm64 pool/ > dists/stable/main/binary-arm64/Packages
-          gzip -k dists/stable/main/binary-amd64/Packages
-          gzip -k dists/stable/main/binary-arm64/Packages
 
-          # Generate Release file
-          cat > dists/stable/Release << 'EOF'
-          Origin: bcon
-          Label: bcon
-          Suite: stable
-          Codename: stable
-          Architectures: amd64 arm64
-          Components: main
-          Description: bcon apt repository
-          EOF
-          sed -i 's/^          //' dists/stable/Release
-          echo "Date: $(date -Ru)" >> dists/stable/Release
+          make_suite() {  # suite pool_dir
+            suite="$1"; pooldir="$2"
 
-          # Add checksums to Release
-          cd dists/stable
-          echo "MD5Sum:" >> Release
-          for f in main/binary-*/Packages*; do
-            size=$(wc -c < "$f")
-            hash=$(md5sum "$f" | cut -d' ' -f1)
-            echo " ${hash} ${size} ${f}" >> Release
-          done
-          echo "SHA256:" >> Release
-          for f in main/binary-*/Packages*; do
-            size=$(wc -c < "$f")
-            hash=$(sha256sum "$f" | cut -d' ' -f1)
-            echo " ${hash} ${size} ${f}" >> Release
-          done
-          cd ../..
+            for arch in amd64 arm64; do
+              dpkg-scanpackages --arch "${arch}" "${pooldir}" > "dists/${suite}/main/binary-${arch}/Packages"
+              gzip -kf "dists/${suite}/main/binary-${arch}/Packages"
+            done
 
-          # Sign Release file
-          gpg --batch --yes --armor --detach-sign -o dists/stable/Release.gpg dists/stable/Release
-          gpg --batch --yes --armor --clearsign -o dists/stable/InRelease dists/stable/Release
+            {
+              echo "Origin: bcon"
+              echo "Label: bcon"
+              echo "Suite: ${suite}"
+              echo "Codename: ${suite}"
+              echo "Architectures: amd64 arm64"
+              echo "Components: main"
+              echo "Description: bcon apt repository (${suite})"
+              echo "Date: $(date -Ru)"
+            } > "dists/${suite}/Release"
+
+            (
+              cd "dists/${suite}"
+              echo "MD5Sum:" >> Release
+              for f in main/binary-*/Packages*; do
+                size=$(wc -c < "$f")
+                hash=$(md5sum "$f" | cut -d' ' -f1)
+                echo " ${hash} ${size} ${f}" >> Release
+              done
+              echo "SHA256:" >> Release
+              for f in main/binary-*/Packages*; do
+                size=$(wc -c < "$f")
+                hash=$(sha256sum "$f" | cut -d' ' -f1)
+                echo " ${hash} ${size} ${f}" >> Release
+              done
+            )
+
+            gpg --batch --yes --armor --detach-sign -o "dists/${suite}/Release.gpg" "dists/${suite}/Release"
+            gpg --batch --yes --armor --clearsign -o "dists/${suite}/InRelease" "dists/${suite}/Release"
+          }
+
+          make_suite stable pool/main/
+          make_suite legacy pool/legacy/
 
           # Export public key
           gpg --armor --export > bcon.gpg
