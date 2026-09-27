@@ -2,6 +2,37 @@
 
 English | **[Japanese](installation.ja.md)**
 
+## Supported Systems
+
+bcon ships two sets of binaries. `install.sh` reads your glibc version and picks
+the matching one, so normally you do not need to care which is which.
+
+| Distribution | glibc | apt suite |
+|---|---|---|
+| Ubuntu 24.04+, Debian 13 (trixie)+ | 2.39+ | `stable` |
+| Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm, 64-bit) | 2.34+ | `legacy` |
+
+Ubuntu 20.04 and Debian 11 (bullseye) ship glibc 2.31 and are not supported.
+Run `ldd --version` to check what you have.
+
+The `legacy` build is compiled on Ubuntu 22.04 and is identical in features — it
+is only linked against an older glibc.
+
+> **Upgrading from an older install on Ubuntu 22.04 / Debian 12**
+>
+> Earlier releases only shipped the `stable` build, which fails at startup with
+> `version 'GLIBC_2.39' not found`. On these systems `apt upgrade` reports bcon
+> as *kept back* and leaves the old version in place, since the newer package
+> requires a glibc you do not have. Re-run the installer to switch to `legacy`:
+>
+> ```bash
+> curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
+> sudo apt install bcon
+> ```
+>
+> apt replaces the package even when the version is unchanged, because the
+> installed one is no longer offered by any configured suite.
+
 ## Basic Setup (Debian/Ubuntu)
 
 For Japanese environment, see [Japanese Environment Setup](#japanese-environment-setup) below.
@@ -112,7 +143,7 @@ sudo apt install \
     libxkbcommon-dev libinput-dev libudev-dev \
     libdbus-1-dev libwayland-dev \
     libfontconfig1-dev libfreetype-dev \
-    libseat-dev \
+    libseat-dev libsystemd-dev \
     pkg-config cmake clang
 
 # Rust toolchain (1.82+) required

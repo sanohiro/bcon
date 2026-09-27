@@ -2,6 +2,37 @@
 
 **[English](installation.md)** | Japanese
 
+## 対応システム
+
+bcon は 2 種類のバイナリを配布しています。`install.sh` が glibc のバージョンを
+判定して適切な方を選ぶため、通常はどちらか意識する必要はありません。
+
+| ディストリビューション | glibc | apt suite |
+|---|---|---|
+| Ubuntu 24.04+, Debian 13 (trixie)+ | 2.39+ | `stable` |
+| Ubuntu 22.04, Debian 12 (bookworm), Raspberry Pi OS (bookworm, 64-bit) | 2.34+ | `legacy` |
+
+Ubuntu 20.04 と Debian 11 (bullseye) は glibc 2.31 のため非対応です。
+`ldd --version` で確認できます。
+
+`legacy` ビルドは Ubuntu 22.04 上でビルドしたもので、機能は同一です。
+古い glibc にリンクしている点だけが異なります。
+
+> **Ubuntu 22.04 / Debian 12 で以前のバージョンから更新する場合**
+>
+> 以前のリリースは `stable` ビルドのみだったため、起動時に
+> `version 'GLIBC_2.39' not found` で失敗します。この状態で `apt upgrade` を
+> 実行しても、必要な glibc が無いため bcon は *kept back* となり更新されません。
+> インストーラを再実行すると `legacy` に切り替わります。
+>
+> ```bash
+> curl -fsSL https://sanohiro.github.io/bcon/install.sh | sudo sh
+> sudo apt install bcon
+> ```
+>
+> バージョンが変わらない場合でも、インストール済みのパッケージがどの suite からも
+> 提供されなくなるため、apt は legacy 版で置き換えます。
+
 ## 基本セットアップ (Debian/Ubuntu)
 
 日本語環境が必要な場合は [日本語環境セットアップ](#日本語環境セットアップ) を参照してください。
@@ -111,7 +142,7 @@ sudo apt install \
     libxkbcommon-dev libinput-dev libudev-dev \
     libdbus-1-dev libwayland-dev \
     libfontconfig1-dev libfreetype-dev \
-    libseat-dev \
+    libseat-dev libsystemd-dev \
     pkg-config cmake clang
 
 # Rust ツールチェイン (1.82+) が必要
