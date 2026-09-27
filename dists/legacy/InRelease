@@ -1,0 +1,37 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: bcon
+Label: bcon
+Suite: legacy
+Codename: legacy
+Architectures: amd64 arm64
+Components: main
+Description: bcon apt repository (legacy)
+Date: Sun, 27 Sep 2026 22:21:07 +0000
+MD5Sum:
+ b2d0eea6b4117a7967ae87b459762ec9 791 main/binary-amd64/Packages
+ eaf6bfcd232be27b7cbf855eb341792d 551 main/binary-amd64/Packages.gz
+ 0e02b058884d615626e683f4d6524f74 791 main/binary-arm64/Packages
+ e90917cecbecab6b324b32424a2bb30f 553 main/binary-arm64/Packages.gz
+SHA256:
+ 564a4c6675d2b6fc02c90d5032b1efd27f56ae18521c7d1b2404e0b25dec9ce0 791 main/binary-amd64/Packages
+ 19d53082bc596714e5c2e8986c27d5db461cfd4f6b33a8e2cd1869a529aa0acf 551 main/binary-amd64/Packages.gz
+ 41631fd3d5a2bbb15f60d15eceb07632510562a24b28baf8d8a68993fa6abf2f 791 main/binary-arm64/Packages
+ 9696f6f8e502efd511e8bce0e51667dd7dad7a9c372ce8e16a2279cf0c78380c 553 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEEF38P8zCqxTq54YJmwUQK89zeK0kFAmq5ltMACgkQwUQK89ze
+K0mCkQ//WwSdAtcUZs3KavFq8MHFDfhvMDcyUjs3Ku7qaBCcVYOJG+fa0yQVeOEI
+jRLG5UdcBZqWd5W3lKWboxC6iGipELceMzgAiVKJzV6IdBj1zU+zOJSqVK1KtaSx
+2X30gTdwHKiFuDXRviJkhHACbxmulG/gfL9liJD0C7QufJ3XEsWogBqbIsTddOQ5
+B6C66MsOLgbkyIGusapL2AJ1Vfig+HaH+aPg/dLCEETbIC6u4F0puSE5Asi+lYrA
+XJY3QKNGdnim5VblZpELc9/4WPdUDIm3Jik4anU5Z5fYJMO0xl+08EvqzQ2iK3D6
+AlrPytzVFm2GcCL7mcBiFgM4Om7pJZXkbLpH/w5YYLfkB5FCbLtgYtAsVU5Hk0xf
+xOIyd2Ov+oaxabqC9P1G28w0Px/KxcE3d6g6tALf9eB7rSzb2bQL/JiXk9wRf5si
+pkIcq8QVtX7+KTx06gmukPD27mtDvXlofim8z9YJRPEWUsk6jSsnI7R5zOr7fqMh
+uVZWZ3hBBGnzclSn59w+NqlVLtk/2wY9coRE6f2rVJSC/QIlIvqxwVax0yCFtwFx
+wEaVF6ssNn1GPaqkDEs7L/9acPUTAAFudDIBgkTn5ahLzaYwSPNG+avpNfDFAF8F
+eJJ3WFlGlB5hJXqDXv6YX8XpkrLfxsf3s4YHlLRb9JrZ2H3iGkM=
+=Wo5A
+-----END PGP SIGNATURE-----

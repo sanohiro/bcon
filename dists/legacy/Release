@@ -1,0 +1,18 @@
+Origin: bcon
+Label: bcon
+Suite: legacy
+Codename: legacy
+Architectures: amd64 arm64
+Components: main
+Description: bcon apt repository (legacy)
+Date: Sun, 27 Sep 2026 22:21:07 +0000
+MD5Sum:
+ b2d0eea6b4117a7967ae87b459762ec9 791 main/binary-amd64/Packages
+ eaf6bfcd232be27b7cbf855eb341792d 551 main/binary-amd64/Packages.gz
+ 0e02b058884d615626e683f4d6524f74 791 main/binary-arm64/Packages
+ e90917cecbecab6b324b32424a2bb30f 553 main/binary-arm64/Packages.gz
+SHA256:
+ 564a4c6675d2b6fc02c90d5032b1efd27f56ae18521c7d1b2404e0b25dec9ce0 791 main/binary-amd64/Packages
+ 19d53082bc596714e5c2e8986c27d5db461cfd4f6b33a8e2cd1869a529aa0acf 551 main/binary-amd64/Packages.gz
+ 41631fd3d5a2bbb15f60d15eceb07632510562a24b28baf8d8a68993fa6abf2f 791 main/binary-arm64/Packages
+ 9696f6f8e502efd511e8bce0e51667dd7dad7a9c372ce8e16a2279cf0c78380c 553 main/binary-arm64/Packages.gz
