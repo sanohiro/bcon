@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-09-28
+
+### Fixed
+- Release binaries now run on Ubuntu 22.04, Debian 12 (bookworm) and 64-bit Raspberry Pi OS. Builds produced on Ubuntu 24.04 require `GLIBC_2.39`; a second set built on Ubuntu 22.04 needs only glibc 2.34 and is published as the apt `legacy` suite, which `install.sh` selects from the system's glibc version ([#22](https://github.com/sanohiro/bcon/issues/22)).
+- Declare the `libc6` version each `.deb` actually needs, derived from the binary's symbol versions. Previously apt installed a package the system could not run and the failure only appeared at startup.
+- Build packages with `dpkg-deb --root-owner-group`. Installed files carried the CI runner's uid instead of `root`.
+- `install.sh` can be run again on a machine that already has the keyring: `gpg --dearmor` no longer stops at an overwrite prompt, which has no tty under `curl | sh`.
+- Add `libsystemd-dev` to the build dependencies. `libseat.pc` requires it, so building from a clean checkout following `docs/installation.md` failed at `libseat-sys`.
+- Restore the executable bit on `tests/automation/bcon-test-input`.
+
 ## [1.5.0] - 2026-09-26
 
 ### Added
